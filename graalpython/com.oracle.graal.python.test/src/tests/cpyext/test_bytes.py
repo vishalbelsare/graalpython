@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,9 +39,7 @@
 import unittest
 
 from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, CPyExtType, \
-    is_native_object
-
-__dir__ = __file__.rpartition("/")[0]
+    is_native_object, GRAALPYTHON
 
 
 def _reference_from_string_n(args):
@@ -78,6 +76,13 @@ def _reference_format(args):
     fmt_args = tuple(args[1:])
     return (fmt % fmt_args).encode()
 
+
+def _compare_resize_empty_to_nonempty(cresult, presult):
+    if GRAALPYTHON:
+        return cresult is None
+    return cresult is None or isinstance(cresult, SystemError)
+
+
 class CIter:
     def __iter__(self):
         return iter([1, 2, 3])
@@ -108,10 +113,6 @@ ByteArraySubclass = CPyExtType(
 
 class TestPyBytes(CPyExtTestCase):
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyBytes, self).compile_module(name)
-
     # Below are the PyBytes_* identifiers that we know are used in numpy
 
     # PyBytes_FromStringAndSize
@@ -135,6 +136,128 @@ class TestPyBytes(CPyExtTestCase):
         resultspec="n",
         argspec='n',
         arguments=["Py_ssize_t n"],
+    )
+
+    test_PyBytes_FromStringAndSize_empty = CPyExtFunction(
+        lambda args: 1,
+        lambda: ((),),
+        code="""
+        static int CheckPyBytesFromStringAndSizeEmpty(void) {
+            PyObject *from_null = PyBytes_FromStringAndSize(NULL, 0);
+            PyObject *from_string = PyBytes_FromStringAndSize("ignored", 0);
+            PyObject *from_c_string = PyBytes_FromString("");
+            PyObject *resized_to_empty = PyBytes_FromStringAndSize(NULL, 1);
+            int resized_to_empty_ok = _PyBytes_Resize(&resized_to_empty, 0) == 0;
+            int result = from_null != NULL &&
+                         from_string != NULL &&
+                         from_c_string != NULL &&
+                         resized_to_empty != NULL &&
+                         resized_to_empty_ok &&
+                         PyBytes_CheckExact(from_null) &&
+                         PyBytes_GET_SIZE(from_null) == 0;
+            result = result &&
+                     from_null == from_string &&
+                     from_null == from_c_string &&
+                     from_null == resized_to_empty;
+            Py_XDECREF(from_null);
+            Py_XDECREF(from_string);
+            Py_XDECREF(from_c_string);
+            Py_XDECREF(resized_to_empty);
+            return result;
+        }
+        """,
+        resultspec="i",
+        argspec="",
+        arguments=[],
+        callfunction="CheckPyBytesFromStringAndSizeEmpty",
+    )
+
+    test_PyBytes_one_byte_singletons = CPyExtFunction(
+        lambda args: 1,
+        lambda: ((),),
+        code="""
+        static int CheckPyBytesOneByteSingletons(void) {
+            int all_from_size_cached = 1;
+            for (int i = 0; i < 256; i++) {
+                char ch = (char)i;
+                PyObject *a = PyBytes_FromStringAndSize(&ch, 1);
+                PyObject *b = PyBytes_FromStringAndSize(&ch, 1);
+                if (a == NULL || b == NULL || a != b ||
+                                PyBytes_GET_SIZE(a) != 1 ||
+                                ((unsigned char *)PyBytes_AS_STRING(a))[0] != (unsigned char)i) {
+                    all_from_size_cached = 0;
+                }
+                Py_XDECREF(a);
+                Py_XDECREF(b);
+            }
+
+            PyObject *from_string = PyBytes_FromString("x");
+            PyObject *from_size = PyBytes_FromStringAndSize("x", 1);
+            PyObject *from_null = PyBytes_FromStringAndSize(NULL, 1);
+            PyObject *resize_cached = PyBytes_FromString("x");
+            PyObject *resize_cached_larger = PyBytes_FromString("x");
+
+            int from_string_uses_cache = from_string != NULL && from_string == from_size;
+            int from_null_is_fresh = from_null != NULL && from_null != from_size;
+            int resize_cached_ok = _PyBytes_Resize(&resize_cached, 0) == 0;
+            if (!resize_cached_ok) {
+                PyErr_Clear();
+            }
+            int resize_cached_larger_ok = _PyBytes_Resize(&resize_cached_larger, 2) == 0;
+            if (!resize_cached_larger_ok) {
+                PyErr_Clear();
+            }
+            int resize_fresh_ok = _PyBytes_Resize(&from_null, 0) == 0;
+            if (!resize_fresh_ok) {
+                PyErr_Clear();
+            }
+
+            int result = all_from_size_cached &&
+                         from_string_uses_cache &&
+                         from_null_is_fresh &&
+                         resize_cached_ok &&
+                         resize_cached != NULL &&
+                         PyBytes_GET_SIZE(resize_cached) == 0 &&
+                         resize_cached_larger_ok &&
+                         resize_cached_larger != NULL &&
+                         PyBytes_GET_SIZE(resize_cached_larger) == 2 &&
+                         PyBytes_AS_STRING(resize_cached_larger)[0] == 'x' &&
+                         resize_fresh_ok &&
+                         from_null != NULL &&
+                         PyBytes_GET_SIZE(from_null) == 0;
+
+            Py_XDECREF(from_string);
+            Py_XDECREF(from_size);
+            Py_XDECREF(from_null);
+            Py_XDECREF(resize_cached);
+            Py_XDECREF(resize_cached_larger);
+            return result;
+        }
+        """,
+        resultspec="i",
+        argspec="",
+        arguments=[],
+        callfunction="CheckPyBytesOneByteSingletons",
+    )
+
+    test_PyBytes_Resize_empty_to_nonempty = CPyExtFunction(
+        lambda args: None,
+        lambda: ((),),
+        code="""
+        static PyObject *CheckPyBytesResizeEmptyToNonempty(void) {
+            PyObject *resized_from_empty = PyBytes_FromString("");
+            if (_PyBytes_Resize(&resized_from_empty, 3) < 0) {
+                return NULL;
+            }
+            Py_XDECREF(resized_from_empty);
+            Py_RETURN_NONE;
+        }
+        """,
+        resultspec="O",
+        argspec="",
+        arguments=[],
+        callfunction="CheckPyBytesResizeEmptyToNonempty",
+        cmpfunc=_compare_resize_empty_to_nonempty,
     )
 
     # PyBytes_FromString
@@ -277,7 +400,7 @@ class TestPyBytes(CPyExtTestCase):
         argspec="sssi",
         arguments=["char* fmt", "char* arg0", "char* arg1", "int arg2"],
     )
-    
+
     # PyBytes_FromObject
     test_PyBytes_FromObject = CPyExtFunction(
         _reference_from_object,
@@ -295,7 +418,7 @@ class TestPyBytes(CPyExtTestCase):
 
     # PyBytes_Concat
     test_PyBytes_Concat = CPyExtFunctionOutVars(
-        lambda args: (0, args[0] + args[1]),        
+        lambda args: (0, args[0] + args[1]),
         lambda: tuple([tuple(["hello".encode(), " world".encode()])]),
         code='''int wrap_PyBytes_Concat(PyObject** arg0, PyObject* arg1) {
             if(*arg0) {
@@ -409,9 +532,9 @@ class TestPyBytes(CPyExtTestCase):
 
     test__PyBytes_Join = CPyExtFunction(
         lambda args: args[0].join(args[1]),
-        lambda: ( 
+        lambda: (
             (b"hello", b"world"),
-        ),        
+        ),
         resultspec="O",
         argspec="OO",
         arguments=["PyObject* original", "PyObject* newPart"],
@@ -425,17 +548,17 @@ class TestPyBytes(CPyExtTestCase):
         ),
         code="""
         #include <stdio.h>
-        
+
         /* Copies content from 'smaller' to 'larger_content' and returns a pointer to the last char. */
         static char* do_pointer_arithmetics(char* larger_content, PyObject* smaller) {
             char* smaller_content = PyBytes_AS_STRING(smaller);
             Py_ssize_t smaller_len = PyBytes_Size(smaller);
-            
+
             // 'smaller_len + 1' also contains the null byte
             memcpy(larger_content, smaller_content, smaller_len + 1);
             return larger_content + smaller_len;
         }
-        
+
         PyObject* resize_bytes(PyObject* larger, PyObject* smaller) {
             char* data;
             char* dummy;
@@ -443,27 +566,27 @@ class TestPyBytes(CPyExtTestCase):
             Py_ssize_t len;
             Py_ssize_t new_len;
             PyObject* larger_copy;
-            
+
             Py_INCREF(larger);
             Py_INCREF(smaller);
-            
+
             /* we need to create a fresh bytes object */
             larger_copy = PyBytes_FromString(PyBytes_AsString(larger));
             Py_DECREF(larger);
-            
+
             len = PyBytes_Size(larger_copy) + 1;
-            
+
             dummy = (char*) calloc(len, sizeof(char));
             data = PyBytes_AS_STRING(larger_copy);
-            
+
             /* this will force the bytes object's content to native */
             snprintf(data, len, "%s", dummy);
             free(dummy);
-            
+
             /* copy smaller data and return the pointer to the last char */
             end_ptr = do_pointer_arithmetics(data, smaller);
             Py_DECREF(smaller);
-            
+
             /* compute new size */
             new_len = (Py_ssize_t) (end_ptr - PyBytes_AS_STRING(larger_copy));
             _PyBytes_Resize(&larger_copy, new_len);
@@ -509,15 +632,36 @@ class TestPyBytes(CPyExtTestCase):
             Py_DECREF(ret);
             Py_INCREF(bytes);
             return bytes;
-        error_release: 
+        error_release:
             PyBuffer_Release(&buffer);
-            return NULL;            
+            return NULL;
         }
         """,
         resultspec="O",
         argspec="OO",
         arguments=["PyObject* bytes", "PyObject* expected"],
         callfunction="test_buffer",
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_set_size = CPyExtFunction(
+        lambda args: b'1234',
+        lambda: ((),),
+        code="""
+        PyObject* set_size() {
+            PyObject* output = PyBytes_FromStringAndSize(NULL, 50);
+            if (output == NULL)
+                return NULL;
+            char* s = PyBytes_AsString(output);
+            memcpy(s, "1234", 4);
+            Py_SET_SIZE(output, 4);
+            return output;
+        }
+        """,
+        resultspec="O",
+        argspec="",
+        arguments=[],
+        callfunction="set_size",
         cmpfunc=unhandled_error_compare
     )
 
@@ -586,12 +730,48 @@ class ObjectTests(unittest.TestCase):
         self.assertRaises(ValueError, bytes, TestType())
         self.assertRaises(ValueError, bytearray, TestType())
 
+    def test_tp_as_buffer_pickle(self):
+        TestAsBufferPickle = CPyExtType(
+            "TestAsBufferPickle",
+            """
+            static PyObject* get_bytes(PyObject* self, PyObject *obj) {
+                Py_buffer view;
+                if (PyObject_GetBuffer(obj, &view, PyBUF_FULL_RO) != 0)
+                    return NULL;
+                PyObject* bytes = PyBytes_FromStringAndSize(view.buf, view.len);
+                PyBuffer_Release(&view);
+                return bytes;
+            }
+            """,
+            tp_methods='{"get_bytes", (PyCFunction)get_bytes, METH_O | METH_CLASS, ""}',
+        )
+        TestType = CPyExtType(
+            "TestMemoryViewBufferPickle",
+            """
+            char buf[] = {1,2,3,4};
+            int getbuffer(TestMemoryViewBufferPickleObject *self, Py_buffer *view, int flags) {
+                return PyBuffer_FillInfo(view, (PyObject*)self, buf, 4, 1, flags);
+            }
+            void releasebuffer(TestMemoryViewBufferPickleObject *self, Py_buffer *view) {}
+
+            static PyBufferProcs as_buffer = {
+                (getbufferproc)getbuffer,
+                (releasebufferproc)releasebuffer,
+            };
+            """,
+            tp_as_buffer='&as_buffer',
+        )
+        obj = TestType()
+        b = bytes([1,2,3,4]) # same as `buf[] = {1,2,3,4};`
+        import pickle
+        b2 = TestAsBufferPickle.get_bytes(pickle.PickleBuffer(memoryview(obj)))
+        b1 = TestAsBufferPickle.get_bytes(pickle.PickleBuffer(bytearray([1,2,3,4])))
+        assert b == b1
+        assert b == b2
+
 
 class TestNativeSubclass(unittest.TestCase):
-    def test_builtins(self):
-        b = BytesSubclass(b"hello")
-        assert is_native_object(b)
-        assert type(b) == BytesSubclass
+    def _verify_common(self, b):
         assert b
         assert not BytesSubclass(b'')
         assert len(b) == 5
@@ -604,13 +784,11 @@ class TestNativeSubclass(unittest.TestCase):
         assert b + b" world" == b"hello world"
         assert b * 2 == b"hellohello"
         assert list(b) == [ord('h'), ord('e'), ord('l'), ord('l'), ord('o')]
-        assert repr(b) == "b'hello'"
         assert b.index(ord('l')) == 2
         assert b.count(ord('l')) == 2
         assert b.decode('ascii') == 'hello'
         assert BytesSubclass(b'hello ').strip() == b'hello'
         assert BytesSubclass(b',').join([b'a', BytesSubclass(b'b')]) == b'a,b'
-        assert hash(b) == hash(b'hello')
         assert BytesSubclass(b'(%s)') % b'a' == b'(a)'
         assert b.startswith(b'h')
         assert b.endswith(b'o')
@@ -620,8 +798,43 @@ class TestNativeSubclass(unittest.TestCase):
         assert b.upper() == b'HELLO'
         assert BytesSubclass(b'a,b').split(BytesSubclass(b',')) == [b'a', b'b']
 
-    def test_managed_subclass(self):
+    def _verify_bytes(self, b):
+        self._verify_common(b)
+        assert is_native_object(b)
+        assert repr(b) == "b'hello'", repr(b)
+        assert hash(b) == hash(b'hello')
+
+    def _verify_bytearray(self, b):
+        self._verify_common(b)
+        # assert is_native_object(b) # TODO: BuiltinConstructors.ByteArrayNode doesnt allocate native objects
+        self.assertRaises(TypeError, lambda: hash(b))
+
+    def test_bytes_subclass(self):
+        b = BytesSubclass(b"hello")
+        assert type(b) == BytesSubclass
+        self._verify_bytes(b)
+
+    def test_managed_bytes_subclass(self):
         class ManagedSubclass(BytesSubclass):
             pass
 
-        assert is_native_object(ManagedSubclass(b"hello"))
+        b = ManagedSubclass(b"hello")
+        assert type(b) == ManagedSubclass
+        self._verify_bytes(b)
+
+    def test_bytearray_subclass(self):
+        b = ByteArraySubclass(b"hello")
+        assert type(b) == ByteArraySubclass
+        # TODO: if TypeNode.GetNameNode is equivalent to _PyType_Name, it should transform tp_name "abc.xzy" to "xyz"
+        # assert repr(b) == "ByteArraySubclass(b'hello')", repr(b)
+        self._verify_bytearray(b)
+
+    def test_managed_bytearray_subclass(self):
+        class ArrManagedSubclass(ByteArraySubclass):
+            pass
+
+        b = ArrManagedSubclass(b"hello")
+        assert type(b) == ArrManagedSubclass
+        # TODO: if TypeNode.GetNameNode is equivalent to _PyType_Name, it should transform tp_name "abc.xzy" to "xyz"
+        # assert repr(b) == "ArrManagedSubclass(b'hello')", repr(b)
+        self._verify_bytearray(b)

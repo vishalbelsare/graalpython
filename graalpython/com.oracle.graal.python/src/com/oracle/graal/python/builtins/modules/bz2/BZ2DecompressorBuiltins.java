@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,12 +45,15 @@ import static com.oracle.graal.python.builtins.PythonBuiltinClassType.EOFError;
 import static com.oracle.graal.python.builtins.modules.bz2.Bz2Nodes.BZ_OK;
 import static com.oracle.graal.python.builtins.modules.bz2.Bz2Nodes.errorHandling;
 import static com.oracle.graal.python.nodes.ErrorMessages.END_OF_STREAM_ALREADY_REACHED;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -58,19 +61,19 @@ import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.runtime.NFIBz2Support;
-import com.oracle.graal.python.runtime.NativeLibrary;
+import com.oracle.graal.python.runtime.NativeBz2Support;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -79,33 +82,47 @@ import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = BZ2Decompressor)
 public final class BZ2DecompressorBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = BZ2DecompressorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return BZ2DecompressorBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "BZ2Decompressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class BZ2DecompressorNode extends PythonBuiltinNode {
+        @Specialization
+        static BZ2Object.BZ2Decompressor doNew(@SuppressWarnings("unused") Object cls, @SuppressWarnings("unused") Object arg,
+                        @Bind PythonLanguage language) {
+            // data filled in subsequent __init__ call - see BZ2DecompressorBuiltins.InitNode
+            return PFactory.createBZ2Decompressor(language);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "BZDecompressor", minNumOfPositionalArgs = 1, parameterNames = {"$self"})
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         static PNone init(BZ2Object.BZ2Decompressor self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Cached NativeLibrary.InvokeNativeFunction compressInit,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            NFIBz2Support bz2Support = PythonContext.get(inliningTarget).getNFIBz2Support();
-            Object bzst = bz2Support.createStream(createStream);
-            int err = bz2Support.decompressInit(bzst, compressInit);
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode) {
+            NativeBz2Support bz2Support = PythonContext.get(inliningTarget).getNativeBz2Support();
+            long bzst = bz2Support.createStream();
+            int err = bz2Support.decompressInit(bzst);
             if (err != BZ_OK) {
-                errorHandling(err, raiseNode.get(inliningTarget));
+                errorHandling(inliningTarget, err, raiseNode);
             }
             self.init(bzst, bz2Support);
             return PNone.NONE;
         }
     }
 
-    @Builtin(name = "decompress", minNumOfPositionalArgs = 1, parameterNames = {"$self", "", "max_length"})
+    @Builtin(name = "decompress", minNumOfPositionalArgs = 1, parameterNames = {"$self", "data", "max_length"})
     @ArgumentClinic(name = "max_length", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "-1", useDefaultForNone = true)
     @GenerateNodeFactory
     abstract static class DecompressNode extends PythonTernaryClinicBuiltinNode {
@@ -117,35 +134,35 @@ public final class BZ2DecompressorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!self.isEOF()"})
         static PBytes doNativeBytes(BZ2Object.BZ2Decompressor self, PBytesLike data, int maxLength,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached SequenceStorageNodes.GetInternalByteArrayNode toBytes,
-                        @Exclusive @Cached Bz2Nodes.Bz2NativeDecompress decompress,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Exclusive @Cached Bz2Nodes.Bz2NativeDecompress decompress) {
             synchronized (self) {
                 byte[] bytes = toBytes.execute(inliningTarget, data.getSequenceStorage());
                 int len = data.getSequenceStorage().length();
-                return factory.createBytes(decompress.execute(inliningTarget, self, bytes, len, maxLength));
+                return PFactory.createBytes(language, decompress.execute(inliningTarget, self, bytes, len, maxLength));
             }
         }
 
         @Specialization(guards = {"!self.isEOF()"})
         static PBytes doNativeObject(VirtualFrame frame, BZ2Object.BZ2Decompressor self, Object data, int maxLength,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached BytesNodes.ToBytesNode toBytes,
-                        @Exclusive @Cached Bz2Nodes.Bz2NativeDecompress decompress,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Exclusive @Cached Bz2Nodes.Bz2NativeDecompress decompress) {
             synchronized (self) {
                 byte[] bytes = toBytes.execute(frame, data);
                 int len = bytes.length;
-                return factory.createBytes(decompress.execute(inliningTarget, self, bytes, len, maxLength));
+                return PFactory.createBytes(language, decompress.execute(inliningTarget, self, bytes, len, maxLength));
             }
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = {"self.isEOF()"})
         static Object err(BZ2Object.BZ2Decompressor self, PBytesLike data, int maxLength,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(EOFError, END_OF_STREAM_ALREADY_REACHED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, EOFError, END_OF_STREAM_ALREADY_REACHED);
         }
     }
 
@@ -154,8 +171,8 @@ public final class BZ2DecompressorBuiltins extends PythonBuiltins {
     abstract static class UnusedDataNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PBytes doit(BZ2Object.BZ2Decompressor self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createBytes(self.getUnusedData());
+                        @Bind PythonLanguage language) {
+            return PFactory.createBytes(language, self.getUnusedData());
         }
     }
 

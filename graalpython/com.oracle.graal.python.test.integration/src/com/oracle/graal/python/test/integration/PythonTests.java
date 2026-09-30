@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -28,6 +28,7 @@ package com.oracle.graal.python.test.integration;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -38,13 +39,14 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.Collections;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
-import org.junit.Assert;
+import org.hamcrest.MatcherAssert;
 
 import com.oracle.graal.python.test.integration.advanced.BenchmarkTests;
 
@@ -56,7 +58,7 @@ public class PythonTests {
     static final PrintStream errStream = new PrintStream(errArray);
     static final PrintStream outStream = new PrintStream(outArray);
 
-    private static final Engine engine = Engine.newBuilder().out(PythonTests.outStream).err(PythonTests.errStream).build();
+    private static final Engine engine = Engine.newBuilder("python").out(outStream).err(errStream).build();
     private static Context context = null;
 
     public static Context enterContext(String... newArgs) {
@@ -74,17 +76,21 @@ public class PythonTests {
         return context;
     }
 
-    private static void closeContext(Context ctxt) {
+    private static void closeContext(Context ctxt, boolean cancelIfExecuting) {
         try {
             ctxt.leave();
         } catch (RuntimeException e) {
         }
-        ctxt.close();
+        ctxt.close(cancelIfExecuting);
     }
 
     public static void closeContext() {
+        closeContext(false);
+    }
+
+    public static void closeContext(boolean cancelIfExecuting) {
         if (context != null) {
-            closeContext(context);
+            closeContext(context, cancelIfExecuting);
             context = null;
         }
     }
@@ -106,7 +112,7 @@ public class PythonTests {
         PythonTests.runThrowableScript(new String[0], source, System.out, printStream);
         String[] output = byteArray.toString().split("\n");
         // ignore the traceback
-        Assert.assertThat(output[output.length - 1], containsString(expected.trim()));
+        MatcherAssert.assertThat(output[output.length - 1], containsString(expected.trim()));
     }
 
     public static void assertPrintContains(String expected, String code) {
@@ -130,6 +136,13 @@ public class PythonTests {
         final ByteArrayOutputStream byteArray = new ByteArrayOutputStream();
         final PrintStream printStream = new PrintStream(byteArray);
         PythonTests.runScript(new String[0], code, printStream, System.err);
+        String result = byteArray.toString().replaceAll("\r\n", "\n");
+        assertEquals(expected.replaceAll(" at 0x[0-9a-f]*>", " at 0xabcd>"), result.replaceAll(" at 0x[0-9a-f]*>", " at 0xabcd>"));
+    }
+
+    public static void assertPrintsToStdErr(String expected, String code) {
+        final ByteArrayOutputStream byteArray = new ByteArrayOutputStream();
+        PythonTests.runScript(new String[0], code, System.out, byteArray);
         String result = byteArray.toString().replaceAll("\r\n", "\n");
         assertEquals(expected.replaceAll(" at 0x[0-9a-f]*>", " at 0xabcd>"), result.replaceAll(" at 0x[0-9a-f]*>", " at 0xabcd>"));
     }
@@ -218,16 +231,24 @@ public class PythonTests {
     }
 
     public static void runThrowableScript(String[] args, String source, OutputStream out, OutputStream err) {
-        try {
-            enterContext(args);
-            context.eval(createSource(source));
-        } catch (PolyglotException t) {
+        runThrowableScript(args, source, out, err, e -> {
             try {
                 Value printExc = context.eval(PRINT_EXC_TO_STDERR);
-                printExc.execute(t.getGuestObject());
+                printExc.execute(e.getGuestObject());
             } catch (Throwable ex) {
                 throw new RuntimeException("Error while printing the PolyglotException message to stderr.", ex);
             }
+        });
+    }
+
+    public static void runThrowableScript(String[] args, String source, OutputStream out, OutputStream err,
+                    Consumer<PolyglotException> exceptionHandler) {
+        try {
+            enterContext(args);
+            context.eval(createSource(source));
+            fail("The eval() should throw");
+        } catch (PolyglotException t) {
+            exceptionHandler.accept(t);
         } finally {
             flush(out, err);
             closeContext();
@@ -241,5 +262,13 @@ public class PythonTests {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public static boolean isMacOS() {
+        return System.getProperty("os.name").toLowerCase().contains("mac");
+    }
+
+    public static boolean isAArch64() {
+        return System.getProperty("os.arch").toLowerCase().contains("aarch64");
     }
 }

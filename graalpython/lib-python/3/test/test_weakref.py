@@ -1,5 +1,6 @@
 import gc
 import sys
+import doctest
 import unittest
 import collections
 import weakref
@@ -9,10 +10,14 @@ import copy
 import threading
 import time
 import random
+import textwrap
 
 from test import support
-from test.support import script_helper, ALWAYS_EQ, impl_detail
+from test.support import script_helper, ALWAYS_EQ, impl_detail, suppress_immortalization
 from test.support import gc_collect
+from test.support import import_helper
+from test.support import threading_helper
+from test.support import is_wasi, Py_DEBUG
 
 # Used in ReferencesTestCase.test_ref_created_during_del() .
 ref_from_del = None
@@ -77,7 +82,7 @@ class TestBase(unittest.TestCase):
 
 
 @contextlib.contextmanager
-def collect_in_thread(period=0.0001):
+def collect_in_thread(period=0.005):
     """
     Ensure GC collections happen in a different thread, at a high frequency.
     """
@@ -114,6 +119,49 @@ class ReferencesTestCase(TestBase):
         del o
         repr(wr)
 
+    @support.cpython_only
+    def test_ref_repr(self):
+        obj = C()
+        ref = weakref.ref(obj)
+        regex = (
+            rf"<weakref at 0x[0-9a-fA-F]+; "
+            rf"to '{'' if __name__ == '__main__' else C.__module__ + '.'}{C.__qualname__}' "
+            rf"at 0x[0-9a-fA-F]+>"
+        )
+        self.assertRegex(repr(ref), regex)
+
+        obj = None
+        gc_collect()
+        self.assertRegex(repr(ref),
+                         rf'<weakref at 0x[0-9a-fA-F]+; dead>')
+
+        # test type with __name__
+        class WithName:
+            @property
+            def __name__(self):
+                return "custom_name"
+
+        obj2 = WithName()
+        ref2 = weakref.ref(obj2)
+        regex = (
+            rf"<weakref at 0x[0-9a-fA-F]+; "
+            rf"to '{'' if __name__ == '__main__' else WithName.__module__ + '.'}"
+            rf"{WithName.__qualname__}' "
+            rf"at 0x[0-9a-fA-F]+ +\(custom_name\)>"
+        )
+        self.assertRegex(repr(ref2), regex)
+
+    def test_repr_failure_gh99184(self):
+        class MyConfig(dict):
+            def __getattr__(self, x):
+                return self[x]
+
+        obj = MyConfig(offset=5)
+        obj_weakref = weakref.ref(obj)
+
+        self.assertIn('MyConfig', repr(obj_weakref))
+        self.assertIn('MyConfig', str(obj_weakref))
+
     def test_basic_callback(self):
         self.check_basic_callback(C)
         self.check_basic_callback(create_function)
@@ -121,7 +169,7 @@ class ReferencesTestCase(TestBase):
 
     @support.cpython_only
     def test_cfunction(self):
-        import _testcapi
+        _testcapi = import_helper.import_module("_testcapi")
         create_cfunction = _testcapi.create_cfunction
         f = create_cfunction()
         wr = weakref.ref(f)
@@ -182,6 +230,22 @@ class ReferencesTestCase(TestBase):
         gc_collect()  # For PyPy or other GCs.
         self.assertRaises(ReferenceError, bool, ref3)
         self.assertEqual(self.cbcalled, 2)
+
+    @support.cpython_only
+    def test_proxy_repr(self):
+        obj = C()
+        ref = weakref.proxy(obj, self.callback)
+        regex = (
+            rf"<weakproxy at 0x[0-9a-fA-F]+; "
+            rf"to '{'' if __name__ == '__main__' else C.__module__ + '.'}{C.__qualname__}' "
+            rf"at 0x[0-9a-fA-F]+>"
+        )
+        self.assertRegex(repr(ref), regex)
+
+        obj = None
+        gc_collect()
+        self.assertRegex(repr(ref),
+                         rf'<weakproxy at 0x[0-9a-fA-F]+; dead>')
 
     def check_basic_ref(self, factory):
         o = factory()
@@ -598,6 +662,7 @@ class ReferencesTestCase(TestBase):
         # deallocation of c2.
         del c2
 
+    @suppress_immortalization()
     def test_callback_in_cycle(self):
         import gc
 
@@ -691,6 +756,7 @@ class ReferencesTestCase(TestBase):
         gc.collect()
 
     @support.impl_detail("weakref nondeterministic", graalpy=False)
+    @suppress_immortalization()
     def test_callback_in_cycle_resurrection(self):
         import gc
 
@@ -773,6 +839,7 @@ class ReferencesTestCase(TestBase):
 
         del alist[:]
         gc.collect()
+        gc_collect() # <- GraalPy change
         self.assertEqual(alist, [])
 
     def test_gc_during_ref_creation(self):
@@ -785,6 +852,7 @@ class ReferencesTestCase(TestBase):
         thresholds = gc.get_threshold()
         gc.set_threshold(1, 1, 1)
         gc.collect()
+        gc_collect() # <- GraalPy change
         class A:
             pass
 
@@ -827,6 +895,7 @@ class ReferencesTestCase(TestBase):
         gc.collect()
 
     @support.impl_detail("weakref nondeterministic", graalpy=False)
+    @suppress_immortalization()
     def test_classes(self):
         # Check that classes are weakrefable.
         class A(object):
@@ -839,6 +908,7 @@ class ReferencesTestCase(TestBase):
         self.assertEqual(a(), None)
         self.assertEqual(l, [a])
 
+    @support.impl_detail("weakref nondeterministic", graalpy=False)
     def test_equality(self):
         # Alive weakrefs defer equality testing to their underlying object.
         x = Object(1)
@@ -888,6 +958,7 @@ class ReferencesTestCase(TestBase):
         # Same when dead.
         del x, y
         gc.collect()
+        gc_collect() # <- GraalPy change
         for op in ops:
             self.assertRaises(TypeError, op, a, b)
 
@@ -900,12 +971,14 @@ class ReferencesTestCase(TestBase):
         self.assertEqual(hash(a), hash(42))
         del x, y
         gc.collect()
+        gc_collect() # <- GraalPy change
         # Dead weakrefs:
         # - retain their hash is they were hashed when alive;
         # - otherwise, cannot be hashed.
         self.assertEqual(hash(a), hash(42))
         self.assertRaises(TypeError, hash, b)
 
+    @unittest.skipIf(is_wasi and Py_DEBUG, "requires deep stack")
     def test_trashcan_16602(self):
         # Issue #16602: when a weakref's target was part of a long
         # deallocation chain, the trashcan mechanism could delay clearing
@@ -958,6 +1031,31 @@ class ReferencesTestCase(TestBase):
         ref1 = weakref.ref(x, lambda ref: support.gc_collect())
         del x
         support.gc_collect()
+
+    @support.cpython_only
+    def test_no_memory_when_clearing(self):
+        # gh-118331: Make sure we do not raise an exception from the destructor
+        # when clearing weakrefs if allocating the intermediate tuple fails.
+        code = textwrap.dedent("""
+        import _testcapi
+        import weakref
+
+        class TestObj:
+            pass
+
+        def callback(obj):
+            pass
+
+        obj = TestObj()
+        # The choice of 50 is arbitrary, but must be large enough to ensure
+        # the allocation won't be serviced by the free list.
+        wrs = [weakref.ref(obj, callback) for _ in range(50)]
+        _testcapi.set_nomemory(0)
+        del obj
+        """).strip()
+        res, _ = script_helper.run_python_until_end("-c", code)
+        stderr = res.err.decode("ascii", "backslashreplace")
+        self.assertNotRegex(stderr, "_Py_Dealloc: Deallocator of type 'TestObj'")
 
 
 class SubclassableWeakrefTestCase(TestBase):
@@ -1082,6 +1180,7 @@ class WeakMethodTestCase(unittest.TestCase):
         self.assertIs(r().__func__, o.some_method.__func__)
         self.assertEqual(r()(), 4)
 
+    @support.impl_detail("weakref nondeterministic", graalpy=False)
     def test_object_dead(self):
         o = Object(1)
         r = weakref.WeakMethod(o.some_method)
@@ -1089,6 +1188,7 @@ class WeakMethodTestCase(unittest.TestCase):
         gc.collect()
         self.assertIs(r(), None)
 
+    @support.impl_detail("weakref nondeterministic", graalpy=False)
     def test_method_dead(self):
         C = self._subclass()
         o = C(1)
@@ -1114,6 +1214,7 @@ class WeakMethodTestCase(unittest.TestCase):
         gc.collect()
         self.assertEqual(calls, [r])
 
+    @support.impl_detail("weakref nondeterministic", graalpy=False)
     def test_callback_when_method_dead(self):
         # Test callback behaviour when method dies first.
         C = self._subclass()
@@ -1175,6 +1276,7 @@ class WeakMethodTestCase(unittest.TestCase):
         _eq(a, ALWAYS_EQ)
         del x, y, z
         gc.collect()
+        gc_collect() # <- GraalPy change
         # Dead WeakMethods compare by identity
         refs = a, b, c, d, e, f
         for q in refs:
@@ -1207,6 +1309,12 @@ class MappingTestCase(TestBase):
 
     COUNT = 10
 
+    if support.check_sanitizer(thread=True) and support.Py_GIL_DISABLED:
+        # Reduce iteration count to get acceptable latency
+        NUM_THREADED_ITERATIONS = 1000
+    else:
+        NUM_THREADED_ITERATIONS = 100000
+
     def check_len_cycles(self, dict_type, cons):
         N = 20
         items = [RefCycle() for i in range(N)]
@@ -1219,14 +1327,17 @@ class MappingTestCase(TestBase):
             pass
         del items
         gc.collect()
+        gc_collect() # <- GraalPy change
         n1 = len(dct)
         del it
         gc.collect()
+        gc_collect() # <- GraalPy change
         n2 = len(dct)
         # one item may be kept alive inside the iterator
         self.assertIn(n1, (0, 1))
         self.assertEqual(n2, 0)
 
+    @support.impl_detail("weakref nondeterministic", graalpy=False)
     def test_weak_keyed_len_cycles(self):
         self.check_len_cycles(weakref.WeakKeyDictionary, lambda k: (k, 1))
 
@@ -1239,6 +1350,7 @@ class MappingTestCase(TestBase):
         for th in range(1, 100):
             N = 20
             gc.collect(0)
+            gc_collect() # <- GraalPy change
             gc.set_threshold(th, th, th)
             items = [RefCycle() for i in range(N)]
             dct = dict_type(cons(o) for o in items)
@@ -1410,6 +1522,7 @@ class MappingTestCase(TestBase):
         # Destroy an object
         del objects[-1]
         gc.collect()    # just in case
+        gc_collect() # <- GraalPy change
         # We have removed either the first consumed object, or another one
         self.assertIn(len(list(it)), [len(objects), len(objects) - 1])
         del it
@@ -1490,10 +1603,12 @@ class MappingTestCase(TestBase):
                 # Schedule a key/value for removal and recreate it
                 v = objects.pop().arg
                 gc.collect()      # just in case
+                gc_collect() # <- GraalPy change
                 yield Object(v), v
             finally:
                 it = None           # should commit all removals
                 gc.collect()
+                gc_collect() # <- GraalPy change
         self.check_weak_destroy_and_mutate_while_iterating(dict, testcontext)
         # Issue #21173: len() fragile when keys are both implicitly and
         # explicitly removed.
@@ -1517,10 +1632,12 @@ class MappingTestCase(TestBase):
                 # Schedule a key/value for removal and recreate it
                 k = objects.pop().arg
                 gc.collect()      # just in case
+                gc_collect() # <- GraalPy change
                 yield k, Object(k)
             finally:
                 it = None           # should commit all removals
                 gc.collect()
+                gc_collect() # <- GraalPy change
         self.check_weak_destroy_and_mutate_while_iterating(dict, testcontext)
         dict, objects = self.make_weak_valued_dict()
         self.check_weak_del_and_len_while_iterating(dict, testcontext)
@@ -1828,33 +1945,55 @@ class MappingTestCase(TestBase):
         dict = weakref.WeakKeyDictionary()
         self.assertRegex(repr(dict), '<WeakKeyDictionary at 0x.*>')
 
+    @threading_helper.requires_working_threading()
     def test_threaded_weak_valued_setdefault(self):
         d = weakref.WeakValueDictionary()
         with collect_in_thread():
-            for i in range(100000):
+            for i in range(self.NUM_THREADED_ITERATIONS):
                 x = d.setdefault(10, RefCycle())
                 self.assertIsNot(x, None)  # we never put None in there!
                 del x
 
+    @threading_helper.requires_working_threading()
     def test_threaded_weak_valued_pop(self):
         d = weakref.WeakValueDictionary()
         with collect_in_thread():
-            for i in range(100000):
+            for i in range(self.NUM_THREADED_ITERATIONS):
                 d[10] = RefCycle()
                 x = d.pop(10, 10)
                 self.assertIsNot(x, None)  # we never put None in there!
 
+    @threading_helper.requires_working_threading()
     def test_threaded_weak_valued_consistency(self):
         # Issue #28427: old keys should not remove new values from
         # WeakValueDictionary when collecting from another thread.
         d = weakref.WeakValueDictionary()
         with collect_in_thread():
-            for i in range(200000):
+            for i in range(2 * self.NUM_THREADED_ITERATIONS):
                 o = RefCycle()
                 d[10] = o
                 # o is still alive, so the dict can't be empty
                 self.assertEqual(len(d), 1)
                 o = None  # lose ref
+
+    @support.cpython_only
+    def test_weak_valued_consistency(self):
+        # A single-threaded, deterministic repro for issue #28427: old keys
+        # should not remove new values from WeakValueDictionary. This relies on
+        # an implementation detail of CPython's WeakValueDictionary (its
+        # underlying dictionary of KeyedRefs) to reproduce the issue.
+        d = weakref.WeakValueDictionary()
+        with support.disable_gc():
+            d[10] = RefCycle()
+            # Keep the KeyedRef alive after it's replaced so that GC will invoke
+            # the callback.
+            wr = d.data[10]
+            # Replace the value with something that isn't cyclic garbage
+            o = RefCycle()
+            d[10] = o
+            # Trigger GC, which will invoke the callback for `wr`
+            gc.collect()
+            self.assertEqual(len(d), 1)
 
     def check_threaded_weak_dict_copy(self, type_, deepcopy):
         # `type_` should be either WeakKeyDictionary or WeakValueDictionary.
@@ -1886,6 +2025,7 @@ class MappingTestCase(TestBase):
                 lst.pop(i)
                 if gc_ctr % 10000 == 0:
                     gc.collect()  # just in case
+                    gc_collect() # <- GraalPy change
 
         self.assertIn(type_, (weakref.WeakKeyDictionary, weakref.WeakValueDictionary))
 
@@ -1917,22 +2057,28 @@ class MappingTestCase(TestBase):
         if exc:
             raise exc[0]
 
+    @threading_helper.requires_working_threading()
     def test_threaded_weak_key_dict_copy(self):
         # Issue #35615: Weakref keys or values getting GC'ed during dict
         # copying should not result in a crash.
         self.check_threaded_weak_dict_copy(weakref.WeakKeyDictionary, False)
 
     @support.impl_detail("refcounting", graalpy=False)
+    @threading_helper.requires_working_threading()
+    @support.requires_resource('cpu')
     def test_threaded_weak_key_dict_deepcopy(self):
         # Issue #35615: Weakref keys or values getting GC'ed during dict
         # copying should not result in a crash.
         self.check_threaded_weak_dict_copy(weakref.WeakKeyDictionary, True)
 
+    @threading_helper.requires_working_threading()
     def test_threaded_weak_value_dict_copy(self):
         # Issue #35615: Weakref keys or values getting GC'ed during dict
         # copying should not result in a crash.
         self.check_threaded_weak_dict_copy(weakref.WeakValueDictionary, False)
 
+    @threading_helper.requires_working_threading()
+    @support.requires_resource('cpu')
     def test_threaded_weak_value_dict_deepcopy(self):
         # Issue #35615: Weakref keys or values getting GC'ed during dict
         # copying should not result in a crash.
@@ -2071,6 +2217,7 @@ class FinalizeTestCase(unittest.TestCase):
         expected = ['A', 'f3', 'B', 'C', 'f4', 'f2', 'f1', 'D']
         self.assertEqual(res, expected)
 
+    @support.impl_detail("weakref nondeterministic", graalpy=False)
     def test_all_freed(self):
         # we want a weakrefable subclass of weakref.finalize
         class MyFinalizer(weakref.finalize):
@@ -2210,32 +2357,26 @@ True
 >>> a_id = remember(a)
 >>> id2obj(a_id) is a
 True
->>> del a
->>> gc_collect()  # For PyPy or other GCs.
->>> try:
-...     id2obj(a_id)
-... except KeyError:
-...     print('OK')
-... else:
-...     print('WeakValueDictionary error')
+
+# GraalPy change Transiently failing
+# >>> del a
+# >>> gc_collect()  # For PyPy or other GCs.
+# >>> try:
+# ...     id2obj(a_id)
+# ... except KeyError:
+# ...     print('OK')
+# ... else:
+# ...     print('WeakValueDictionary error')
 OK
 
 """
 
 __test__ = {'libreftest' : libreftest}
 
-def test_main():
-    support.run_unittest(
-        ReferencesTestCase,
-        WeakMethodTestCase,
-        MappingTestCase,
-        WeakValueDictionaryTestCase,
-        WeakKeyDictionaryTestCase,
-        SubclassableWeakrefTestCase,
-        FinalizeTestCase,
-        )
-    support.run_doctest(sys.modules[__name__])
+def load_tests(loader, tests, pattern):
+    tests.addTest(doctest.DocTestSuite())
+    return tests
 
 
 if __name__ == "__main__":
-    test_main()
+    unittest.main()

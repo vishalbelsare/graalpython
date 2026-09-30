@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,9 +41,12 @@
 package com.oracle.graal.python.builtins.objects.cext.structs;
 
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CHAR;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CHAR_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CharPtrAsTruffleString;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtr;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Double;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.INT64_T;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.INT_LIST;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PY_C_FUNCTION;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PY_SSIZE_T_PTR;
@@ -51,7 +54,6 @@ import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.Arg
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyAsyncMethods;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyBufferProcs;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyGetSetDef;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyInterpreterState;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyMappingMethods;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyMemberDef;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyMethodDef;
@@ -64,9 +66,12 @@ import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.Arg
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_buffer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_hash_t;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UCHAR;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UINT16_T;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UINT64_T;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UINTPTR_T;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UNSIGNED_INT;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UNSIGNED_LONG;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.WCHAR_T_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.allocfunc;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.binaryfunc;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.descrgetfunc;
@@ -99,19 +104,32 @@ import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.Arg
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.traverseproc;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.unaryfunc;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.vectorcallfunc;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readLongArrayElements;
 
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.PCallCapiFunction;
-import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.annotations.CApiFields;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 
+@CApiFields
 public enum CFields {
     PyObject__ob_refcnt(Py_ssize_t),
     PyObject__ob_type(PyTypeObject),
 
     PyVarObject__ob_size(Py_ssize_t),
+
+    GraalPyObject__handle_table_index(Int),
+    GraalPyVarObject__ob_size(Py_ssize_t),
+    GraalPyVarObject__ob_item(PyObjectPtr),
+    GraalPyFloatObject__ob_fval(Double),
+    GraalPyUnicodeObject__length(Py_ssize_t),
+    GraalPyUnicodeObject__hash(Py_hash_t),
+    GraalPyUnicodeObject__state(UINT64_T),
+    GraalPyUnicodeObject__utf8_length(Py_ssize_t),
+    GraalPyUnicodeObject__utf8(CHAR_PTR),
+    GraalPyUnicodeObject__data(Pointer),
 
     PyModuleDef__m_name(ConstCharPtr),
     PyModuleDef__m_doc(ConstCharPtr),
@@ -124,6 +142,15 @@ public enum CFields {
 
     PyModuleDef_Slot__slot(Int),
     PyModuleDef_Slot__value(Pointer),
+
+    PySlot__sl_id(UINT16_T),
+    PySlot__sl_flags(UINT16_T),
+    PySlot__sl_reserved(UNSIGNED_INT),
+    PySlot__sl_ptr(Pointer),
+    PySlot__sl_func(Pointer),
+    PySlot__sl_size(Py_ssize_t),
+    PySlot__sl_int64(INT64_T),
+    PySlot__sl_uint64(UINT64_T),
 
     PyMethodDef__ml_name(ConstCharPtr),
     PyMethodDef__ml_meth(PY_C_FUNCTION),
@@ -163,6 +190,19 @@ public enum CFields {
     PyDateTime_CAPI__Date_FromTimestamp(Pointer),
     PyDateTime_CAPI__DateTime_FromDateAndTimeAndFold(Pointer),
     PyDateTime_CAPI__Time_FromTimeAndFold(Pointer),
+
+    PyDateTime_Time__data(Pointer),
+    PyDateTime_Time__hastzinfo(CHAR),
+    PyDateTime_Time__tzinfo(PyObject),
+    PyDateTime_Time__fold(UCHAR),
+    PyDateTime_Date__data(Pointer),
+    PyDateTime_DateTime__data(Pointer),
+    PyDateTime_DateTime__hastzinfo(CHAR),
+    PyDateTime_DateTime__tzinfo(PyObject),
+    PyDateTime_DateTime__fold(UCHAR),
+    PyDateTime_Delta__days(Int),
+    PyDateTime_Delta__seconds(Int),
+    PyDateTime_Delta__microseconds(Int),
 
     PyNumberMethods__nb_add(binaryfunc),
     PyNumberMethods__nb_subtract(binaryfunc),
@@ -273,11 +313,27 @@ public enum CFields {
     PyTypeObject__tp_finalize(destructor),
     PyTypeObject__tp_vectorcall(vectorcallfunc),
 
+    PyHeapTypeObject__as_async(PyAsyncMethods),
+    PyHeapTypeObject__as_number(PyNumberMethods),
+    PyHeapTypeObject__as_mapping(PyMappingMethods),
+    PyHeapTypeObject__as_sequence(PySequenceMethods),
+    PyHeapTypeObject__as_buffer(PyBufferProcs),
+    PyHeapTypeObject__ht_name(PyObject),
+    PyHeapTypeObject__ht_slots(PyObject),
+    PyHeapTypeObject__ht_qualname(PyObject),
+    PyHeapTypeObject__ht_module(PyObject),
+
     PyBytesObject__ob_shash(Py_hash_t),
-    PyBytesObject__ob_sval(CHAR),
+    PyBytesObject__ob_sval(CHAR_PTR),
+
+    PyByteArrayObject__ob_start(CHAR_PTR),
 
     PyListObject__ob_item(PyObjectPtr),
     PyListObject__allocated(Py_ssize_t),
+
+    _PyLongValue__lv_tag(UINTPTR_T),
+    _PyLongValue__ob_digit(INT_LIST),
+    PyLongObject__long_value__lv_tag(UINTPTR_T),
 
     PyTupleObject__ob_item(PyObjectPtr),
 
@@ -285,17 +341,18 @@ public enum CFields {
 
     PyModuleDef_Base__m_index(Py_ssize_t),
 
+    Py_complex__real(Double),
+    Py_complex__imag(Double),
+
     PyComplexObject__cval__real(Double),
     PyComplexObject__cval__imag(Double),
 
     PyASCIIObject__length(Py_ssize_t),
     PyASCIIObject__hash(Py_hash_t),
     PyASCIIObject__state(Int),
-    PyASCIIObject__wstr(WCHAR_T_PTR),
 
     PyCompactUnicodeObject__utf8_length(Py_ssize_t),
     PyCompactUnicodeObject__utf8(CharPtrAsTruffleString),
-    PyCompactUnicodeObject__wstr_length(Py_ssize_t),
 
     PyUnicodeObject__data(Pointer),
 
@@ -311,21 +368,59 @@ public enum CFields {
     PyMemberDef__flags(Int),
     PyMemberDef__doc(ConstCharPtr),
 
-    PyThreadState__interp(PyInterpreterState),
+    PyThreadState__current_exception(PyObject),
     PyThreadState__dict(PyObject),
+    PyThreadState__small_ints(PyObjectPtr),
+    PyThreadState__singletons(Pointer),
+    PyThreadState__gc(Pointer),
+    PyThreadState__graalpy_deallocating(Pointer),
+    PyThreadState__py_recursion_limit(Int),
+    PyThreadState__py_recursion_remaining(Int),
+    PyThreadState__c_recursion_remaining(Int),
+
+    GraalPySingletons__tuple_empty(PyObject),
+    GraalPySingletons__bytes_empty(PyObject),
+    GraalPySingletons__bytes_characters(PyObjectPtr),
+    GraalPySingletons__unicode_characters(PyObjectPtr),
+
+    GraalPyDeallocState__items(PyObjectPtr),
+    GraalPyDeallocState__len(Int),
+    GraalPyDeallocState__capacity(Int),
+
+    GCState__enabled(Int),
+    GCState__debug(Int),
+    GCState__generations(Pointer),
+    GCState__generation0(Pointer),
+    GCState__collecting(Int),
+
+    GCGeneration__threshold(Int),
+    GCGeneration__count(Int),
+
+    PyGC_Head___gc_prev(UINTPTR_T),
+    PyGC_Head___gc_next(UINTPTR_T),
+    GraalPyGC_CycleNode__item(PyObject),
+    GraalPyGC_CycleNode__next(Pointer),
 
     PyBaseExceptionObject__dict(PyObject),
     PyBaseExceptionObject__args(PyObject),
     PyBaseExceptionObject__traceback(PyObject),
     PyBaseExceptionObject__context(PyObject),
     PyBaseExceptionObject__cause(PyObject),
-    PyBaseExceptionObject__suppress_context(CHAR);
+    PyBaseExceptionObject__suppress_context(CHAR),
+
+    PySyntaxErrorObject__msg(PyObject),
+    PySyntaxErrorObject__filename(PyObject),
+    PySyntaxErrorObject__lineno(PyObject),
+    PySyntaxErrorObject__offset(PyObject),
+    PySyntaxErrorObject__end_lineno(PyObject),
+    PySyntaxErrorObject__end_offset(PyObject),
+    PySyntaxErrorObject__text(PyObject),
+    PySyntaxErrorObject__print_file_and_line(PyObject);
 
     public static final int PyASCIIObject__state_interned_shift = 0;
     public static final int PyASCIIObject__state_kind_shift = 2;
     public static final int PyASCIIObject__state_compact_shift = 5;
     public static final int PyASCIIObject__state_ascii_shift = 6;
-    public static final int PyASCIIObject__state_ready_shift = 7;
 
     @CompilationFinal(dimensions = 1) public static final CFields[] VALUES = values();
 
@@ -341,7 +436,7 @@ public enum CFields {
 
     @CompilationFinal private long offset = -1;
 
-    long offset() {
+    public long offset() {
         long o = offset;
         if (o == -1) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -357,8 +452,8 @@ public enum CFields {
 
     private static void resolve() {
         CompilerAsserts.neverPartOfCompilation();
-        Object offsetsPointer = PCallCapiFunction.callUncached(NativeCAPISymbol.FUN_PYTRUFFLE_STRUCT_OFFSETS);
-        long[] offsets = CStructAccessFactory.ReadI64NodeGen.getUncached().readLongArray(offsetsPointer, VALUES.length);
+        long offsetsPointer = CApiContext.getNativeCAPIMetadataPointer(null) + (CConstants.VALUES.length + 1L) * Long.BYTES;
+        long[] offsets = readLongArrayElements(offsetsPointer, 0L, VALUES.length);
         for (CFields field : VALUES) {
             field.offset = offsets[field.ordinal()];
             assert field.offset >= 0 && field.offset < 1024;

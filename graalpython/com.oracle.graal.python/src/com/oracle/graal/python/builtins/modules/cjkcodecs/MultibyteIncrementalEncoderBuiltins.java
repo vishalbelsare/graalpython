@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,14 +50,11 @@ import static com.oracle.graal.python.nodes.ErrorMessages.CODEC_IS_UNEXPECTED_TY
 import static com.oracle.graal.python.nodes.ErrorMessages.COULDN_T_CONVERT_THE_OBJECT_TO_STR;
 import static com.oracle.graal.python.nodes.ErrorMessages.PENDING_BUFFER_OVERFLOW;
 import static com.oracle.graal.python.nodes.ErrorMessages.PENDING_BUFFER_TOO_LARGE;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_STRICT;
 import static com.oracle.graal.python.nodes.StringLiterals.T_UTF8;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.UnicodeError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
@@ -67,7 +64,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.modules.CodecsModuleBuiltins;
@@ -75,33 +75,35 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.ints.IntNodes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectStrAsObjectNode;
 import com.oracle.graal.python.lib.PyUnicodeCheckNode;
+import com.oracle.graal.python.nodes.HiddenAttr;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromDynamicObjectNode;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToDynamicObjectNode;
+import com.oracle.graal.python.nodes.StringLiterals;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = MultibyteIncrementalEncoder)
@@ -109,36 +111,37 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
 
     private static final int MAXENCPENDING = 2;
 
+    public static final TpSlots SLOTS = MultibyteIncrementalEncoderBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
-        return MultibyteStreamWriterBuiltinsFactory.getFactories();
+        return MultibyteIncrementalEncoderBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 1, parameterNames = {"$cls", "errors"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, parameterNames = {"$cls", "errors"})
     @GenerateNodeFactory
     protected abstract static class NewNode extends PythonBinaryBuiltinNode {
 
-        private static final TruffleString CODEC = tsLiteral("codec");
-
         @Specialization
         static Object mbstreamreaderNew(VirtualFrame frame, Object type, Object err,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode castToStringNode,
                         @Cached PyObjectGetAttr getAttr,
                         @Cached TruffleString.EqualNode isEqual,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) { // "|s:IncrementalEncoder"
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) { // "|s:IncrementalEncoder"
 
             TruffleString errors = null;
             if (err != PNone.NO_VALUE) {
                 errors = castToStringNode.execute(inliningTarget, err);
             }
 
-            MultibyteIncrementalEncoderObject self = factory.createMultibyteIncrementalEncoderObject(type);
+            MultibyteIncrementalEncoderObject self = PFactory.createMultibyteIncrementalEncoderObject(type, getInstanceShape.execute(type));
 
-            Object codec = getAttr.execute(frame, inliningTarget, type, CODEC);
+            Object codec = getAttr.execute(frame, inliningTarget, type, StringLiterals.T_CODEC);
             if (!(codec instanceof MultibyteCodecObject)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, CODEC_IS_UNEXPECTED_TYPE);
+                throw raiseNode.raise(inliningTarget, TypeError, CODEC_IS_UNEXPECTED_TYPE);
             }
 
             self.codec = ((MultibyteCodecObject) codec).codec;
@@ -149,33 +152,32 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self"})
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "MultibyteIncrementalEncoder", minNumOfPositionalArgs = 1, parameterNames = {"$self"})
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        PNone init(@SuppressWarnings("unused") MultibyteIncrementalEncoderObject self) {
+        static PNone init(@SuppressWarnings("unused") MultibyteIncrementalEncoderObject self) {
             return PNone.NONE;
         }
     }
 
     @ImportStatic(PGuards.class)
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 44 -> 25
+    @GenerateInline(false)       // footprint reduction 44 -> 25
     protected abstract static class EncodeStatefulNode extends Node {
 
-        abstract Object execute(VirtualFrame frame, MultibyteStatefulEncoderContext ctx, Object unistr, int end,
-                        PythonObjectFactory factory);
+        abstract Object execute(VirtualFrame frame, MultibyteStatefulEncoderContext ctx, Object unistr, int end);
 
         // encoder_encode_stateful
         @Specialization
         static Object ts(VirtualFrame frame, MultibyteStatefulEncoderContext ctx, TruffleString ucvt, int end,
-                        PythonObjectFactory factory,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached MultibyteCodecUtil.EncodeNode encodeNode,
                         @Shared @Cached TruffleString.ConcatNode concatNode,
                         @Shared @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                         @Shared @Cached TruffleString.SubstringNode substringNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             TruffleString inbuf = ucvt;
             TruffleString origpending = null;
             if (ctx.pending != null) {
@@ -187,16 +189,15 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
             int datalen = codePointLengthNode.execute(inbuf, TS_ENCODING);
             PBytes r;
             try {
-                r = encodeEmptyInput(datalen, MBENC_FLUSH | MBENC_RESET, factory);
+                r = encodeEmptyInput(inliningTarget, datalen, MBENC_FLUSH | MBENC_RESET);
                 if (r == null) {
                     MultibyteEncodeBuffer buf = new MultibyteEncodeBuffer(inbuf);
                     r = encodeNode.execute(frame, inliningTarget, ctx.codec, ctx.state, buf,
-                                    ctx.errors, end != 0 ? MBENC_FLUSH | MBENC_RESET : 0,
-                                    factory);
+                                    ctx.errors, end != 0 ? MBENC_FLUSH | MBENC_RESET : 0);
                     if (buf.getInpos() < datalen) {
                         if (datalen - buf.getInpos() > MAXENCPENDING) {
                             /* normal codecs can't reach here */
-                            throw raiseNode.get(inliningTarget).raise(UnicodeError, PENDING_BUFFER_OVERFLOW);
+                            throw raiseNode.raise(inliningTarget, UnicodeError, PENDING_BUFFER_OVERFLOW);
                         }
                         ctx.pending = substringNode.execute(inbuf, buf.getInpos(), datalen, TS_ENCODING, false);
                     }
@@ -212,8 +213,7 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isTruffleString(unistr)")
         static Object notTS(VirtualFrame frame, MultibyteStatefulEncoderContext ctx, Object unistr, int end,
-                        PythonObjectFactory factory,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectStrAsObjectNode strNode,
                         @Cached PyUnicodeCheckNode unicodeCheckNode,
                         @Cached CastToTruffleStringNode toTruffleStringNode,
@@ -221,16 +221,16 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
                         @Shared @Cached TruffleString.ConcatNode concatNode,
                         @Shared @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                         @Shared @Cached TruffleString.SubstringNode substringNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             Object ucvt = unistr;
             if (!unicodeCheckNode.execute(inliningTarget, unistr)) {
                 ucvt = strNode.execute(frame, inliningTarget, unistr);
                 if (!unicodeCheckNode.execute(inliningTarget, unistr)) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, COULDN_T_CONVERT_THE_OBJECT_TO_STR);
+                    throw raiseNode.raise(inliningTarget, TypeError, COULDN_T_CONVERT_THE_OBJECT_TO_STR);
                 }
             }
             TruffleString str = toTruffleStringNode.execute(inliningTarget, ucvt);
-            return ts(frame, ctx, str, end, factory, inliningTarget, encodeNode, concatNode, codePointLengthNode, substringNode, raiseNode);
+            return ts(frame, ctx, str, end, inliningTarget, encodeNode, concatNode, codePointLengthNode, substringNode, raiseNode);
         }
 
     }
@@ -247,15 +247,11 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        Object encode(VirtualFrame frame, MultibyteStatefulEncoderContext ctx, Object unistr, int end,
-                        @Cached EncodeStatefulNode encodeStatefulNode,
-                        @Cached PythonObjectFactory factory) {
-            return encodeStatefulNode.execute(frame, ctx, unistr, end, factory);
+        static Object encode(VirtualFrame frame, MultibyteStatefulEncoderContext ctx, Object unistr, int end,
+                        @Cached EncodeStatefulNode encodeStatefulNode) {
+            return encodeStatefulNode.execute(frame, ctx, unistr, end);
         }
-
     }
-
-    public static final HiddenKey ENCODER_OBJECT_ATTR = new HiddenKey("encoder_object");
 
     @Builtin(name = "getstate", minNumOfPositionalArgs = 1, parameterNames = {"$self"}, doc = "getstate($self, /)\n--\n\n")
     @GenerateNodeFactory
@@ -263,12 +259,12 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
 
         // _multibytecodec_MultibyteIncrementalEncoder_getstate_impl
         @Specialization
-        static Object getstate(MultibyteIncrementalEncoderObject self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached WriteAttributeToDynamicObjectNode writeAttrNode,
+        static Object getstate(VirtualFrame frame, MultibyteIncrementalEncoderObject self,
+                        @Bind Node inliningTarget,
+                        @Cached HiddenAttr.WriteNode writeHiddenAttrNode,
                         @Cached CodecsModuleBuiltins.CodecsEncodeToJavaBytesNode asUTF8AndSize,
                         @Cached IntNodes.PyLongFromByteArray fromByteArray,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             /*
              * state made up of 1 byte for buffer size, up to MAXENCPENDING*4 bytes for UTF-8
              * encoded buffer (each character can use up to 4 bytes), and required bytes for
@@ -280,10 +276,10 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
             // int statesize = 1;
 
             if (self.pending != null) {
-                byte[] pendingbuffer = asUTF8AndSize.execute(self.pending, T_UTF8, T_STRICT);
+                byte[] pendingbuffer = asUTF8AndSize.execute(frame, self.pending, T_UTF8, T_STRICT);
                 int pendingsize = pendingbuffer.length;
                 if (pendingsize > MAXENCPENDING * 4) {
-                    throw raiseNode.get(inliningTarget).raise(UnicodeError, PENDING_BUFFER_TOO_LARGE);
+                    throw raiseNode.raise(inliningTarget, UnicodeError, PENDING_BUFFER_TOO_LARGE);
                 }
                 statebytes[0] = (byte) pendingsize;
                 PythonUtils.arraycopy(pendingbuffer, 0, statebytes, 1, pendingsize);
@@ -293,43 +289,39 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
             // for the encoder object.
             // memcpy(statebytes + statesize, self.state.c, MULTIBYTECODECSTATE);
             // statesize += MULTIBYTECODECSTATE;
-            Object stateobj = fromByteArray.execute(inliningTarget, statebytes, false);
-            // since statebytes.length > 8, we will get a PInt
-            writeAttrNode.execute(stateobj, ENCODER_OBJECT_ATTR, self.state);
+            Object stateobj = fromByteArray.execute(inliningTarget, statebytes, true, true);
+            assert (stateobj instanceof PInt); // since statebytes.length > 8, we will get a PInt
+            writeHiddenAttrNode.execute(inliningTarget, (PInt) stateobj, HiddenAttr.ENCODER_OBJECT, self.state);
             return stateobj;
         }
     }
 
-    @Builtin(name = "setstate", minNumOfPositionalArgs = 1, parameterNames = {"$self"}, doc = "setstate($self, state, /)\n--\n\n")
+    @Builtin(name = "setstate", parameterNames = {"$self", "state"}, doc = "setstate($self, state, /)\n--\n\n")
     @GenerateNodeFactory
     abstract static class SetStateNode extends PythonBinaryBuiltinNode {
 
         @Specialization
         // _multibytecodec_MultibyteIncrementalEncoder_setstate_impl
         static Object setstate(MultibyteIncrementalEncoderObject self, PInt statelong,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ReadAttributeFromDynamicObjectNode readAttrNode,
+                        @Bind Node inliningTarget,
+                        @Cached HiddenAttr.ReadNode readHiddenAttrNode,
                         @Cached IntNodes.PyLongAsByteArray asByteArray,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             int sizeOfStateBytes = 1 + MAXENCPENDING * 4 + MULTIBYTECODECSTATE;
 
             byte[] statebytes = asByteArray.execute(inliningTarget, statelong, sizeOfStateBytes, false);
 
             if (statebytes[0] > MAXENCPENDING * 4) {
-                throw raiseNode.get(inliningTarget).raise(UnicodeError, PENDING_BUFFER_TOO_LARGE);
+                throw raiseNode.raise(inliningTarget, UnicodeError, PENDING_BUFFER_TOO_LARGE);
             }
 
             self.pending = decodeUTF8(statebytes, 1, statebytes[0]);
 
             // PythonUtils.arraycopy(statebytes, 1 + statebytes[0], self.state.c, 0,
             // MULTIBYTECODECSTATE);
-            Object s = readAttrNode.execute(statelong, ENCODER_OBJECT_ATTR);
-            if (s == PNone.NO_VALUE) {
-                self.state = null;
-            } else {
-                assert s instanceof MultibyteCodecState : "Not MultibyteCodecState object!";
-                self.state = (MultibyteCodecState) s;
-            }
+            Object s = readHiddenAttrNode.execute(inliningTarget, statelong, HiddenAttr.ENCODER_OBJECT, null);
+            assert s == null || s instanceof MultibyteCodecState : "Not MultibyteCodecState object!";
+            self.state = (MultibyteCodecState) s;
             return PNone.NONE;
         }
 
@@ -360,7 +352,5 @@ public final class MultibyteIncrementalEncoderBuiltins extends PythonBuiltins {
             self.pending = null;
             return PNone.NONE;
         }
-
     }
-
 }

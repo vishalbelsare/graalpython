@@ -1,9 +1,15 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2020 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
-    
+import io
+import os
+import subprocess
+import sys
+import tempfile
+import types
 import unittest
+
 
 class MyIndexable(object):
     def __init__(self, value):
@@ -12,6 +18,13 @@ class MyIndexable(object):
         return self.value
 
 class BuiltinTest(unittest.TestCase):
+    def test_build_class_checks_body_arguments(self):
+        def body(required):
+            pass
+
+        with self.assertRaises(TypeError):
+            __build_class__(body, "", "")
+
     def test_bin(self):
         self.assertEqual(bin(0), '0b0')
         self.assertEqual(bin(1), '0b1')
@@ -38,6 +51,140 @@ class BuiltinTest(unittest.TestCase):
         self.assertRaises(TypeError, divmod, 10, c2)
         self.assertRaises(TypeError, divmod, c1, 10)
 
+    def test_aiter_type_errors(self):
+        class BadAIter:
+            def __aiter__(self):
+                return object()
+
+        async def async_for_none():
+            async for _ in None:
+                pass
+
+        with self.assertRaisesRegex(TypeError, "'NoneType' object is not an async iterable"):
+            aiter(None)
+        with self.assertRaisesRegex(TypeError, "'int' object is not an async iterable"):
+            aiter(1)
+        with self.assertRaisesRegex(TypeError, r"aiter\(\) returned not an async iterator of type 'object'"):
+            aiter(BadAIter())
+        with self.assertRaisesRegex(TypeError, "'async for' requires an object with __aiter__ method, got NoneType"):
+            async_for_none().send(None)
+
+    def test_anext_with_default(self):
+        async def async_generator():
+            yield 42
+
+        async def consume():
+            iterator = async_generator()
+            self.assertEqual(await anext(iterator, 100), 42)
+            self.assertEqual(await anext(iterator, 100), 100)
+
+        with self.assertRaises(StopIteration) as caught:
+            consume().send(None)
+        self.assertIsNone(caught.exception.value)
+
+    def test_anext_with_default_awaitable_protocol(self):
+
+        class Awaitable:
+            def __await__(self):
+                return self
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise StopAsyncIteration
+
+            def send(self, *args):
+                return "send", args
+
+            def throw(self, *args):
+                return "throw", args
+
+            def close(self, *args):
+                return "close", args
+
+        class AsyncIterator:
+            def __anext__(self):
+                return Awaitable()
+
+        awaitable = anext(AsyncIterator(), 42)
+        self.assertIs(awaitable.__await__(), awaitable)
+        self.assertIs(iter(awaitable), awaitable)
+        self.assertEqual(awaitable.send("value"), ("send", ("value",)))
+        self.assertEqual(awaitable.throw(ValueError), ("throw", (ValueError,)))
+        self.assertEqual(awaitable.throw(ValueError, "error"), ("throw", (ValueError, "error")))
+        self.assertEqual(awaitable.throw(ValueError, "error", None), ("throw", (ValueError, "error", None)))
+        self.assertEqual(awaitable.close(), ("close", ()))
+
+        class CoroutineAsyncIterator:
+            async def __anext__(self):
+                return 24
+
+        @types.coroutine
+        def generator_based_coroutine():
+            if False:
+                yield
+            return 25
+
+        class GeneratorBasedCoroutineAsyncIterator:
+            def __anext__(self):
+                return generator_based_coroutine()
+
+        async def consume(iterator):
+            return await anext(iterator, 42)
+
+        for iterator, expected in ((CoroutineAsyncIterator(), 24), (GeneratorBasedCoroutineAsyncIterator(), 25)):
+            with self.assertRaises(StopIteration) as caught:
+                consume(iterator).send(None)
+            self.assertEqual(caught.exception.value, expected)
+
+        @types.coroutine
+        def suspend():
+            yield 1
+
+        async def suspended_coroutine():
+            await suspend()
+            return 26
+
+        coroutine = suspended_coroutine()
+        self.assertEqual(coroutine.send(None), 1)
+
+        class SuspendedCoroutineAsyncIterator:
+            def __anext__(self):
+                return coroutine
+
+        awaitable = anext(SuspendedCoroutineAsyncIterator(), 42)
+        with self.assertRaises(StopIteration) as caught:
+            awaitable.send(None)
+        self.assertEqual(caught.exception.value, 26)
+
+        class BadAwaitable:
+            def __await__(self):
+                return generator_based_coroutine()
+
+        class BadAsyncIterator:
+            def __aiter__(self):
+                return self
+
+            def __anext__(self):
+                return BadAwaitable()
+
+        async def await_bad():
+            await BadAwaitable()
+
+        async def iterate_bad():
+            async for _ in BadAsyncIterator():
+                pass
+
+        async def anext_bad():
+            await anext(BadAsyncIterator(), 42)
+
+        for coroutine in (await_bad(), anext_bad()):
+            with self.assertRaisesRegex(TypeError, "__await__.*coroutine"):
+                coroutine.send(None)
+        with self.assertRaisesRegex(TypeError, "async for.*invalid object"):
+            iterate_bad().send(None)
+
     def test_getitem_typeerror(self):
         a = object()
         try:
@@ -50,6 +197,18 @@ class BuiltinTest(unittest.TestCase):
     def test_ascii(self):
         self.assertEqual(ascii(1), "1")
         self.assertEqual(ascii("錦蛇 \t \0 a \x03"), "'\\u9326\\u86c7 \\t \\x00 a \\x03'")
+
+    def test_ascii_preserves_str_subclass_for_ascii_repr(self):
+        class MyStr(str):
+            pass
+
+        class Foo:
+            def __repr__(self):
+                return MyStr("hello")
+
+        result = ascii(Foo())
+        self.assertEqual(result, "hello")
+        self.assertIs(type(result), MyStr)
 
     def test_input(self):
         import sys
@@ -68,7 +227,7 @@ class BuiltinTest(unittest.TestCase):
         self.assertEqual(chr(97), 'a')
         self.assertEqual(chr(0xfff), '\u0fff')
         self.assertEqual(chr(0xf0000), '\U000f0000')
-        
+
     def test_ord(self):
         self.assertEqual(ord(' '), 32)
         self.assertEqual(ord('a'), 97)
@@ -88,24 +247,78 @@ class BuiltinTest(unittest.TestCase):
         self.assertEqual(getattr(builtins, 'False'), False)
         self.assertEqual(getattr(builtins, 'True'), True)
 
+    def test_missing_builtin_lookup_after_warmup(self):
+        def read_missing_builtin():
+            return definitely_missing_builtin_for_review
+
+        for _ in range(20):
+            with self.assertRaises(NameError):
+                read_missing_builtin()
+
+    def test_instance_attr_state_machine_after_warmup(self):
+        class PaddedFile:
+            def __init__(self, fileobj, prepend=b""):
+                self._buffer = prepend
+                self._length = len(prepend)
+                self.file = fileobj
+                self._read = 0
+
+            def read(self, size):
+                if self._read is None:
+                    return self.file.read(size)
+                if self._read + size <= self._length:
+                    read = self._read
+                    self._read += size
+                    return self._buffer[read:self._read]
+                read = self._read
+                self._read = None
+                return self._buffer[read:] + self.file.read(size - self._length + read)
+
+            def prepend(self, prepend=b""):
+                if self._read is None:
+                    self._buffer = prepend
+                else:
+                    self._read -= len(prepend)
+                    return
+                self._length = len(self._buffer)
+                self._read = 0
+
+        def exercise():
+            padded = PaddedFile(io.BytesIO(b"cdef"), b"ab")
+            self.assertEqual(padded.read(1), b"a")
+            self.assertEqual(padded.read(3), b"bcd")
+            padded.prepend(b"Z")
+            self.assertEqual(padded.read(2), b"Ze")
+            self.assertEqual(padded.read(2), b"f")
+
+        for _ in range(20):
+            exercise()
+
     def test_min(self):
         self.assertEqual(min((), default=1, key="adsf"), 1)
 
     def test_sort_keyfunc(self):
         lists = [[], [1], [1,2], [1,2,3], [1,3,2], [3,2,1], [9,3,8,1,7,9,3,6,7,8]]
-        
+
         for l in lists:
             count = 0
-            
+
             def keyfunc(v):
                 nonlocal count
                 count += 1
                 return v
-            
+
             result = sorted(l, key = keyfunc)
             self.assertEqual(len(l), count)
             self.assertEqual(sorted(l), result)
             count = 0
             result = sorted(l, key = keyfunc, reverse = True)
             self.assertEqual(len(l), count)
-            self.assertEqual(sorted(l, reverse = True), result)       
+            self.assertEqual(sorted(l, reverse = True), result)
+
+    def test_license(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Test that it can find the license even when ran outside of the distribution
+            license = subprocess.check_output([sys.executable, "-c", "print(license())"], cwd=tmpdir, text=True, input=("\n" * 100))
+            if sys.implementation.name == 'graalpy':
+                self.assertIn('Oracle', license)

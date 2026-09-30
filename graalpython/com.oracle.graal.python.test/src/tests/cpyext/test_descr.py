@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,9 +36,9 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import unittest
 
-from . import CPyExtType, CPyExtTestCase, CPyExtFunction, unhandled_error_compare 
-__dir__ = __file__.rpartition("/")[0]
+from . import CPyExtType, CPyExtTestCase, CPyExtFunction, unhandled_error_compare
 
 
 def _reference_classmethod(args):
@@ -46,7 +46,7 @@ def _reference_classmethod(args):
         return classmethod(args[0])()
     raise TypeError
 
-class TestDescrObject(object):
+class TestDescrObject(unittest.TestCase):
 
     def test_new_classmethod(self):
 
@@ -75,19 +75,12 @@ class TestDescrObject(object):
         assert tester.from_param(123) == TestNewClassMethod
 
     def test_new_descr(self):
-        C = CPyExtType("C_", 
+        C = CPyExtType("C_",
                             '''
-                            typedef struct A_Struct A_Object;
-
-                            struct A_Struct {
-                                PyObject_HEAD
-                                int some_int;
-                            };
-
                             PyTypeObject A_Type = {
                                 PyVarObject_HEAD_INIT(NULL, 0)
                                 .tp_name = "A",
-                                .tp_basicsize = sizeof(A_Object),
+                                .tp_basicsize = sizeof(C_Object),
                                 .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
                             };
 
@@ -98,7 +91,7 @@ class TestDescrObject(object):
                             }
 
                             static PyMethodDef foo_method = {
-                                 "foo", foo, METH_O 
+                                 "foo", foo, METH_O
                             };
 
                             static PyObject* B_new(PyTypeObject* type, PyObject* a, PyObject* b) {
@@ -165,6 +158,7 @@ class TestDescrObject(object):
                              tp_clear="(inquiry)C_clear",
                              tp_new="C_new",
                              tp_init="(initproc)C_init",
+                             cmembers="int some_int;",
                              ready_code='''
                                 if (PyType_Ready(&A_Type) < 0)
                                     return NULL;
@@ -172,41 +166,34 @@ class TestDescrObject(object):
                                 B_Type.tp_base = &PyType_Type;
                                 if (PyType_Ready(&B_Type) < 0)
                                     return NULL;
-                                    
-                                Py_SET_TYPE(&C_Type, &B_Type); 
+
+                                Py_SET_TYPE(&C_Type, &B_Type);
                                 C_Type.tp_base = &A_Type;''',
                             )
-        
+
         class bar(C):
             pass
         assert bar().foo(None) is None
 
     def test_new_descr_getset(self):
-        F = CPyExtType("F_", 
+        F = CPyExtType("F_",
                             '''
-                            typedef struct D_Struct D_Object;
-
-                            struct D_Struct {
-                                PyObject_HEAD
-                                PyObject * obj;
-                            };
-
                             PyTypeObject D_Type = {
                                 PyVarObject_HEAD_INIT(NULL, 0)
                                 .tp_name = "A",
-                                .tp_basicsize = sizeof(D_Object),
+                                .tp_basicsize = sizeof(F_Object),
                                 .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
                             };
 
                             static PyObject *
-                            foo_get(D_Object *obj, void *Py_UNUSED(ignored))
+                            foo_get(F_Object *obj, void *Py_UNUSED(ignored))
                             {
                                 Py_INCREF(obj->obj);
                                 return obj->obj;
                             }
 
                             static int
-                            foo_set(D_Object *obj, PyObject *value, void *Py_UNUSED(ignored))
+                            foo_set(F_Object *obj, PyObject *value, void *Py_UNUSED(ignored))
                             {
                                 size_t v = PyLong_AsSize_t(value) + 1;
                                 obj->obj = PyLong_FromSize_t(v);
@@ -282,6 +269,7 @@ class TestDescrObject(object):
                              tp_clear="(inquiry)F_clear",
                              tp_new="F_new",
                              tp_init="(initproc)F_init",
+                             cmembers="PyObject* obj;",
                              ready_code='''
                                 if (PyType_Ready(&D_Type) < 0)
                                     return NULL;
@@ -289,11 +277,11 @@ class TestDescrObject(object):
                                 E_Type.tp_base = &PyType_Type;
                                 if (PyType_Ready(&E_Type) < 0)
                                     return NULL;
-                                    
-                                Py_SET_TYPE(&F_Type, &E_Type); 
+
+                                Py_SET_TYPE(&F_Type, &E_Type);
                                 F_Type.tp_base = &D_Type;''',
                             )
-        
+
         class baz(F):
             pass
         b = baz()
@@ -301,10 +289,6 @@ class TestDescrObject(object):
         assert b.foo == 42
 
 class TestDescr(CPyExtTestCase):
-
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestDescr, self).compile_module(name)
 
     test_PyDescr_NewClassMethod = CPyExtFunction(
         _reference_classmethod,
@@ -322,8 +306,8 @@ class TestDescr(CPyExtTestCase):
             if (PyObject_TypeCheck(method, (PyTypeObject *)methoddescr_type)) {
                 PyMethodDescrObject *descr = (PyMethodDescrObject *)method;
 #ifdef GRAALVM_PYTHON
-                PyTypeObject *d_type = PyDescrObject_GetType(method);
-                PyObject *class_method = PyDescr_NewClassMethod(d_type, PyMethodDescrObject_GetMethod(method));
+                PyTypeObject *d_type = GraalPyDescrObject_GetType(method);
+                PyObject *class_method = PyDescr_NewClassMethod(d_type, GraalPyMethodDescrObject_GetMethod(method));
 #else
                 PyTypeObject *d_type = descr->d_common.d_type;
                 PyObject *class_method = PyDescr_NewClassMethod(d_type, descr->d_method);
@@ -345,3 +329,18 @@ class TestDescr(CPyExtTestCase):
         callfunction="wrap_PyDescr_NewClassMethod",
         cmpfunc=unhandled_error_compare
     )
+
+
+def test_class_assignment_managed_subclass():
+    class IntermediateType(CPyExtType("BaseForAssignment")):
+        def __repr__(self):
+            return "intermediate"
+
+    class ChildType(IntermediateType):
+        def __repr__(self):
+            return "child"
+
+    o = ChildType()
+    assert repr(o) == "child"
+    o.__class__ = IntermediateType
+    assert repr(o) == "intermediate"

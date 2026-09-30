@@ -1,4 +1,4 @@
-/* Copyright (c) 2020, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2020, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -7,68 +7,93 @@ package com.oracle.graal.python.builtins.modules.json;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.builtins.modules.json.JSONScannerBuiltins.RECURSION_LIMIT;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyFloatObject__ob_fval;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readDoubleField;
 import static com.oracle.graal.python.nodes.PGuards.isDouble;
 import static com.oracle.graal.python.nodes.PGuards.isInteger;
 import static com.oracle.graal.python.nodes.PGuards.isPFloat;
 import static com.oracle.graal.python.nodes.PGuards.isPInt;
 import static com.oracle.graal.python.nodes.PGuards.isString;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CALL__;
-import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.isJavaString;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+import static com.oracle.truffle.api.CompilerDirectives.UNLIKELY_PROBABILITY;
 import static com.oracle.truffle.api.CompilerDirectives.castExact;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.json.JSONEncoderBuiltinsClinicProviders.MakeEncoderClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIterator;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorValue;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageLen;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.floats.FloatBuiltins;
 import com.oracle.graal.python.builtins.objects.floats.PFloat;
+import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.list.ListBuiltins.ListSortNode;
 import com.oracle.graal.python.builtins.objects.list.PList;
+import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.str.StringNodes;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyListCheckExactNode;
+import com.oracle.graal.python.lib.PyObjectGetIter;
+import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.lib.PyTupleCheckExactNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.SpecialMethodNames;
+import com.oracle.graal.python.nodes.builtins.TupleNodes;
 import com.oracle.graal.python.nodes.builtins.ListNodes.ConstructListNode;
 import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
+import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
+import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.runtime.formatting.FloatFormatter;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.graal.python.runtime.sequence.PSequence;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
+import com.oracle.graal.python.util.ArrayBuilder;
+import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
 import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
@@ -82,21 +107,82 @@ public final class JSONEncoderBuiltins extends PythonBuiltins {
     private static final TruffleString T_POSITIVE_INFINITY = tsLiteral("Infinity");
     private static final TruffleString T_NEGATIVE_INFINITY = tsLiteral("-Infinity");
     private static final TruffleString T_NAN = tsLiteral("NaN");
-    private static final TruffleString T_BRACES = tsLiteral("{}");
-    private static final TruffleString T_BRACKETS = tsLiteral("[]");
+    private static final TruffleString T_NEWLINE = tsLiteral("\n");
+
+    private static final byte STATE_INITIAL = 0;
+    private static final byte STATE_BUILTIN_LIST = 1;
+    private static final byte STATE_BUILTIN_DICT = 2;
+    private static final byte STATE_GENERIC_LIST = 3;
+    private static final byte STATE_GENERIC_DICT = 4;
+    private static final byte STATE_DEFAULT_FN = 5;
+
+    public static final TpSlots SLOTS = JSONEncoderBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return JSONEncoderBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___CALL__, minNumOfPositionalArgs = 1, parameterNames = {"$self", "obj", "_current_indent_level"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "make_encoder", minNumOfPositionalArgs = 10, //
+                    parameterNames = {"$cls", "markers", "default", "encoder", "indent", "key_separator", "item_separator", "sort_keys", "skipkeys", "allow_nan"})
+    @ArgumentClinic(name = "key_separator", conversion = ArgumentClinic.ClinicConversion.TString)
+    @ArgumentClinic(name = "item_separator", conversion = ArgumentClinic.ClinicConversion.TString)
+    @ArgumentClinic(name = "sort_keys", conversion = ArgumentClinic.ClinicConversion.Boolean)
+    @ArgumentClinic(name = "skipkeys", conversion = ArgumentClinic.ClinicConversion.Boolean)
+    @ArgumentClinic(name = "allow_nan", conversion = ArgumentClinic.ClinicConversion.Boolean)
+    @GenerateNodeFactory
+    public abstract static class MakeEncoder extends PythonClinicBuiltinNode {
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return MakeEncoderClinicProviderGen.INSTANCE;
+        }
+
+        @Specialization
+        @TruffleBoundary
+        PJSONEncoder doNew(Object cls, Object markers, Object defaultFn, Object encoder, Object indent, TruffleString keySeparator, TruffleString itemSeparator, boolean sortKeys,
+                        boolean skipKeys, boolean allowNan) {
+            if (markers != PNone.NONE && !(markers instanceof PDict)) {
+                throw PRaiseNode.raiseStatic(this, TypeError, ErrorMessages.MAKE_ENCODER_ARG_1_MUST_BE_DICT, markers);
+            }
+
+            PJSONEncoder.FastEncode fastEncode = PJSONEncoder.FastEncode.None;
+            Object encoderAsFun = encoder;
+            if (encoder instanceof PBuiltinMethod encoderMethod) {
+                encoderAsFun = encoderMethod.getFunction();
+            }
+            if (encoderAsFun instanceof PBuiltinFunction function) {
+                Class<? extends PythonBuiltinBaseNode> nodeClass = function.getNodeClass();
+                if (nodeClass != null) {
+                    if (JSONModuleBuiltins.EncodeBaseString.class.isAssignableFrom(nodeClass)) {
+                        fastEncode = PJSONEncoder.FastEncode.FastEncode;
+                    } else if (JSONModuleBuiltins.EncodeBaseStringAscii.class.isAssignableFrom(nodeClass)) {
+                        fastEncode = PJSONEncoder.FastEncode.FastEncodeAscii;
+                    }
+                }
+            }
+            TruffleString indentString = null;
+            if (indent != PNone.NONE) {
+                try {
+                    indentString = CastToTruffleStringNode.executeUncached(indent);
+                } catch (CannotCastException e) {
+                    throw PRaiseNode.raiseStatic(this, TypeError, ErrorMessages.INDENT_MUST_BE_STR_OR_NONE_NOT_P, indent);
+                }
+            }
+            return PFactory.createJSONEncoder(cls, TypeNodes.GetInstanceShape.executeUncached(cls),
+                            markers, defaultFn, encoder, indentString, keySeparator, itemSeparator, sortKeys, skipKeys, allowNan, fastEncode);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_call, isComplex = true)
+    @SlotSignature(name = "_iterencode", minNumOfPositionalArgs = 1, parameterNames = {"$self", "obj", "_current_indent_level"})
     @ArgumentClinic(name = "_current_indent_level", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "0", useDefaultForNone = true)
     @GenerateNodeFactory
     public abstract static class CallEncoderNode extends PythonTernaryClinicBuiltinNode {
         @Child private LookupAndCallUnaryNode callGetItems = LookupAndCallUnaryNode.create(SpecialMethodNames.T_ITEMS);
-        @Child private LookupAndCallUnaryNode callGetDictIter = LookupAndCallUnaryNode.create(SpecialMethodSlot.Iter);
-        @Child private LookupAndCallUnaryNode callGetListIter = LookupAndCallUnaryNode.create(SpecialMethodSlot.Iter);
+        @Child private PyObjectGetIter callGetDictIter = PyObjectGetIter.create();
+        @Child private PyObjectGetIter callGetListIter = PyObjectGetIter.create();
         @Child private ListSortNode sortList = ListSortNode.create();
 
         @Override
@@ -105,247 +191,444 @@ public final class JSONEncoderBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        protected PTuple call(PJSONEncoder self, Object obj, @SuppressWarnings("unused") int indent,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createTuple(new Object[]{jsonEncode(self, obj)});
-        }
-
-        @TruffleBoundary
-        private TruffleString jsonEncode(PJSONEncoder encoder, Object obj) {
-            TruffleStringBuilderUTF32 builder = TruffleStringBuilder.createUTF32();
-            appendListObj(encoder, builder, obj);
-            return TruffleStringBuilder.ToStringNode.getUncached().execute(builder);
-        }
-
-        private void appendConst(TruffleStringBuilderUTF32 builder, Object obj) {
-            if (obj == PNone.NONE) {
-                builder.appendStringUncached(T_NULL);
-            } else if (obj == Boolean.TRUE) {
-                builder.appendStringUncached(T_TRUE);
-            } else {
-                assert obj == Boolean.FALSE;
-                builder.appendStringUncached(T_FALSE);
-            }
-        }
-
-        private void appendFloat(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, double obj) {
-            if (!Double.isFinite(obj)) {
-                if (!encoder.allowNan) {
-                    throw PRaiseNode.raiseUncached(this, ValueError, ErrorMessages.OUT_OF_RANGE_FLOAT_NOT_JSON_COMPLIANT);
-                }
-                if (obj > 0) {
-                    builder.appendStringUncached(T_POSITIVE_INFINITY);
-                } else if (obj < 0) {
-                    builder.appendStringUncached(T_NEGATIVE_INFINITY);
-                } else {
-                    builder.appendStringUncached(T_NAN);
-                }
-            } else {
-                builder.appendStringUncached(formatDouble(obj));
-            }
-        }
-
-        private TruffleString formatDouble(double obj) {
-            FloatFormatter f = new FloatFormatter(FloatBuiltins.StrNode.spec, this);
-            f.setMinFracDigits(1);
-            return FloatBuiltins.StrNode.doFormat(obj, f);
-        }
-
-        private void appendString(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, TruffleString obj) {
-            switch (encoder.fastEncode) {
-                case FastEncode:
-                    JSONUtils.appendStringUncached(obj, builder, false);
-                    break;
-                case FastEncodeAscii:
-                    JSONUtils.appendStringUncached(obj, builder, true);
-                    break;
-                case None:
-                    Object result = CallUnaryMethodNode.getUncached().executeObject(encoder.encoder, obj);
-                    if (!isString(result)) {
-                        throw PRaiseNode.raiseUncached(this, TypeError, ErrorMessages.ENCODER_MUST_RETURN_STR, result);
+        PTuple call(VirtualFrame frame, PJSONEncoder self, Object obj, int indent,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached InlinedBranchProfile genericListProfile,
+                        @Cached InlinedBranchProfile genericDictProfile,
+                        @Cached InlinedBranchProfile errorProfile,
+                        @Cached GetClassNode getClassNode,
+                        @Cached IsSubtypeNode isSubtypeNode,
+                        @Cached PyTupleCheckNode pyTupleCheckNode,
+                        @Cached PyTupleCheckExactNode pyTupleCheckExactNode,
+                        @Cached PyListCheckExactNode pyListCheckExactNode,
+                        @Cached ConstructListNode constructListNode,
+                        @Cached PyIterNextNode pyIterNextNode,
+                        @Cached CallUnaryMethodNode callDefaultFn,
+                        @Cached SequenceStorageNodes.GetItemScalarNode getItemScalarNode,
+                        @Cached SequenceStorageNodes.GetItemScalarNode getItemScalarCustomNode,
+                        @Cached TupleNodes.GetTupleStorage getTupleStorage,
+                        @Cached HashingStorageGetIterator hashingStorageGetIterator,
+                        @Cached HashingStorageIteratorNext hashingStorageIteratorNext,
+                        @Cached HashingStorageIteratorKey hashingStorageIteratorKey,
+                        @Cached HashingStorageIteratorValue hashingStorageIteratorValue,
+                        @Cached AppendSimpleObjectNode appendSimpleObjectNode,
+                        @Cached TruffleStringBuilder.AppendCodePointNode appendCodePointNode,
+                        @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
+                        @Cached TruffleStringBuilder.ToStringNode toStringNode) {
+            TruffleStringBuilderUTF32 builder = PythonUtils.createStringBuilder();
+            ArrayBuilder<StackEntry> stack = new ArrayBuilder<>(8);
+            Object key = null;
+            Object value = obj;
+            byte state = STATE_INITIAL;
+            boolean first = true;
+            Object parent = null;
+            SequenceStorage builtinListStorage = null;
+            HashingStorage builtinDictStorage = null;
+            HashingStorageIterator builtinDictIterator = null;
+            Object genericIterator = null;
+            boolean checkCircles = self.markers != PNone.NONE;
+            PJSONEncoder.FastEncode fastEncode = self.fastEncode;
+            boolean prettyPrint = self.indent != null;
+            int initialIndentLevel = Math.max(indent, 0);
+            outer: while (true) {
+                boolean skip = false;
+                if (state == STATE_BUILTIN_LIST || state == STATE_GENERIC_LIST) {
+                    if (!first) {
+                        appendStringNode.execute(builder, self.itemSeparator);
                     }
-                    builder.appendStringUncached(CastToTruffleStringNode.executeUncached(result));
-                    break;
-                default:
-                    assert false;
-                    break;
+                    if (prettyPrint) {
+                        appendNewlineIndent(builder, self.indent, initialIndentLevel + stack.size(), appendStringNode);
+                    }
+                }
+                if (state == STATE_BUILTIN_DICT || state == STATE_GENERIC_DICT) {
+                    boolean isString = isString(key);
+                    if (isString || isSimpleObj(key, inliningTarget, getClassNode, isSubtypeNode)) {
+                        if (!first) {
+                            appendStringNode.execute(builder, self.itemSeparator);
+                        }
+                        if (prettyPrint) {
+                            appendNewlineIndent(builder, self.indent, initialIndentLevel + stack.size(), appendStringNode);
+                        }
+                        if (!isString) {
+                            appendCodePointNode.execute(builder, '"');
+                        }
+                        appendSimpleObjectNode.execute(frame, self, fastEncode, builder, key);
+                        if (!isString) {
+                            appendCodePointNode.execute(builder, '"');
+                        }
+                    } else {
+                        if (self.skipKeys) {
+                            skip = true;
+                        } else {
+                            errorProfile.enter(inliningTarget);
+                            throw PRaiseNode.raiseStatic(this, TypeError, ErrorMessages.KEYS_MUST_BE_STR_INT___NOT_P, key);
+                        }
+                    }
+                    if (!skip) {
+                        appendStringNode.execute(builder, self.keySeparator);
+                    }
+                }
+                if (!skip) {
+                    if (appendSimpleObjectNode.execute(frame, self, fastEncode, builder, value)) {
+                        first = false;
+                        // done
+                    } else {
+                        // startRecursion(self, value);
+                        if (checkCircles) {
+                            for (int i = 0; i < stack.size(); i++) {
+                                if (stack.get(i).obj == value) {
+                                    errorProfile.enter(inliningTarget);
+                                    throw PRaiseNode.raiseStatic(this, ValueError, ErrorMessages.CIRCULAR_REFERENCE_DETECTED);
+                                }
+                            }
+                        }
+                        parent = value;
+                        final Object stackIterator;
+                        final Object stackStorage;
+                        if (value instanceof PList list) {
+                            appendCodePointNode.execute(builder, '[');
+                            first = true;
+                            if (pyListCheckExactNode.execute(inliningTarget, list)) {
+                                state = STATE_BUILTIN_LIST;
+                                builtinListStorage = list.getSequenceStorage();
+                                stackStorage = builtinListStorage;
+                                stackIterator = null;
+                            } else {
+                                genericListProfile.enter(inliningTarget);
+                                state = STATE_GENERIC_LIST;
+                                genericIterator = callGetListIter.executeCached(frame, list);
+                                stackStorage = null;
+                                stackIterator = genericIterator;
+                            }
+                        } else if (pyTupleCheckNode.execute(inliningTarget, value)) {
+                            appendCodePointNode.execute(builder, '[');
+                            first = true;
+                            if (pyTupleCheckExactNode.execute(inliningTarget, value)) {
+                                state = STATE_BUILTIN_LIST;
+                                builtinListStorage = getTupleStorage.execute(inliningTarget, value);
+                                stackStorage = builtinListStorage;
+                                stackIterator = null;
+                            } else {
+                                genericListProfile.enter(inliningTarget);
+                                state = STATE_GENERIC_LIST;
+                                genericIterator = callGetListIter.executeCached(frame, value);
+                                stackStorage = null;
+                                stackIterator = genericIterator;
+                            }
+                        } else if (value instanceof PDict dict) {
+                            appendCodePointNode.execute(builder, '{');
+                            first = true;
+                            if (!self.sortKeys && PGuards.isBuiltinDict(dict)) {
+                                state = STATE_BUILTIN_DICT;
+                                builtinDictStorage = dict.getDictStorage();
+                                builtinDictIterator = hashingStorageGetIterator.execute(inliningTarget, builtinDictStorage);
+                                stackStorage = builtinDictStorage;
+                                stackIterator = builtinDictIterator;
+                            } else {
+                                genericDictProfile.enter(inliningTarget);
+                                state = STATE_GENERIC_DICT;
+                                PList items = constructListNode.execute(frame, callGetItems.executeObject(frame, dict));
+                                if (self.sortKeys) {
+                                    sortList.execute(frame, items);
+                                }
+                                genericIterator = callGetDictIter.executeCached(frame, items);
+                                stackStorage = null;
+                                stackIterator = genericIterator;
+                            }
+                        } else {
+                            state = STATE_DEFAULT_FN;
+                            stackStorage = null;
+                            stackIterator = null;
+                        }
+                        if (stack.size() > RECURSION_LIMIT) {
+                            errorProfile.enter(inliningTarget);
+                            throw JSONScannerBuiltins.recursionError(this, language);
+                        }
+                        stack.add(new StackEntry(state, parent, stackStorage, stackIterator, 0));
+                    }
+                }
+                while (true) {
+                    switch (state) {
+                        case STATE_INITIAL -> {
+                            break outer;
+                        }
+                        case STATE_BUILTIN_LIST -> {
+                            if (stack.peek().index < builtinListStorage.length()) {
+                                value = getItemScalarNode.execute(inliningTarget, builtinListStorage, stack.peek().index++);
+                                continue outer;
+                            }
+                            if (prettyPrint && !first) {
+                                appendNewlineIndent(builder, self.indent, initialIndentLevel + stack.size() - 1, appendStringNode);
+                            }
+                            appendCodePointNode.execute(builder, ']');
+                        }
+                        case STATE_BUILTIN_DICT -> {
+                            if (hashingStorageIteratorNext.execute(inliningTarget, builtinDictStorage, builtinDictIterator)) {
+                                key = hashingStorageIteratorKey.execute(inliningTarget, builtinDictStorage, builtinDictIterator);
+                                value = hashingStorageIteratorValue.execute(inliningTarget, builtinDictStorage, builtinDictIterator);
+                                continue outer;
+                            } else {
+                                if (prettyPrint && !first) {
+                                    appendNewlineIndent(builder, self.indent, initialIndentLevel + stack.size() - 1, appendStringNode);
+                                }
+                                appendCodePointNode.execute(builder, '}');
+                            }
+                        }
+                        case STATE_GENERIC_LIST, STATE_GENERIC_DICT -> {
+                            try {
+                                genericListProfile.enter(inliningTarget);
+                                Object item = pyIterNextNode.execute(frame, inliningTarget, genericIterator);
+                                if (state == STATE_GENERIC_DICT) {
+                                    genericDictProfile.enter(inliningTarget);
+                                    if (!pyTupleCheckNode.execute(inliningTarget, item)) {
+                                        errorProfile.enter(inliningTarget);
+                                        throw PRaiseNode.raiseStatic(this, ValueError, ErrorMessages.ITEMS_MUST_RETURN_2_TUPLES);
+                                    }
+                                    SequenceStorage sequenceStorage = getTupleStorage.execute(inliningTarget, item);
+                                    if (sequenceStorage.length() != 2) {
+                                        errorProfile.enter(inliningTarget);
+                                        throw PRaiseNode.raiseStatic(this, ValueError, ErrorMessages.ITEMS_MUST_RETURN_2_TUPLES);
+                                    }
+                                    key = getItemScalarCustomNode.execute(inliningTarget, sequenceStorage, 0);
+                                    value = getItemScalarCustomNode.execute(inliningTarget, sequenceStorage, 1);
+                                } else {
+                                    value = item;
+                                }
+                            } catch (IteratorExhausted e) {
+                                if (prettyPrint && !first) {
+                                    appendNewlineIndent(builder, self.indent, initialIndentLevel + stack.size() - 1, appendStringNode);
+                                }
+                                appendCodePointNode.execute(builder, state == STATE_GENERIC_LIST ? ']' : '}');
+                                break;
+                            }
+                            continue outer;
+                        }
+                        case STATE_DEFAULT_FN -> {
+                            if (stack.peek().index == 0) {
+                                value = callDefaultFn.executeObject(self.defaultFn, parent);
+                                stack.peek().index = 1;
+                                continue outer;
+                            }
+                        }
+                    }
+                    first = false;
+                    // current list or dict is exhausted, pop parent from stack
+                    // endRecursion(self, parent);
+                    stack.pop();
+                    if (stack.isEmpty()) {
+                        break outer;
+                    }
+                    StackEntry top = stack.peek();
+                    state = top.state;
+                    parent = top.obj;
+                    switch (state) {
+                        case STATE_BUILTIN_LIST -> {
+                            builtinListStorage = (SequenceStorage) top.storage;
+                        }
+                        case STATE_BUILTIN_DICT -> {
+                            builtinDictStorage = (HashingStorage) top.storage;
+                            builtinDictIterator = (HashingStorageIterator) top.iterator;
+                        }
+                        case STATE_GENERIC_LIST, STATE_GENERIC_DICT -> {
+                            genericIterator = top.iterator;
+                        }
+                        case STATE_DEFAULT_FN -> {
+                        }
+                    }
+                }
+            }
+            return PFactory.createTuple(language, new Object[]{toStringNode.execute(builder)});
+        }
+
+        private static void appendNewlineIndent(TruffleStringBuilderUTF32 builder, TruffleString indent, int level, TruffleStringBuilder.AppendStringNode appendStringNode) {
+            appendStringNode.execute(builder, T_NEWLINE);
+            for (int i = 0; i < level; i++) {
+                appendStringNode.execute(builder, indent);
             }
         }
 
-        private static boolean isSimpleObj(Object obj) {
-            return obj == PNone.NONE || obj == Boolean.TRUE || obj == Boolean.FALSE || isString(obj) || isInteger(obj) || isPInt(obj) || obj instanceof Float || isDouble(obj) || isPFloat(obj);
+        private static final class StackEntry {
+            private final byte state;
+            private final Object obj;
+            private final Object storage;
+            private final Object iterator;
+            private int index;
+
+            private StackEntry(byte state, Object obj, Object storage, Object iterator, int index) {
+                this.state = state;
+                this.obj = obj;
+                this.storage = storage;
+                this.iterator = iterator;
+                this.index = index;
+            }
         }
 
-        private boolean appendSimpleObj(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, Object obj) {
-            if (obj == PNone.NONE || obj == Boolean.TRUE || obj == Boolean.FALSE) {
-                appendConst(builder, obj);
-            } else if (isJavaString(obj)) {
-                appendString(encoder, builder, toTruffleStringUncached((String) obj));
-            } else if (obj instanceof TruffleString) {
-                appendString(encoder, builder, (TruffleString) obj);
-            } else if (obj instanceof PString) {
-                appendString(encoder, builder, StringNodes.StringMaterializeNode.executeUncached((PString) obj));
-            } else if (obj instanceof Integer) {
-                builder.appendIntNumberUncached((int) obj);
-            } else if (obj instanceof Long) {
-                builder.appendLongNumberUncached((long) obj);
-            } else if (obj instanceof PInt) {
-                builder.appendStringUncached(TruffleString.FromJavaStringNode.getUncached().execute(castExact(obj, PInt.class).toString(), TS_ENCODING));
-            } else if (obj instanceof Float) {
-                appendFloat(encoder, builder, (float) obj);
-            } else if (obj instanceof Double) {
-                appendFloat(encoder, builder, (double) obj);
-            } else if (obj instanceof PFloat) {
-                appendFloat(encoder, builder, ((PFloat) obj).asDouble());
+        private static boolean isSimpleObj(Object obj,
+                        Node inliningTarget,
+                        GetClassNode getClassNode,
+                        IsSubtypeNode isSubtypeNode) {
+            if (obj == PNone.NONE || obj == Boolean.TRUE || obj == Boolean.FALSE || isString(obj) || isInteger(obj) || isPInt(obj) || obj instanceof Float || isDouble(obj) || isPFloat(obj)) {
+                return true;
+            } else if (CompilerDirectives.injectBranchProbability(UNLIKELY_PROBABILITY, obj instanceof PythonAbstractNativeObject)) {
+                return isNativeStringOrFloat(inliningTarget, getClassNode, isSubtypeNode, (PythonAbstractNativeObject) obj);
             } else {
                 return false;
             }
-            return true;
         }
 
-        private void appendListObj(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, Object obj) {
-            if (appendSimpleObj(encoder, builder, obj)) {
-                // done
-            } else if (obj instanceof PList || obj instanceof PTuple) {
-                appendList(encoder, builder, (PSequence) obj);
-            } else if (obj instanceof PDict) {
-                appendDict(encoder, builder, (PDict) obj);
-            } else {
-                startRecursion(encoder, obj);
-                Object newObj = CallUnaryMethodNode.getUncached().executeObject(encoder.defaultFn, obj);
-                appendListObj(encoder, builder, newObj);
-                endRecursion(encoder, obj);
-            }
+        @InliningCutoff
+        private static boolean isNativeStringOrFloat(Node inliningTarget, GetClassNode getClassNode, IsSubtypeNode isSubtypeNode, PythonAbstractNativeObject nativeObj) {
+            Object pyClass = getClassNode.execute(inliningTarget, nativeObj);
+            return isSubtypeNode.execute(pyClass, PythonBuiltinClassType.PString) || isSubtypeNode.execute(pyClass, PythonBuiltinClassType.PFloat);
         }
 
-        private static void endRecursion(PJSONEncoder encoder, Object obj) {
-            if (encoder.markers != PNone.NONE) {
-                encoder.removeCircular(obj);
-            }
-        }
+        @GenerateInline(false)
+        abstract static class AppendSimpleObjectNode extends Node {
 
-        private void startRecursion(PJSONEncoder encoder, Object obj) {
-            if (encoder.markers != PNone.NONE) {
-                if (!encoder.tryAddCircular(obj)) {
-                    throw PRaiseNode.raiseUncached(this, ValueError, ErrorMessages.CIRCULAR_REFERENCE_DETECTED);
+            abstract boolean execute(VirtualFrame frame, PJSONEncoder encoder, PJSONEncoder.FastEncode fastEncode, TruffleStringBuilderUTF32 builder, Object obj);
+
+            @Specialization
+            static boolean appendSimpleObj(VirtualFrame frame, PJSONEncoder encoder, PJSONEncoder.FastEncode fastEncode, TruffleStringBuilderUTF32 builder, Object obj,
+                            @Bind Node inliningTarget,
+                            @Cached InlinedConditionProfile intProfile,
+                            @Cached InlinedConditionProfile longProfile,
+                            @Cached InlinedConditionProfile doubleProfile,
+                            @Cached InlinedConditionProfile bigIntProfile,
+                            @Cached InlinedConditionProfile numberStringProfile,
+                            @Cached InlinedConditionProfile fastEncodeProfile,
+                            @Cached InlinedBranchProfile customStringEncoderProfile,
+                            @Cached InlinedBranchProfile errorProfile,
+                            @Cached CallUnaryMethodNode customToStringCall,
+                            @Cached GetClassNode getClassNode,
+                            @Cached IsSubtypeNode isSubtypeNode,
+                            @Cached CastToTruffleStringNode.ReadNativeStringNode readNativeStringNode,
+                            @Cached CastToTruffleStringNode castToTruffleStringNode,
+                            @Cached StringNodes.StringMaterializeNode stringMaterializeNode,
+                            @Cached TruffleString.ByteIndexOfCodePointSetNode byteIndexOfCodePointSetNode1,
+                            @Cached TruffleString.ByteIndexOfCodePointSetNode byteIndexOfCodePointSetNode2,
+                            @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtNode,
+                            @Cached TruffleStringBuilder.AppendCodePointNode appendCodePointNode,
+                            @Cached TruffleStringBuilder.AppendIntNumberNode appendIntNumberNode,
+                            @Cached TruffleStringBuilder.AppendLongNumberNode appendLongNumberNode,
+                            @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
+                            @Cached TruffleStringBuilder.AppendSubstringByteIndexNode appendSubstringNode,
+                            @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                            @Cached TruffleString.FromByteArrayNode fromByteArrayNode) {
+                final TruffleString constString = constToString(obj);
+                if (constString != null) {
+                    appendStringNode.execute(builder, constString);
+                    return true;
                 }
-            }
-        }
-
-        private void appendDict(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, PDict dict) {
-            HashingStorage storage = dict.getDictStorage();
-
-            if (HashingStorageLen.executeUncached(storage) == 0) {
-                builder.appendStringUncached(T_BRACES);
-            } else {
-                startRecursion(encoder, dict);
-                builder.appendCodePointUncached('{');
-
-                if (!encoder.sortKeys && PGuards.isBuiltinDict(dict)) {
-                    HashingStorageIterator it = HashingStorageGetIterator.executeUncached(storage);
-                    boolean first = true;
-                    while (HashingStorageIteratorNext.executeUncached(storage, it)) {
-                        Object key = HashingStorageIteratorKey.executeUncached(storage, it);
-                        Object value = HashingStorageIteratorValue.executeUncached(storage, it);
-                        first = appendDictEntry(encoder, builder, first, key, value);
-                    }
+                final TruffleString string;
+                if (obj instanceof TruffleString tString) {
+                    string = tString;
+                } else if (obj instanceof PString pString) {
+                    string = stringMaterializeNode.execute(inliningTarget, pString);
+                } else if (obj instanceof PythonAbstractNativeObject nativeObj && isSubtypeNode.execute(getClassNode.execute(inliningTarget, nativeObj), PythonBuiltinClassType.PString)) {
+                    string = readNativeStringNode.execute(nativeObj.getPtr());
                 } else {
-                    appendDictSlowPath(encoder, builder, dict);
+                    string = null;
                 }
 
-                builder.appendCodePointUncached('}');
-                endRecursion(encoder, dict);
-            }
-        }
-
-        private void appendDictSlowPath(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, com.oracle.graal.python.builtins.objects.dict.PDict dict) {
-            PList items = ConstructListNode.getUncached().execute(null, callGetItems.executeObject(null, dict));
-            if (encoder.sortKeys) {
-                sortList.execute(null, items);
-            }
-            Object iter = callGetDictIter.executeObject(null, items);
-            boolean first = true;
-            while (true) {
-                Object item;
-                try {
-                    item = GetNextNode.getUncached().execute(null, iter);
-                } catch (PException e) {
-                    e.expectStopIteration(null, IsBuiltinObjectProfile.getUncached());
-                    break;
-                }
-                if (!(item instanceof PTuple) || ((PTuple) item).getSequenceStorage().length() != 2) {
-                    throw PRaiseNode.raiseUncached(this, ValueError, ErrorMessages.ITEMS_MUST_RETURN_2_TUPLES);
-                }
-                SequenceStorage sequenceStorage = ((PTuple) item).getSequenceStorage();
-                Object key = sequenceStorage.getItemNormalized(0);
-                Object value = sequenceStorage.getItemNormalized(1);
-                first = appendDictEntry(encoder, builder, first, key, value);
-            }
-        }
-
-        private boolean appendDictEntry(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, boolean first, Object key, Object value) {
-            if (!first) {
-                builder.appendStringUncached(encoder.itemSeparator);
-            }
-            if (isString(key)) {
-                appendSimpleObj(encoder, builder, key);
-            } else {
-                if (!isSimpleObj(key)) {
-                    if (encoder.skipKeys) {
-                        return true;
-                    }
-                    throw PRaiseNode.raiseUncached(this, TypeError, ErrorMessages.KEYS_MUST_BE_STR_INT___NOT_P, key);
-                }
-                builder.appendCodePointUncached('"');
-                appendSimpleObj(encoder, builder, key);
-                builder.appendCodePointUncached('"');
-            }
-            builder.appendStringUncached(encoder.keySeparator);
-            appendListObj(encoder, builder, value);
-            return false;
-        }
-
-        private void appendList(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, PSequence list) {
-            SequenceStorage storage = list.getSequenceStorage();
-
-            if (storage.length() == 0) {
-                builder.appendStringUncached(T_BRACKETS);
-            } else {
-                startRecursion(encoder, list);
-                builder.appendCodePointUncached('[');
-
-                if (PyTupleCheckExactNode.executeUncached(list) || PyListCheckExactNode.executeUncached(list)) {
-                    for (int i = 0; i < storage.length(); i++) {
-                        if (i > 0) {
-                            builder.appendStringUncached(encoder.itemSeparator);
+                if (string != null) {
+                    if (fastEncode == PJSONEncoder.FastEncode.None) {
+                        customStringEncoderProfile.enter(inliningTarget);
+                        Object result = customToStringCall.executeObject(frame, encoder.encoder, string);
+                        if (!isString(result)) {
+                            errorProfile.enter(inliningTarget);
+                            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.ENCODER_MUST_RETURN_STR, result);
                         }
-                        appendListObj(encoder, builder, storage.getItemNormalized(i));
+                        appendStringNode.execute(builder, castToTruffleStringNode.execute(inliningTarget, result));
+                    } else {
+                        assert fastEncode == PJSONEncoder.FastEncode.FastEncode || fastEncode == PJSONEncoder.FastEncode.FastEncodeAscii;
+                        JSONUtils.appendString(string, builder, fastEncodeProfile.profile(inliningTarget, fastEncode == PJSONEncoder.FastEncode.FastEncodeAscii),
+                                        byteIndexOfCodePointSetNode1,
+                                        byteIndexOfCodePointSetNode2,
+                                        codePointAtNode,
+                                        appendCodePointNode,
+                                        appendStringNode,
+                                        appendSubstringNode,
+                                        fromByteArrayNode);
+                    }
+                    return true;
+                }
+                if (intProfile.profile(inliningTarget, obj instanceof Integer)) {
+                    appendIntNumberNode.execute(builder, (int) obj);
+                    return true;
+                }
+                if (longProfile.profile(inliningTarget, obj instanceof Long)) {
+                    appendLongNumberNode.execute(builder, (long) obj);
+                    return true;
+                }
+                final double doubleValue;
+                final boolean isDouble;
+                if (obj instanceof Float) {
+                    doubleValue = (float) obj;
+                    isDouble = true;
+                } else if (obj instanceof Double) {
+                    doubleValue = (double) obj;
+                    isDouble = true;
+                } else if (obj instanceof PFloat) {
+                    doubleValue = ((PFloat) obj).asDouble();
+                    isDouble = true;
+                } else if (obj instanceof PythonAbstractNativeObject nativeObj && isSubtypeNode.execute(getClassNode.execute(inliningTarget, nativeObj), PythonBuiltinClassType.PFloat)) {
+                    doubleValue = readDoubleField(nativeObj.getPtr(), PyFloatObject__ob_fval);
+                    isDouble = true;
+                } else {
+                    doubleValue = 0;
+                    isDouble = false;
+                }
+                final TruffleString numberString;
+                if (doubleProfile.profile(inliningTarget, isDouble)) {
+                    numberString = floatToString(inliningTarget, encoder, doubleValue, errorProfile);
+                } else if (bigIntProfile.profile(inliningTarget, obj instanceof PInt)) {
+                    numberString = fromJavaStringNode.execute(castExact(obj, PInt.class).toString(), TS_ENCODING);
+                } else {
+                    numberString = null;
+                }
+                if (numberStringProfile.profile(inliningTarget, numberString != null)) {
+                    appendStringNode.execute(builder, numberString);
+                    return true;
+                }
+                return false;
+            }
+
+            private static TruffleString constToString(Object obj) {
+                if (obj == PNone.NONE) {
+                    return T_NULL;
+                } else if (obj == Boolean.TRUE) {
+                    return T_TRUE;
+                } else if (obj == Boolean.FALSE) {
+                    return T_FALSE;
+                } else {
+                    return null;
+                }
+            }
+
+            private static TruffleString floatToString(Node inliningTarget, PJSONEncoder encoder, double obj, InlinedBranchProfile errorProfile) {
+                if (!Double.isFinite(obj)) {
+                    if (!encoder.allowNan) {
+                        errorProfile.enter(inliningTarget);
+                        throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.OUT_OF_RANGE_FLOAT_NOT_JSON_COMPLIANT, PyObjectReprAsTruffleStringNode.executeUncached(obj));
+                    }
+                    if (obj > 0) {
+                        return T_POSITIVE_INFINITY;
+                    } else if (obj < 0) {
+                        return T_NEGATIVE_INFINITY;
+                    } else {
+                        return T_NAN;
                     }
                 } else {
-                    appendListSlowPath(encoder, builder, list);
+                    return formatDouble(inliningTarget, obj);
                 }
-
-                builder.appendCodePointUncached(']');
-                endRecursion(encoder, list);
             }
-        }
 
-        private void appendListSlowPath(PJSONEncoder encoder, TruffleStringBuilderUTF32 builder, PSequence list) {
-            Object iter = callGetListIter.executeObject(null, list);
-            boolean first = true;
-            while (true) {
-                Object item;
-                try {
-                    item = GetNextNode.getUncached().execute(null, iter);
-                } catch (PException e) {
-                    e.expectStopIteration(null, IsBuiltinObjectProfile.getUncached());
-                    break;
-                }
-                if (!first) {
-                    builder.appendStringUncached(encoder.itemSeparator);
-                }
-                first = false;
-                appendListObj(encoder, builder, item);
+            @TruffleBoundary
+            private static TruffleString formatDouble(Node inliningTarget, double obj) {
+                FloatFormatter f = new FloatFormatter(FloatBuiltins.StrNode.spec, inliningTarget);
+                f.setMinFracDigits(1);
+                return FloatBuiltins.StrNode.doFormat(obj, f);
             }
         }
     }

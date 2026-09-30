@@ -1,4 +1,2 @@
-*graalpython.lib-python.3.test.test__locale._LocaleTests.test_float_parsing
-*graalpython.lib-python.3.test.test__locale._LocaleTests.test_lc_numeric_basic
-*graalpython.lib-python.3.test.test__locale._LocaleTests.test_lc_numeric_localeconv
-*graalpython.lib-python.3.test.test__locale._LocaleTests.test_lc_numeric_nl_langinfo
+test.test__locale._LocaleTests.test_float_parsing @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test__locale._LocaleTests.test_lc_numeric_localeconv @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github

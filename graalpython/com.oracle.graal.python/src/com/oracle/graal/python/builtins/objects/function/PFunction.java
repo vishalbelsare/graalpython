@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,30 +25,42 @@
  */
 package com.oracle.graal.python.builtins.objects.function;
 
+import java.util.ArrayList;
+
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cell.PCell;
-import com.oracle.graal.python.builtins.objects.code.CodeNodes.GetCodeCallTargetNode;
 import com.oracle.graal.python.builtins.objects.code.PCode;
+import com.oracle.graal.python.builtins.objects.common.HashingStorage;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIterator;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorValue;
+import com.oracle.graal.python.builtins.objects.common.KeywordsStorage;
+import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
+import com.oracle.graal.python.builtins.objects.str.PString;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnit;
+import com.oracle.graal.python.lib.PyUnicodeCheckNode;
 import com.oracle.graal.python.nodes.PRootNode;
-import com.oracle.graal.python.nodes.builtins.FunctionNodes.GetCallTargetNode;
 import com.oracle.graal.python.runtime.GilNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
-import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
-import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -57,32 +69,31 @@ import com.oracle.truffle.api.strings.TruffleString;
 public final class PFunction extends PythonObject {
     private TruffleString name;
     private TruffleString qualname;
-    private boolean forceSplitDirectCalls;
     private final Assumption codeStableAssumption;
-    private final Assumption defaultsStableAssumption;
     private final PythonObject globals;
     @CompilationFinal private boolean isBuiltin;
     @CompilationFinal(dimensions = 1) private final PCell[] closure;
     @CompilationFinal private PCode finalCode;
     private PCode code;
+    private RootCallTarget callTarget;
     @CompilationFinal(dimensions = 1) private Object[] finalDefaultValues;
     private Object[] defaultValues;
     @CompilationFinal(dimensions = 1) private PKeyword[] finalKwDefaultValues;
     private PKeyword[] kwDefaultValues;
+    private PDict kwDefaultDict;
+    private Object doc;
 
     public PFunction(PythonLanguage lang, TruffleString name, TruffleString qualname, PCode code, PythonObject globals, PCell[] closure) {
         this(lang, name, qualname, code, globals, PythonUtils.EMPTY_OBJECT_ARRAY, PKeyword.EMPTY_KEYWORDS, closure);
     }
 
     public PFunction(PythonLanguage lang, TruffleString name, TruffleString qualname, PCode code, PythonObject globals, Object[] defaultValues,
-                    PKeyword[] kwDefaultValues,
-                    PCell[] closure) {
-        this(lang, name, qualname, code, globals, defaultValues, kwDefaultValues, closure, Truffle.getRuntime().createAssumption(), Truffle.getRuntime().createAssumption());
+                    PKeyword[] kwDefaultValues, PCell[] closure) {
+        this(lang, name, qualname, code, globals, defaultValues, kwDefaultValues, closure, Truffle.getRuntime().createAssumption());
     }
 
     public PFunction(PythonLanguage lang, TruffleString name, TruffleString qualname, PCode code, PythonObject globals, Object[] defaultValues,
-                    PKeyword[] kwDefaultValues,
-                    PCell[] closure, Assumption codeStableAssumption, Assumption defaultsStableAssumption) {
+                    PKeyword[] kwDefaultValues, PCell[] closure, Assumption codeStableAssumption) {
         super(PythonBuiltinClassType.PFunction, PythonBuiltinClassType.PFunction.getInstanceShape(lang));
         this.name = name;
         this.qualname = qualname;
@@ -93,16 +104,10 @@ public final class PFunction extends PythonObject {
         this.kwDefaultValues = this.finalKwDefaultValues = kwDefaultValues == null ? PKeyword.EMPTY_KEYWORDS : kwDefaultValues;
         this.closure = closure;
         this.codeStableAssumption = codeStableAssumption;
-        this.defaultsStableAssumption = defaultsStableAssumption;
-        this.forceSplitDirectCalls = false;
     }
 
     public Assumption getCodeStableAssumption() {
         return codeStableAssumption;
-    }
-
-    public Assumption getDefaultsStableAssumption() {
-        return defaultsStableAssumption;
     }
 
     public PythonObject getGlobals() {
@@ -137,12 +142,25 @@ public final class PFunction extends PythonObject {
         isBuiltin = builtin;
     }
 
-    public void setForceSplitDirectCalls(boolean forceSplitDirectCalls) {
-        this.forceSplitDirectCalls = forceSplitDirectCalls;
+    public Object getDoc() {
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.SLOWPATH_PROBABILITY, doc == null)) {
+            extractDoc();
+        }
+        return doc;
     }
 
-    public boolean forceSplitDirectCalls() {
-        return forceSplitDirectCalls;
+    public void setDoc(Object doc) {
+        this.doc = doc;
+    }
+
+    @TruffleBoundary
+    private void extractDoc() {
+        BytecodeDSLCodeUnit co = getCode().getCodeUnit();
+        if (co != null && co.constants.length > 0 && PyUnicodeCheckNode.executeUncached(co.constants[0])) {
+            doc = co.constants[0];
+        } else {
+            doc = PNone.NONE;
+        }
     }
 
     @Override
@@ -160,17 +178,27 @@ public final class PFunction extends PythonObject {
         return code;
     }
 
+    public RootCallTarget getCallTarget() {
+        RootCallTarget ct = callTarget;
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.SLOWPATH_PROBABILITY, ct == null)) {
+            ct = getCode().getRootCallTarget();
+            callTarget = ct;
+        }
+        return ct;
+    }
+
     @TruffleBoundary
     public void setCode(PCode code) {
         codeStableAssumption.invalidate("code changed for function " + getName());
         assert code != null : "code cannot be null";
         this.finalCode = null;
         this.code = code;
+        this.callTarget = null;
     }
 
     public Object[] getDefaults() {
         if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(this)) {
-            if (defaultsStableAssumption.isValid()) {
+            if (codeStableAssumption.isValid()) {
                 return finalDefaultValues;
             }
         }
@@ -179,30 +207,66 @@ public final class PFunction extends PythonObject {
 
     @TruffleBoundary
     public void setDefaults(Object[] defaults) {
-        this.defaultsStableAssumption.invalidate("defaults changed for function " + getName());
+        this.codeStableAssumption.invalidate("defaults changed for function " + getName());
         this.finalDefaultValues = null; // avoid leak, and make code that wrongly uses it crash
         this.defaultValues = defaults;
     }
 
     public PKeyword[] getKwDefaults() {
         if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(this)) {
-            if (defaultsStableAssumption.isValid()) {
+            if (codeStableAssumption.isValid()) {
+                assert kwDefaultDict == null;
                 return finalKwDefaultValues;
             }
+        }
+        if (kwDefaultDict != null) {
+            HashingStorage storage = kwDefaultDict.getDictStorage();
+            if (CompilerDirectives.injectBranchProbability(CompilerDirectives.LIKELY_PROBABILITY, storage instanceof KeywordsStorage)) {
+                return ((KeywordsStorage) storage).getStore();
+            }
+            return kwDefaultsFromStorage(storage);
         }
         return kwDefaultValues;
     }
 
+    public Object getKwDefaultsDict(PythonLanguage language) {
+        if (kwDefaultDict == null) {
+            PKeyword[] kwdefaults = getKwDefaults();
+            if (kwdefaults.length == 0) {
+                return PNone.NONE;
+            }
+            setKwDefaultsDict(PFactory.createDict(language, kwdefaults));
+        }
+        return kwDefaultDict;
+    }
+
     @TruffleBoundary
-    public void setKwDefaults(PKeyword[] defaults) {
-        this.defaultsStableAssumption.invalidate("kw defaults changed for function " + getName());
-        this.finalDefaultValues = null; // avoid leak, and make code that wrongly uses it crash
-        this.kwDefaultValues = defaults;
+    public void setKwDefaultsDict(PDict defaults) {
+        this.codeStableAssumption.invalidate("kw defaults changed for function " + getName());
+        this.finalKwDefaultValues = null; // avoid leak, and make code that wrongly uses it crash
+        this.kwDefaultValues = PKeyword.EMPTY_KEYWORDS;
+        this.kwDefaultDict = defaults;
+    }
+
+    @TruffleBoundary
+    private static PKeyword[] kwDefaultsFromStorage(HashingStorage storage) {
+        ArrayList<PKeyword> keywords = new ArrayList<>();
+        HashingStorageIterator it = HashingStorageGetIterator.executeUncached(storage);
+        while (HashingStorageIteratorNext.executeUncached(storage, it)) {
+            Object key = HashingStorageIteratorKey.executeUncached(storage, it);
+            if (key instanceof PString) {
+                key = ((PString) key).getValueUncached();
+            }
+            if (key instanceof TruffleString) {
+                keywords.add(new PKeyword((TruffleString) key, HashingStorageIteratorValue.executeUncached(storage, it)));
+            }
+        }
+        return keywords.isEmpty() ? PKeyword.EMPTY_KEYWORDS : keywords.toArray(new PKeyword[keywords.size()]);
     }
 
     @TruffleBoundary
     String getSourceCode() {
-        RootNode rootNode = GetCallTargetNode.getUncached().execute(this).getRootNode();
+        RootNode rootNode = getCode().getRootNode();
         SourceSection sourceSection = rootNode.getSourceSection();
         if (sourceSection != null) {
             return sourceSection.getCharacters().toString();
@@ -229,12 +293,10 @@ public final class PFunction extends PythonObject {
 
     @ExportMessage
     public SourceSection getSourceLocation(
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("getCt") @Cached GetCodeCallTargetNode getCt,
                     @Shared("gil") @Cached GilNode gil) throws UnsupportedMessageException {
         boolean mustRelease = gil.acquire();
         try {
-            SourceSection result = getSourceLocationDirect(inliningTarget, getCt);
+            SourceSection result = getSourceLocationDirect();
             if (result == null) {
                 throw UnsupportedMessageException.create();
             } else {
@@ -246,8 +308,8 @@ public final class PFunction extends PythonObject {
     }
 
     @TruffleBoundary
-    private SourceSection getSourceLocationDirect(Node inliningTarget, GetCodeCallTargetNode getCt) {
-        RootNode rootNode = getCt.execute(inliningTarget, code).getRootNode();
+    private SourceSection getSourceLocationDirect() {
+        RootNode rootNode = code.getRootNode();
         SourceSection result;
         if (rootNode instanceof PRootNode) {
             result = ((PRootNode) rootNode).getSourceSection();
@@ -264,12 +326,10 @@ public final class PFunction extends PythonObject {
 
     @ExportMessage
     public boolean hasSourceLocation(
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("getCt") @Cached GetCodeCallTargetNode getCt,
                     @Shared("gil") @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
         try {
-            return getSourceLocationDirect(inliningTarget, getCt) != null;
+            return getSourceLocationDirect() != null;
         } finally {
             gil.release(mustRelease);
         }

@@ -1,18 +1,15 @@
-/* Copyright (c) 2018, 2022, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2017 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
  */
-
-/* Bytes object interface */
+// Bytes object interface
 
 #ifndef Py_BYTESOBJECT_H
 #define Py_BYTESOBJECT_H
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <stdarg.h>
 
 /*
 Type PyBytesObject represents a byte string.  An extra zero byte is
@@ -34,7 +31,7 @@ PyAPI_DATA(PyTypeObject) PyBytesIter_Type;
 
 #define PyBytes_Check(op) \
                  PyType_FastSubclass(Py_TYPE(op), Py_TPFLAGS_BYTES_SUBCLASS)
-#define PyBytes_CheckExact(op) Py_IS_TYPE(op, &PyBytes_Type)
+#define PyBytes_CheckExact(op) Py_IS_TYPE((op), &PyBytes_Type)
 
 PyAPI_FUNC(PyObject *) PyBytes_FromStringAndSize(const char *, Py_ssize_t);
 PyAPI_FUNC(PyObject *) PyBytes_FromString(const char *);
@@ -64,7 +61,7 @@ PyAPI_FUNC(int) PyBytes_AsStringAndSize(
 
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_BYTESOBJECT_H
-#  include  "cpython/bytesobject.h"
+#  include "cpython/bytesobject.h"
 #  undef Py_CPYTHON_BYTESOBJECT_H
 #endif
 

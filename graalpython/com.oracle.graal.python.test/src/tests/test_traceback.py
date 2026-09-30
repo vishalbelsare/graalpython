@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,8 +36,13 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
+import ast
+import concurrent.futures
+import linecache
+import subprocess
 import sys
+import traceback
+import threading
 
 
 def assert_raises(err, fn, *args, **kwargs):
@@ -59,6 +64,34 @@ def test_traceback_dir():
         assert _err.args == ("the unthinkable happened!", )
         assert hasattr(tb, '__dir__')
         assert set(dir(tb)) == {'tb_frame', 'tb_next', 'tb_lasti', 'tb_lineno'}
+
+
+def test_traceback_frame_from_threadpool_exception_published_before_workitem_exit():
+    published = threading.Event()
+    release = threading.Event()
+    original_set_exception = concurrent.futures.Future.set_exception
+
+    def set_exception_and_wait(self, exc):
+        original_set_exception(self, exc)
+        published.set()
+        release.wait(timeout=5)
+
+    def target():
+        raise OSError("published before _WorkItem.run exits")
+
+    concurrent.futures.Future.set_exception = set_exception_and_wait
+    try:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(target)
+            assert published.wait(timeout=60)
+            exc = future.exception(timeout=0)
+            traceback.clear_frames(exc.__traceback__)
+        finally:
+            release.set()
+            executor.shutdown(wait=True)
+    finally:
+        concurrent.futures.Future.set_exception = original_set_exception
 
 
 def test_import():
@@ -101,6 +134,32 @@ def test_basic_traceback():
             ('foo', 'raise RuntimeError("test")'),
         ]
     )
+
+
+def test_traceback_from_ast_without_end_positions():
+    import traceback
+
+    filename = "<ast without end positions>"
+    source = "def f():\n    value = None\n    raise AssertionError\n"
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    tree = ast.parse(source, filename)
+    for node in ast.walk(tree):
+        if hasattr(node, "end_lineno"):
+            node.end_lineno = None
+            node.end_col_offset = None
+
+    namespace = {}
+    exec(compile(tree, filename, "exec"), namespace)
+    try:
+        namespace["f"]()
+    except AssertionError:
+        stack = traceback.TracebackException(*sys.exc_info()).stack
+    else:
+        assert False, "generated function did not raise"
+
+    assert stack[-1].name == "f"
+    assert stack[-1].lineno == 3
+    assert stack[-1].line == "raise AssertionError"
 
 
 def test_basic_traceback_generator():
@@ -156,10 +215,7 @@ def test_reraise_direct_generator():
     )
 
 
-def test_reraise_direct_no_accumulate():
-    # This is a tricky corner case where sys.exc_info()[1].__traceback__ != sys.exc_info()[2] because e gets mutated by
-    # the inner exception block, but raise uses sys.exc_info which contains the unmodified traceback at the time the
-    # the exception was caught
+def test_reraise_direct_accumulate():
     def reraise():
         try:
             raise RuntimeError("test")
@@ -173,6 +229,7 @@ def test_reraise_direct_no_accumulate():
     assert_has_traceback(
         reraise,
         [
+            ('reraise', 'raise e'),
             ('reraise', 'raise RuntimeError("test")'),
         ]
     )
@@ -370,6 +427,7 @@ def test_finally():
     assert_has_traceback(
         test,
         [
+            ('test', 'raise sys.exc_info()[1]  # finally'),
             ('test', 'raise sys.exc_info()[1]  # except'),
             ('test', 'raise OSError("test")'),
         ]
@@ -416,6 +474,7 @@ def test_finally_generator():
         lambda: list(test()),
         [
             ('<lambda>', 'lambda: list(test()),'),
+            ('test', 'raise sys.exc_info()[1]  # finally'),
             ('test', 'raise sys.exc_info()[1]  # except'),
             ('test', 'raise OSError("test")'),
         ]
@@ -582,9 +641,123 @@ def test_top_level_exception_handler():
     expected = dedent("""\
         Traceback (most recent call last):
           File "<string>", line 6, in <module>
+            reraise()
+            ~~~~~~~^^
           File "<string>", line 5, in reraise
+            raise e
           File "<string>", line 3, in reraise
+            raise RuntimeError("test")
         RuntimeError: test
         """).strip()
     assert expected in err.strip(), f"Expected tracback in stderr:\n{expected}\nGot stderr:\n{err.strip()}"
 
+
+def test_faulthandler_many_threads():
+    # We had a bug where the faulthandler.dump_traceback method would
+    # interleave output of threads, because it would print line-by-line on each
+    # thread in parallel. Test that this doesn't happen by creating 100 threads
+    # in parallel and calling dump_traceback and ensuring that we have each
+    # thread's traceback starting with a newline, thread id, and stacktrace,
+    # and no interleaving.
+    try:
+        import faulthandler
+    except Exception:
+        return
+    import threading
+    import tempfile
+    import re
+
+    nthreads = 100
+    evt = threading.Event()
+    barrier = threading.Barrier(nthreads + 1)
+    threads = []
+
+    for i in range(nthreads):
+        loc = {}
+        src = f"def thread_func_{i}(evt, barrier):\n    barrier.wait()\n    evt.wait(30)\n"
+        exec(src, {}, loc)
+        target = loc[f"thread_func_{i}"]
+        t = threading.Thread(target=target, args=(evt, barrier), name=f"thread-{i}")
+        t.daemon = True
+        t.start()
+        threads.append(t)
+
+    try:
+        barrier.wait(timeout=10.0)
+    except Exception as e:
+        evt.set()
+        for t in threads:
+            t.join(timeout=2)
+        assert False, f"Barrier wait failed: {e!r}"
+
+    header_re = re.compile(r'^Thread.+', re.MULTILINE)
+    func_name_re = re.compile(r'in (thread_func_(\d+))\b')
+
+    def find_interleaved_block(out):
+        headers = list(header_re.finditer(out))
+        for idx, m in enumerate(headers):
+            start = m.end()
+            end = headers[idx + 1].start() if idx + 1 < len(headers) else len(out)
+            ids = set(m.group(2) for m in func_name_re.finditer(out[start:end]))
+            if len(ids) > 1:
+                return m.group(), ids
+        return None
+
+    try:
+        interleaved_block = None
+        for _ in range(3):
+            with tempfile.TemporaryFile() as f:
+                faulthandler.dump_traceback(file=f, all_threads=True)
+                f.flush()
+                f.seek(0)
+                out = f.read().decode('utf-8', 'replace')
+            interleaved_block = find_interleaved_block(out)
+            if interleaved_block is None:
+                break
+        assert interleaved_block is None, (
+            f"Interleaved output detected in block {interleaved_block[0]!r} "
+            f"with multiple thread func ids: {interleaved_block[1]}"
+        )
+    finally:
+        evt.set()
+        for t in threads:
+            t.join(timeout=3)
+
+
+def test_faulthandler_sigsegv_builtin():
+    import faulthandler
+
+    try:
+        if not __graalpython__.is_native or __graalpython__.posix_module_backend() == "java":
+            return
+    except NameError:
+        pass # CPython
+
+    def assert_fatal_faulthandler_call(name, *args):
+        assert hasattr(faulthandler, name)
+        code = f"import faulthandler; faulthandler.{name}({', '.join(map(repr, args))})"
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        assert proc.returncode != 0
+        assert proc.returncode != 1, (
+            f"expected fatal signal path for faulthandler.{name}{args}, "
+            f"got regular Python error exit {proc.returncode}"
+        )
+
+    for release_gil in (False, True):
+        assert_fatal_faulthandler_call("_sigsegv", release_gil)
+    assert_fatal_faulthandler_call("_sigabrt")
+
+
+def test_location_from_ast():
+    m = compile("a = 1\nx", "<stdin>", "exec", flags=ast.PyCF_ONLY_AST)
+
+    try:
+        exec(compile(m, "<stdin>", "exec"))
+    except NameError as e:
+        assert e.__traceback__.tb_next.tb_lineno == 2
+    else:
+        assert False

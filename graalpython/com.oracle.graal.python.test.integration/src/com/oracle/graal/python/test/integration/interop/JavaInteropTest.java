@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,11 +48,14 @@ import static org.junit.Assert.fail;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Context.Builder;
@@ -65,8 +68,8 @@ import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyHashMap;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.runners.Enclosed;
 import org.junit.runner.RunWith;
@@ -89,6 +92,7 @@ public class JavaInteropTest {
             out = new ByteArrayOutputStream();
             err = new ByteArrayOutputStream();
             Builder builder = Context.newBuilder();
+            builder.engine(Engine.newBuilder("python").option("engine.WarnInterpreterOnly", "false").build());
             builder.allowExperimentalOptions(true);
             builder.allowAllAccess(true);
             builder.out(out);
@@ -99,6 +103,15 @@ public class JavaInteropTest {
         @After
         public void tearDown() {
             context.close();
+            context.getEngine().close();
+        }
+
+        private String getOutString() {
+            return out.toString(StandardCharsets.UTF_8).replaceAll("\r\n", "\n");
+        }
+
+        private String getErrString() {
+            return err.toString(StandardCharsets.UTF_8).replaceAll("\r\n", "\n");
         }
 
         @Test
@@ -114,7 +127,8 @@ public class JavaInteropTest {
 
         @Test
         public void evalNonInteractiveThrowsSyntaxError() throws IOException {
-            try (Context c = Context.newBuilder().allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "false").build()) {
+            try (Engine engine = Engine.create("python");
+                            Context c = Context.newBuilder().engine(engine).allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "false").build()) {
                 c.eval(Source.newBuilder("python", INCOMPLETE_SOURCE, "eval").interactive(false).build());
             } catch (PolyglotException t) {
                 assertTrue(t.isSyntaxError());
@@ -126,7 +140,8 @@ public class JavaInteropTest {
 
         @Test
         public void evalNonInteractiveInInteractiveTerminalThrowsSyntaxError() throws IOException {
-            try (Context c = Context.newBuilder().allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "true").build()) {
+            try (Engine engine = Engine.create("python");
+                            Context c = Context.newBuilder().engine(engine).allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "true").build()) {
                 c.eval(Source.newBuilder("python", INCOMPLETE_SOURCE, "eval").interactive(false).build());
             } catch (PolyglotException t) {
                 assertTrue(t.isSyntaxError());
@@ -138,7 +153,8 @@ public class JavaInteropTest {
 
         @Test
         public void evalInteractiveInNonInteractiveTerminalThrowsSyntaxError() throws IOException {
-            try (Context c = Context.newBuilder().allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "false").build()) {
+            try (Engine engine = Engine.create("python");
+                            Context c = Context.newBuilder().engine(engine).allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "false").build()) {
                 c.eval(Source.newBuilder("python", INCOMPLETE_SOURCE, "eval").interactive(true).build());
             } catch (PolyglotException t) {
                 assertTrue(t.isSyntaxError());
@@ -150,11 +166,34 @@ public class JavaInteropTest {
 
         @Test
         public void evalInteractiveInInteractiveTerminalThrowsSyntaxError() throws IOException {
-            try (Context c = Context.newBuilder().allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "true").build()) {
+            try (Engine engine = Engine.create("python");
+                            Context c = Context.newBuilder().engine(engine).allowExperimentalOptions(true).allowAllAccess(true).option("python.TerminalIsInteractive", "true").build()) {
                 c.eval(Source.newBuilder("python", INCOMPLETE_SOURCE, "eval").interactive(true).build());
             } catch (PolyglotException t) {
                 assertTrue(t.isSyntaxError());
                 assertTrue(t.isIncompleteSource());
+                return;
+            }
+
+            fail();
+        }
+
+        @Test
+        public void importingJavaLangStringConvertsEagerly() {
+            try (Engine engine = Engine.create("python"); Context c = Context.newBuilder().engine(engine).allowExperimentalOptions(true).allowAllAccess(true).build()) {
+                c.getPolyglotBindings().putMember("b", "hello world");
+                c.eval("python", "import polyglot; xyz = polyglot.import_value('b'); assert isinstance(xyz, str)");
+                // should not fail
+            }
+        }
+
+        @Test
+        public void evalWithSyntaxErrorThrows() {
+            try (Engine engine = Engine.create("python"); Context c = Context.newBuilder().engine(engine).build()) {
+                c.eval("python", "var d=5/0");
+            } catch (PolyglotException t) {
+                assertTrue(t.isSyntaxError());
+                assertFalse(t.isIncompleteSource());
                 return;
             }
 
@@ -171,6 +210,40 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             assertTrue(main.canExecute());
+        }
+
+        // From https://github.com/oracle/graalpython/issues/298
+        @Test
+        public void testHostException() {
+            try {
+                context.eval(createSource("import java; java.math.BigInteger.ONE.divide(java.math.BigInteger.ZERO)"));
+                fail();
+            } catch (PolyglotException e) {
+                try {
+                    Assert.assertTrue(e.isHostException());
+                    Assert.assertTrue(e.asHostException() instanceof ArithmeticException);
+                    Assert.assertTrue(e.getMessage(), e.getMessage().contains("divide by zero"));
+                } catch (AssertionError assertionError) {
+                    throw new AssertionError(getAssertionMessage(e), assertionError);
+                }
+            }
+
+            String outString = getOutString();
+            String errString = getErrString();
+            Assert.assertTrue(outString, outString.isEmpty());
+            Assert.assertTrue(errString, errString.isEmpty());
+        }
+
+        private static String getAssertionMessage(PolyglotException ex) {
+            var builder = new StringBuilder(ex.getClass().getSimpleName() + "\n");
+            try {
+                builder.append(ex.getMessage());
+                builder.append('\n');
+                builder.append(Arrays.stream(ex.getStackTrace()).map(StackTraceElement::toString).collect(Collectors.joining("\n")));
+            } catch (Throwable ignore) {
+                // pass
+            }
+            return builder.toString();
         }
 
         @Test
@@ -207,7 +280,7 @@ public class JavaInteropTest {
         }
 
         @Test
-        public void testPassingFloats() throws UnsupportedEncodingException {
+        public void testPassingFloats() {
             String source = "import polyglot\n" +
                             "@polyglot.export_value\n" +
                             "def foo(x, y):\n" +
@@ -216,11 +289,11 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             main.execute((float) 1.0, (float) 2.0);
-            assertEquals("2.0\n", out.toString("UTF-8"));
+            assertEquals("2.0\n", getOutString());
         }
 
         @Test
-        public void testPassingBigIntegers() throws UnsupportedEncodingException {
+        public void testPassingBigIntegers() {
             String source = "import polyglot\n" +
                             "@polyglot.export_value\n" +
                             "def foo(x, y):\n" +
@@ -229,20 +302,20 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             main.execute(BigInteger.valueOf(Long.MAX_VALUE).multiply(BigInteger.TWO), BigInteger.valueOf(7));
-            assertEquals("129127208515966861298\n", out.toString("UTF-8"));
+            assertEquals("129127208515966861298\n", getOutString());
             out.reset();
             main.execute(Long.MAX_VALUE, 14);
-            assertEquals("129127208515966861298\n", out.toString("UTF-8"));
+            assertEquals("129127208515966861298\n", getOutString());
             out.reset();
             main.execute(6, 7);
-            assertEquals("42\n", out.toString("UTF-8"));
+            assertEquals("42\n", getOutString());
             out.reset();
             main.execute(true, true);
-            assertEquals("1\n", out.toString("UTF-8"));
+            assertEquals("1\n", getOutString());
         }
 
         @Test
-        public void testBigIntegersAdd() throws UnsupportedEncodingException {
+        public void testBigIntegersAdd() {
             String source = "import polyglot\n" +
                             "@polyglot.export_value\n" +
                             "def foo(x, y):\n" +
@@ -251,20 +324,20 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             main.execute(BigInteger.valueOf(24).shiftLeft(101), BigInteger.valueOf(7));
-            assertEquals("60847228810955011271841753858055\n", out.toString("UTF-8"));
+            assertEquals("60847228810955011271841753858055\n", getOutString());
             out.reset();
             main.execute(BigInteger.valueOf(24).shiftLeft(101), BigInteger.valueOf(24).shiftLeft(101));
-            assertEquals("121694457621910022543683507716096\n", out.toString("UTF-8"));
+            assertEquals("121694457621910022543683507716096\n", getOutString());
             out.reset();
             main.execute(6, 7);
-            assertEquals("13\n", out.toString("UTF-8"));
+            assertEquals("13\n", getOutString());
             out.reset();
             main.execute(true, true);
-            assertEquals("2\n", out.toString("UTF-8"));
+            assertEquals("2\n", getOutString());
         }
 
         @Test
-        public void testBigIntegersEg() throws UnsupportedEncodingException {
+        public void testBigIntegersEg() {
             String source = "import polyglot\n" +
                             "@polyglot.export_value\n" +
                             "def foo(x, y):\n" +
@@ -273,26 +346,26 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             main.execute(BigInteger.valueOf(24).shiftLeft(101), BigInteger.valueOf(7));
-            assertEquals("False\n", out.toString("UTF-8"));
+            assertEquals("False\n", getOutString());
             out.reset();
             main.execute(BigInteger.valueOf(24).shiftLeft(101), BigInteger.valueOf(24).shiftLeft(101));
-            assertEquals("True\n", out.toString("UTF-8"));
+            assertEquals("True\n", getOutString());
             out.reset();
             main.execute(6, 7);
-            assertEquals("False\n", out.toString("UTF-8"));
+            assertEquals("False\n", getOutString());
             out.reset();
             main.execute(6, 6);
-            assertEquals("True\n", out.toString("UTF-8"));
+            assertEquals("True\n", getOutString());
             out.reset();
             main.execute(true, BigInteger.ONE);
-            assertEquals("True\n", out.toString("UTF-8"));
+            assertEquals("True\n", getOutString());
             out.reset();
             main.execute(true, BigInteger.ZERO);
-            assertEquals("False\n", out.toString("UTF-8"));
+            assertEquals("False\n", getOutString());
         }
 
         @Test
-        public void testAsFunction() throws UnsupportedEncodingException {
+        public void testAsFunction() {
             String source = "import polyglot\n" +
                             "@polyglot.export_value\n" +
                             "def foo():\n" +
@@ -301,11 +374,11 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             main.execute();
-            assertEquals("Called\n", out.toString("UTF-8"));
+            assertEquals("Called\n", getOutString());
         }
 
         @Test
-        public void testAsFunctionVarArgs() throws UnsupportedEncodingException {
+        public void testAsFunctionVarArgs() {
             String source = "import polyglot\n" +
                             "@polyglot.export_value\n" +
                             "def foo(a, b):\n" +
@@ -314,28 +387,28 @@ public class JavaInteropTest {
             context.eval(script);
             Value main = context.getPolyglotBindings().getMember("foo");
             main.execute("Hello", "World");
-            assertEquals("Hello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\n", getOutString());
         }
 
         @Test
-        public void mainFunctionsAreImplicitlyImporteable() throws UnsupportedEncodingException {
+        public void mainFunctionsAreImplicitlyImporteable() {
             String source = "def foo(a, b):\n" +
                             "    print(a, b)\n\n";
             Source script = Source.create("python", source);
             context.eval(script);
             Value main = context.getBindings("python").getMember("foo");
             main.execute("Hello", "World");
-            assertEquals("Hello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\n", getOutString());
         }
 
         @Test
-        public void builtinFunctionsAreImporteable() throws UnsupportedEncodingException {
+        public void builtinFunctionsAreImporteable() {
             String source = "pass";
             Source script = Source.create("python", source);
             context.eval(script);
             Value main = context.getBindings("python").getMember("__builtins__").getMember("print");
             main.execute("Hello", "World");
-            assertEquals("Hello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\n", getOutString());
         }
 
         @Test
@@ -344,14 +417,14 @@ public class JavaInteropTest {
         }
 
         @Test
-        public void testMultipleInvocationsAreInSameScope() throws UnsupportedEncodingException {
+        public void testMultipleInvocationsAreInSameScope() {
             String source = "def foo(a, b):\n" +
                             "    print(a, b)\n" +
                             "foo";
             Source script = Source.create("python", source);
             Value foo = context.eval(script);
             foo.execute("Hello", "World");
-            assertEquals("Hello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\n", getOutString());
 
             source = "def bar(a, b):\n" +
                             "    foo(a, b)\n" +
@@ -359,7 +432,7 @@ public class JavaInteropTest {
             script = Source.create("python", source);
             Value bar = context.eval(script);
             bar.execute("Hello", "World");
-            assertEquals("Hello World\nHello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\nHello World\n", getOutString());
 
             source = "invalid syntax";
             script = Source.create("python", source);
@@ -368,9 +441,9 @@ public class JavaInteropTest {
             } catch (Throwable t) {
             }
             bar.execute("Hello", "World");
-            assertEquals("Hello World\nHello World\nHello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\nHello World\nHello World\n", getOutString());
             foo.execute("Hello", "World");
-            assertEquals("Hello World\nHello World\nHello World\nHello World\n", out.toString("UTF-8"));
+            assertEquals("Hello World\nHello World\nHello World\nHello World\n", getOutString());
         }
 
         @Test
@@ -401,7 +474,7 @@ public class JavaInteropTest {
                 }
             }
             assertNotNull("Dacapo found", dacapo);
-            assertEquals("'e39957904b7e79caf4fa54f30e8e4ee74d4e9e37'", dacapo.getHashValue("sha1").toString());
+            assertEquals("e39957904b7e79caf4fa54f30e8e4ee74d4e9e37", dacapo.getHashValue("sha1").asString());
         }
 
         public class AForeignExecutable implements ProxyExecutable {
@@ -411,7 +484,6 @@ public class JavaInteropTest {
             }
         }
 
-        @Ignore // blocked by GR-46281
         @Test
         public void runAForeignExecutable() throws IOException {
             Source suitePy = Source.newBuilder("python",
@@ -419,7 +491,7 @@ public class JavaInteropTest {
                                             def foo(obj):
                                               try:
                                                  obj()
-                                              except TypeError as e:
+                                              except:
                                                  pass
                                               else:
                                                  assert False
@@ -430,7 +502,6 @@ public class JavaInteropTest {
             foo.execute(new AForeignExecutable());
         }
 
-        @Ignore // blocked by GR-46281
         @Test
         public void invokeAForeignMember() throws IOException {
             Source suitePy = Source.newBuilder("python",
@@ -438,7 +509,7 @@ public class JavaInteropTest {
                                             def foo(obj):
                                               try:
                                                  obj.fun()
-                                              except TypeError as e:
+                                              except:
                                                  pass
                                               else:
                                                  assert False
@@ -451,7 +522,7 @@ public class JavaInteropTest {
             foo.execute(ProxyObject.fromMap(m));
         }
 
-        public class JavaObject {
+        public static class JavaObject {
             public byte byteValue = 1;
             public short shortValue = 2;
             public int intValue = 3;
@@ -518,7 +589,7 @@ public class JavaInteropTest {
                             "5.0 <class 'float'>\n" +
                             "6.0 <class 'float'>\n" +
                             "True <class 'bool'>\n" +
-                            "c <class 'str'>\n", out.toString("UTF-8"));
+                            "c <class 'polyglot.ForeignString'>\n", getOutString());
         }
 
         @Test
@@ -545,7 +616,7 @@ public class JavaInteropTest {
                             "5.0 <class 'float'>\n" +
                             "6.0 <class 'float'>\n" +
                             "True <class 'bool'>\n" +
-                            "c <class 'str'>\n", out.toString("UTF-8"));
+                            "c <class 'polyglot.ForeignString'>\n", getOutString());
         }
 
         @Test
@@ -560,9 +631,9 @@ public class JavaInteropTest {
             Map<String, String> source = Map.of("source", "foo");
             context.getBindings("python").getMember("enrich").execute(source);
             assertEquals("" +
-                            "<class 'foreign'>\n" +
+                            "<class 'polyglot.ForeignDict'>\n" +
                             "True\n" +
-                            "True\n", out.toString("UTF-8"));
+                            "True\n", getOutString());
         }
 
         @Test
@@ -571,6 +642,25 @@ public class JavaInteropTest {
             Value javaObj = context.eval("python", "javaObj");
             assertTrue(javaObj.isNumber());
             assertEquals(javaObj.asInt(), 42);
+        }
+
+        @Test
+        public void testDictTypeConversion() {
+            Value bindings = context.getBindings("python");
+            bindings.putMember("foo", "32");
+            bindings.putMember("bar", (short) 32);
+            Value intValue = context.eval("python", "int(foo) + int(bar)");
+            assertEquals(intValue.asInt(), 64);
+        }
+
+        @Test
+        public void testListTypeConversions() {
+            Value intConversion = context.eval("python", "int");
+            Value list = context.eval("python", "[1]");
+            list.setArrayElement(0, "32");
+            assertEquals(intConversion.execute(list.getArrayElement(0)).asInt(), 32);
+            list.setArrayElement(0, (short) 3);
+            assertEquals(intConversion.execute(list.getArrayElement(0)).asInt(), 3);
         }
 
         public class UnsupportedProxyHashMap implements ProxyHashMap {
@@ -731,11 +821,95 @@ public class JavaInteropTest {
             Value foo = context.eval(suitePy);
             foo.execute(new UnsupportedProxyArray());
         }
+
+        @Test
+        public void recursiveJavaListRepr() throws IOException {
+            Source source = Source.newBuilder("python", """
+                            def foo(obj):
+                                return repr(obj)
+                            foo
+                            """, "input").build();
+            Value foo = context.eval(source);
+            List<Object> recursiveList = new ArrayList<>();
+            recursiveList.add(1);
+            recursiveList.add(recursiveList);
+            Value result = foo.execute(recursiveList);
+            assertEquals(result.as(String.class), "[1, [...]]");
+        }
+
+        @Test
+        public void testMetaParents() throws IOException {
+            Source source = Source.newBuilder("python", """
+                            class Foo:
+                                pass
+                            class Bar(Foo):
+                                pass
+                            Bar
+                            """, "input").build();
+            Value bar = context.eval(source);
+            assertTrue(bar.isMetaObject());
+            assertEquals(bar.getMetaSimpleName(), "Bar");
+            assertTrue(bar.hasMetaParents());
+            Value barParents = bar.getMetaParents();
+            assertTrue(barParents.hasArrayElements());
+            assertEquals(barParents.getArraySize(), 1);
+            Value foo = barParents.getArrayElement(0);
+            assertTrue(foo.isMetaObject());
+            assertEquals(foo.getMetaSimpleName(), "Foo");
+            assertTrue(foo.hasMetaParents());
+            Value fooParents = foo.getMetaParents();
+            assertTrue(fooParents.hasArrayElements());
+            assertEquals(fooParents.getArraySize(), 1);
+            Value object = fooParents.getArrayElement(0);
+            assertTrue(object.isMetaObject());
+            assertEquals(object.getMetaSimpleName(), "object");
+            assertFalse(object.hasMetaParents());
+        }
+
+        public static class MyFunction implements java.util.function.Function<String, String> {
+            public String __text_signature__ = "(string) -> str";
+
+            @Override
+            public String apply(String s) {
+                return s;
+            }
+        }
+
+        public static class MyFunctionWithCustomName implements java.util.function.Function<String, String> {
+            public String __text_signature__ = "(string) -> str";
+            public String __name__ = "myfunc";
+
+            @Override
+            public String apply(String s) {
+                return s;
+            }
+        }
+
+        public static class MyFunctionWithIncorrectSignature implements java.util.function.Function<String, String> {
+            public String __text_signature__ = "[I;java.lang.String;";
+
+            @Override
+            public String apply(String s) {
+                return s;
+            }
+        }
+
+        @Test
+        public void javaExecutablesAsPythonFunctions() {
+            Value inspectSignature = context.eval("python", "import inspect; inspect.signature");
+            assertEquals("<Signature (string)>", inspectSignature.execute(new MyFunction()).toString());
+
+            Value signature = context.eval("python", "lambda f: f.__text_signature__");
+            assertEquals(new MyFunctionWithIncorrectSignature().__text_signature__, signature.execute(new MyFunctionWithIncorrectSignature()).asString());
+
+            Value name = context.eval("python", "lambda f: f.__name__");
+            assertEquals(new MyFunctionWithCustomName().__name__, name.execute(new MyFunctionWithCustomName()).asString());
+        }
     }
 
     @RunWith(Parameterized.class)
     public static class PythonOptionsExposedInPythonTest extends PythonTests {
-        private static Engine engine = Engine.create();
+        private static Engine engine = Engine.create("python");
 
         static class OptionsChecker {
             private String option;

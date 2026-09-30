@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,19 +36,20 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
 import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
 
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare
+
+
+def _reference_get_slice(attr):
+    def inner(args):
+        if isinstance(args[0], slice):
+            return getattr(args[0], attr)
+        raise TypeError
+    return inner
 
 
 class TestPySlice(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPySlice, self).compile_module(name)
-
-
 
     def reference_get_indices(slize, length):
         r = slize.indices(length)
@@ -172,18 +173,18 @@ class TestPySlice(CPyExtTestCase):
 
     def reference_new_slice(args):
         return slice(args[0], args[1], args[2])
-    
+
     test_PySlice_New = CPyExtFunction(
         reference_new_slice,
         lambda: (
-            (1, 2, 3,),             
-            (1, 2, "a",),             
-            (1, 2, None,),             
-            (1, None, None,),             
-            (-1, -1, -1,),          
+            (1, 2, 3,),
+            (1, 2, "a",),
+            (1, 2, None,),
+            (1, None, None,),
+            (-1, -1, -1,),
             ("a", "b", "c"),
-            ("a", "b", None),            
-            ("a", None, None),            
+            ("a", "b", None),
+            ("a", None, None),
             (None, None, None),
         ),
         resultspec="O",
@@ -191,3 +192,49 @@ class TestPySlice(CPyExtTestCase):
         arguments=["PyObject* start", "PyObject* stop", "PyObject* step"],
         cmpfunc=unhandled_error_compare
     )
+
+    if sys.implementation.name == 'graalpy':
+        test_GraalPySlice_Start = CPyExtFunction(
+            _reference_get_slice('start'),
+            lambda: (
+                (slice(1),),
+                (slice(1, 2, 3),),
+                (slice(None, 2, 3),),
+                (slice("a"),),
+                (tuple(),),
+            ),
+            resultspec='O',
+            argspec='O',
+            arguments=["PyObject* slice"],
+            cmpfunc=unhandled_error_compare,
+        )
+
+        test_GraalPySlice_Stop = CPyExtFunction(
+            _reference_get_slice('stop'),
+            lambda: (
+                (slice(1),),
+                (slice(1, 2, 3),),
+                (slice(None, 2, 3),),
+                (slice("a"),),
+                (tuple(),),
+            ),
+            resultspec='O',
+            argspec='O',
+            arguments=["PyObject* slice"],
+            cmpfunc=unhandled_error_compare,
+        )
+
+        test_GraalPySlice_Step = CPyExtFunction(
+            _reference_get_slice('step'),
+            lambda: (
+                (slice(1),),
+                (slice(1, 2, 3),),
+                (slice(None, 2, 3),),
+                (slice("a"),),
+                (tuple(),),
+            ),
+            resultspec='O',
+            argspec='O',
+            arguments=["PyObject* slice"],
+            cmpfunc=unhandled_error_compare,
+        )

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,30 +40,28 @@
  */
 package com.oracle.graal.python.lib;
 
-import static com.oracle.graal.python.builtins.objects.PNone.NO_VALUE;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___FORMAT__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
 import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupAndCallBinaryNode;
+import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.bytecode.OperationProxy;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -76,23 +74,32 @@ import com.oracle.truffle.api.strings.TruffleString;
  * not accept native {@code NULL} as {@code formatSpec}. Convert it to an empty string to get
  * equivalent behavior.
  */
-@GenerateInline
+@GenerateInline(false)
 @GenerateUncached
+@OperationProxy.Proxyable(allowUncached = true, storeBytecodeIndex = true)
 public abstract class PyObjectFormat extends PNodeWithContext {
-    public final Object executeNonInlined(VirtualFrame frame, Object obj, Object formatSpec) {
-        return execute(frame, null, obj, formatSpec);
+
+    public abstract Object execute(Frame frame, Object obj, Object formatSpec);
+
+    @NeverDefault
+    public static PyObjectFormat create() {
+        return PyObjectFormatNodeGen.create();
     }
 
-    public abstract Object execute(VirtualFrame frame, Node node, Object obj, Object formatSpec);
+    public static PyObjectFormat getUncached() {
+        return PyObjectFormatNodeGen.getUncached();
+    }
 
-    @Specialization
-    static Object doNone(VirtualFrame frame, Node inliningTarget, Object obj, PNone formatSpec,
+    @Specialization(guards = "isNoValue(formatSpec)")
+    public static Object doNone(VirtualFrame frame, Object obj, PNone formatSpec,
+                    @Bind Node inliningTarget,
                     @Shared("impl") @Cached PyObjectFormatStr formatStr) {
         return formatStr.execute(frame, inliningTarget, obj, T_EMPTY_STRING);
     }
 
     @Fallback
-    static Object doOthers(VirtualFrame frame, Node inliningTarget, Object obj, Object formatSpec,
+    public static Object doOthers(VirtualFrame frame, Object obj, Object formatSpec,
+                    @Bind Node inliningTarget,
                     @Shared("impl") @Cached PyObjectFormatStr formatStr) {
         return formatStr.execute(frame, inliningTarget, obj, formatSpec);
     }
@@ -103,49 +110,34 @@ public abstract class PyObjectFormat extends PNodeWithContext {
     public abstract static class PyObjectFormatStr extends PNodeWithContext {
         public abstract Object execute(Frame frame, Node inliningTarget, Object obj, Object formatSpec);
 
-        static boolean isEmptyString(Object formatSpec) {
-            // to keep the fast-path optimization guard simple, we ignore empty PStrings
-            return (formatSpec instanceof TruffleString && ((TruffleString) formatSpec).isEmpty());
-        }
-
-        @Specialization(guards = {"isString(obj)", "isEmptyString(formatSpec)"})
-        static Object doString(Object obj, Object formatSpec) {
+        // to keep the fast-path optimization guard simple, we ignore PStrings
+        @Specialization(guards = {"formatSpec.isEmpty()"})
+        static Object doString(TruffleString obj, TruffleString formatSpec) {
             return obj;
         }
 
-        @Specialization(guards = {"isEmptyString(formatSpec)"})
-        static Object doLong(long obj, Object formatSpec) {
-            return obj;
-        }
-
-        // Note: PRaiseNode is @Exclusive to workaround a bug in DSL
         @Specialization(guards = "isString(formatSpec)")
-        static Object doGeneric(VirtualFrame frame, Object obj, Object formatSpec,
-                        @Cached(parameters = "Format", inline = false) LookupAndCallBinaryNode callFormat,
-                        @Exclusive @Cached(inline = false) PRaiseNode raiseNode) {
-            Object res = callFormat.executeObject(frame, obj, formatSpec);
-            if (res == NO_VALUE) {
-                throw raiseNode.raise(TypeError, ErrorMessages.TYPE_DOESNT_DEFINE_FORMAT, obj);
+        static Object doGeneric(VirtualFrame frame, Node inliningTarget, Object obj, Object formatSpec,
+                        @Cached GetClassNode getClassNode,
+                        @Cached LookupSpecialMethodNode.Dynamic lookupFormat,
+                        @Cached CallBinaryMethodNode callFormat,
+                        @Cached PRaiseNode raiseNode) {
+            Object formatMethod = lookupFormat.execute(frame, inliningTarget, getClassNode.execute(inliningTarget, obj), T___FORMAT__, obj);
+            if (formatMethod != PNone.NO_VALUE) {
+                Object res = callFormat.executeObject(frame, formatMethod, obj, formatSpec);
+                if (!PGuards.isString(res)) {
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_MUST_RETURN_S_NOT_P, T___FORMAT__, "str", res);
+                }
+                return res;
+            } else {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.TYPE_DOESNT_DEFINE_FORMAT, obj);
             }
-            if (!PGuards.isString(res)) {
-                throw raiseNode.raise(TypeError, ErrorMessages.S_MUST_RETURN_S_NOT_P, T___FORMAT__, "str", res);
-            }
-            return res;
         }
 
-        @Specialization(guards = "isString(formatSpec)", replaces = "doGeneric")
-        static Object doGenericUncached(VirtualFrame frame, Object obj, Object formatSpec) {
-            PythonUtils.assertUncached();
-            Object klass = GetClassNode.executeUncached(obj);
-            Object slot = LookupCallableSlotInMRONode.getUncached(SpecialMethodSlot.Format).execute(klass);
-            return CallBinaryMethodNode.getUncached().executeObject(frame, slot, obj, formatSpec);
-        }
-
-        // Note: PRaiseNode is @Exclusive to workaround a bug in DSL
         @Fallback
         static Object doNonStringFormat(Object obj, Object formatSpec,
-                        @Exclusive @Cached(inline = false) PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.SystemError, ErrorMessages.S_MUST_BE_S_NOT_P, "Format specifier", "a string", formatSpec);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.SystemError, ErrorMessages.S_MUST_BE_S_NOT_P, "Format specifier", "a string", formatSpec);
         }
     }
 }

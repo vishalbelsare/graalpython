@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,8 +43,12 @@ package com.oracle.graal.python.test.integration.advanced;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.io.IOAccess;
 import org.junit.Before;
 import org.junit.Test;
@@ -72,9 +76,39 @@ public class ResourcesTest {
 
     @Test
     public void testResourcesAlwaysAllowReading() {
-        try (Context context = Context.newBuilder("python").allowIO(IOAccess.NONE).option("python.PythonHome", "/path/that/does/not/exist").build()) {
+        try (Engine engine = Engine.create("python");
+                        Context context = Context.newBuilder("python").engine(engine).allowIO(IOAccess.NONE).option("python.PythonHome", "/path/that/does/not/exist").build()) {
             String foundHome = context.eval("python", "import email; email.__spec__.origin").asString();
             assertTrue(foundHome, foundHome.contains("python" + File.separator + "python-home"));
         }
+    }
+
+    @Test
+    public void testTracebackSourceLineRespectsDeniedIO() throws IOException {
+        Path sourceFile = Files.createTempFile("graalpy-traceback-source", ".py");
+        String leakedLine = "this line must not appear in the traceback";
+        Files.writeString(sourceFile, leakedLine + "\n");
+        try (Context context = Context.newBuilder("python").allowIO(IOAccess.NONE).build()) {
+            String traceback = context.eval("python", """
+                            import io
+                            import traceback
+
+                            code = compile("1/0\\n", '%s', "exec")
+                            out = io.StringIO()
+                            try:
+                                exec(code)
+                            except ZeroDivisionError:
+                                traceback.print_exc(file=out)
+                            out.getvalue()
+                            """.formatted(escapePythonString(sourceFile.toString()))).asString();
+            assertTrue(traceback, traceback.contains(sourceFile.toString()));
+            assertTrue(traceback, !traceback.contains(leakedLine));
+        } finally {
+            Files.deleteIfExists(sourceFile);
+        }
+    }
+
+    private static String escapePythonString(String value) {
+        return value.replace("\\", "\\\\").replace("'", "\\'");
     }
 }

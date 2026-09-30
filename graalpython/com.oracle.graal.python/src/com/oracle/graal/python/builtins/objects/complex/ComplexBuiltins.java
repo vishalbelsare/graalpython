@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,103 +42,798 @@ package com.oracle.graal.python.builtins.objects.complex;
 
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyComplexObject__cval__imag;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyComplexObject__cval__real;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ABS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ADD__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___BOOL__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EQ__;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readDoubleField;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_COMPLEX;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___COMPLEX__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___FORMAT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETNEWARGS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___HASH__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___MUL__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEG__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___POS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___POW__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RADD__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RMUL__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RPOW__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RSUB__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RTRUEDIV__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SUB__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___TRUEDIV__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___COMPLEX__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.OverflowError;
+import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ZeroDivisionError;
 import static com.oracle.graal.python.runtime.formatting.FormattingUtils.validateForFloat;
 
+import java.lang.ref.Reference;
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
+import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PNotImplemented;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PyObjectCheckFunctionResultNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
 import com.oracle.graal.python.builtins.objects.common.FormatNodeBase;
 import com.oracle.graal.python.builtins.objects.complex.ComplexBuiltinsClinicProviders.FormatNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.floats.FloatBuiltins;
+import com.oracle.graal.python.builtins.objects.floats.FloatUtils;
+import com.oracle.graal.python.builtins.objects.floats.PFloat;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.HashBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotInquiry.NbBoolBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare;
+import com.oracle.graal.python.lib.CanBeDoubleNode;
+import com.oracle.graal.python.lib.PyComplexCheckExactNode;
+import com.oracle.graal.python.lib.PyComplexCheckNode;
+import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
+import com.oracle.graal.python.lib.PyFloatCheckNode;
+import com.oracle.graal.python.lib.PyLongAsDoubleNode;
+import com.oracle.graal.python.lib.PyLongCheckNode;
 import com.oracle.graal.python.lib.PyObjectHashNode;
+import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
+import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode.LookupAndCallUnaryDynamicNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
-import com.oracle.graal.python.nodes.util.CoerceToComplexNode;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles;
+import com.oracle.graal.python.nodes.truffle.PythonIntegerAndFloatTypes;
+import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.runtime.formatting.ComplexFormatter;
 import com.oracle.graal.python.runtime.formatting.InternalFormat;
 import com.oracle.graal.python.runtime.formatting.InternalFormat.Spec;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.CompilerDirectives.ValueType;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PComplex)
 public final class ComplexBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = ComplexBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ComplexBuiltinsFactory.getFactories();
     }
 
+    @ValueType
+    public static final class ComplexValue {
+        private final double real;
+        private final double imag;
+
+        public ComplexValue(double real, double imag) {
+            this.real = real;
+            this.imag = imag;
+        }
+
+        public double getReal() {
+            return real;
+        }
+
+        public double getImag() {
+            return imag;
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    public abstract static class ToComplexValueNode extends Node {
+        public abstract ComplexValue execute(Node inliningTarget, Object v);
+
+        public static ComplexValue executeUncached(Object v) {
+            return ComplexBuiltinsFactory.ToComplexValueNodeGen.getUncached().execute(null, v);
+        }
+
+        @Specialization
+        static ComplexValue doComplex(PComplex v) {
+            return new ComplexValue(v.getReal(), v.getImag());
+        }
+
+        @Specialization(guards = "check.execute(inliningTarget, v)", limit = "1")
+        @InliningCutoff
+        static ComplexValue doNative(@SuppressWarnings("unused") Node inliningTarget, PythonAbstractNativeObject v,
+                        @SuppressWarnings("unused") @Cached PyComplexCheckNode check) {
+            double real = readDoubleField(v.getPtr(), PyComplexObject__cval__real);
+            double imag = readDoubleField(v.getPtr(), PyComplexObject__cval__imag);
+            return new ComplexValue(real, imag);
+        }
+
+        @Specialization
+        static ComplexValue doInt(int v) {
+            return new ComplexValue(v, 0);
+        }
+
+        @Specialization
+        static ComplexValue doDouble(double v) {
+            return new ComplexValue(v, 0);
+        }
+
+        @Specialization(guards = "check.execute(inliningTarget, v)", limit = "1")
+        @InliningCutoff
+        static ComplexValue doIntGeneric(Node inliningTarget, Object v,
+                        @SuppressWarnings("unused") @Cached PyLongCheckNode check,
+                        @Cached PyLongAsDoubleNode longAsDoubleNode) {
+            return new ComplexValue(longAsDoubleNode.execute(inliningTarget, v), 0);
+        }
+
+        @Specialization(guards = "check.execute(inliningTarget, v)", limit = "1")
+        @InliningCutoff
+        static ComplexValue doFloatGeneric(Node inliningTarget, Object v,
+                        @SuppressWarnings("unused") @Cached PyFloatCheckNode check,
+                        @Cached PyFloatAsDoubleNode floatAsDoubleNode) {
+            return new ComplexValue(floatAsDoubleNode.execute(null, inliningTarget, v), 0);
+        }
+
+        @Fallback
+        @SuppressWarnings("unused")
+        static ComplexValue doOther(Node inliningTarget, Object v) {
+            return null;
+        }
+    }
+
+    /** Equivalent of CPython's {@code try_complex_special_method}. */
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    public abstract static class TryComplexSpecialMethodNode extends Node {
+        public abstract Object execute(VirtualFrame frame, Node inliningTarget, Object object);
+
+        public static Object executeUncached(Object object) {
+            return ComplexBuiltinsFactory.TryComplexSpecialMethodNodeGen.getUncached().execute(null, null, object);
+        }
+
+        @Specialization
+        static Object doObject(VirtualFrame frame, Node inliningTarget, Object object,
+                        @Cached(inline = false) LookupAndCallUnaryDynamicNode callComplex,
+                        @Cached PyComplexCheckExactNode checkExact,
+                        @Cached PyComplexCheckNode check,
+                        @Cached(inline = false) WarningsModuleBuiltins.WarnNode warnNode,
+                        @Cached PRaiseNode raiseNode) {
+            Object result = callComplex.executeObject(object, T___COMPLEX__);
+            if (result == PNone.NO_VALUE || checkExact.execute(inliningTarget, result)) {
+                return result;
+            }
+            if (!check.execute(inliningTarget, result)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.COMPLEX_RETURNED_NON_COMPLEX, result);
+            }
+            warnNode.warnFormat(frame, null, PythonBuiltinClassType.DeprecationWarning, 1,
+                            ErrorMessages.WARN_COMPLEX_RETURNED_NON_COMPLEX, result);
+            return result;
+        }
+    }
+
+    // complex([real[, imag]])
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_COMPLEX, minNumOfPositionalArgs = 1, parameterNames = {"$cls", "real", "imag"})
     @GenerateNodeFactory
-    @Builtin(name = J___ABS__, minNumOfPositionalArgs = 1)
+    public abstract static class ComplexNewNode extends PythonTernaryBuiltinNode {
+        @Child private PyObjectReprAsObjectNode reprNode;
+
+        @GenerateInline
+        @GenerateCached(false)
+        @GenerateUncached
+        abstract static class CreateComplexNode extends Node {
+            private static final CApiTiming C_API_TIMING = CApiTiming.create(true, NativeCAPISymbol.FUN_COMPLEX_SUBTYPE_FROM_DOUBLES);
+
+            public abstract Object execute(Node inliningTarget, Object cls, double real, double imaginary);
+
+            public static Object executeUncached(Object cls, double real, double imaginary) {
+                return ComplexBuiltinsFactory.ComplexNewNodeFactory.CreateComplexNodeGen.getUncached().execute(null, cls, real, imaginary);
+            }
+
+            @Specialization(guards = "!needsNativeAllocationNode.execute(inliningTarget, cls)", limit = "1")
+            static PComplex doManaged(@SuppressWarnings("unused") Node inliningTarget, Object cls, double real, double imaginary,
+                            @SuppressWarnings("unused") @Cached TypeNodes.NeedsNativeAllocationNode needsNativeAllocationNode,
+                            @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+                return PFactory.createComplex(cls, getInstanceShape.execute(cls), real, imaginary);
+            }
+
+            @Fallback
+            static Object doNative(Node inliningTarget, Object cls, double real, double imaginary,
+                            @Cached CApiTransitions.PythonToNativeInternalNode toNativeNode,
+                            @Cached CApiTransitions.NativeToPythonInternalNode toPythonNode,
+                            @Cached(inline = false) PyObjectCheckFunctionResultNode checkFunctionResultNode) {
+                NativeCAPISymbol symbol = NativeCAPISymbol.FUN_COMPLEX_SUBTYPE_FROM_DOUBLES;
+                // classes are always Python objects
+                assert EnsurePythonObjectNode.doesNotNeedPromotion(cls);
+                long clsPointer = toNativeNode.execute(inliningTarget, cls);
+                try {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    var callable = CApiContext.getNativeSymbol(inliningTarget, symbol);
+                    long nativeResult = ExternalFunctionInvoker.invokeCOMPLEX_SUBTYPE_FROM_DOUBLES(null, C_API_TIMING,
+                                    context.ensureNativeContext(), BoundaryCallData.getUncached(), context.getThreadState(PythonLanguage.get(inliningTarget)), callable,
+                                    clsPointer, real, imaginary);
+                    return checkFunctionResultNode.execute(context, symbol.getTsName(), toPythonNode.executeTransfer(inliningTarget, nativeResult));
+                } finally {
+                    Reference.reachabilityFence(cls);
+                }
+            }
+        }
+
+        @Specialization(guards = {"isNoValue(real)", "isNoValue(imag)"})
+        @SuppressWarnings("unused")
+        static Object complexFromNone(Object cls, PNone real, PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, 0, 0);
+        }
+
+        @Specialization
+        static Object complexFromIntInt(Object cls, int real, int imaginary,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real, imaginary);
+        }
+
+        @Specialization
+        static Object complexFromLongLong(Object cls, long real, long imaginary,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real, imaginary);
+        }
+
+        @Specialization
+        static Object complexFromLongLong(Object cls, PInt real, PInt imaginary,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real.doubleValueWithOverflow(inliningTarget),
+                            imaginary.doubleValueWithOverflow(inliningTarget));
+        }
+
+        @Specialization
+        static Object complexFromDoubleDouble(Object cls, double real, double imaginary,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real, imaginary);
+        }
+
+        @Specialization(guards = "isNoValue(imag)")
+        static Object complexFromDouble(Object cls, double real, @SuppressWarnings("unused") PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real, 0);
+        }
+
+        @Specialization(guards = "isNoValue(real)")
+        static Object complexFromDoubleImag(Object cls, @SuppressWarnings("unused") PNone real, double imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, 0, imag);
+        }
+
+        @Specialization(guards = "isNoValue(imag)")
+        Object complexFromDouble(VirtualFrame frame, Object cls, PFloat real, @SuppressWarnings("unused") PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared("isPrimitive") @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile isPrimitiveProfile,
+                        @Cached.Shared("isBuiltinObj") @Cached PyComplexCheckExactNode isBuiltinObjectProfile,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            return complexFromObject(frame, cls, real, imag, inliningTarget, createComplexNode, canBeDoubleNode, asDoubleNode, isComplexType, tryComplexNode, isPrimitiveProfile,
+                            isBuiltinObjectProfile,
+                            raiseNode);
+        }
+
+        @Specialization(guards = "isNoValue(real)")
+        Object complexFromDouble(VirtualFrame frame, Object cls, @SuppressWarnings("unused") PNone real, PFloat imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared("isPrimitive") @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile isPrimitiveProfile,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            return complexFromObject(frame, cls, real, imag, inliningTarget, createComplexNode, canBeDoubleNode, asDoubleNode, isComplexType, tryComplexNode, isPrimitiveProfile,
+                            raiseNode);
+        }
+
+        @Specialization(guards = "isNoValue(imag)")
+        static Object complexFromInt(Object cls, int real, @SuppressWarnings("unused") PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real, 0);
+        }
+
+        @Specialization(guards = "isNoValue(real)")
+        static Object complexFromIntImag(Object cls, @SuppressWarnings("unused") PNone real, int imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, 0, imag);
+        }
+
+        @Specialization(guards = "isNoValue(imag)")
+        static Object complexFromLong(Object cls, long real, @SuppressWarnings("unused") PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, real, 0);
+        }
+
+        @Specialization(guards = "isNoValue(real)")
+        static Object complexFromLongImag(Object cls, @SuppressWarnings("unused") PNone real, long imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, 0, imag);
+        }
+
+        @Specialization(guards = "isNoValue(imag)")
+        Object complexFromLong(VirtualFrame frame, Object cls, PInt real, @SuppressWarnings("unused") PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared("isPrimitive") @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile isPrimitiveProfile,
+                        @Cached.Shared("isBuiltinObj") @Cached PyComplexCheckExactNode complexCheck,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            return complexFromObject(frame, cls, real, imag, inliningTarget, createComplexNode, canBeDoubleNode, asDoubleNode, isComplexType, tryComplexNode, isPrimitiveProfile, complexCheck,
+                            raiseNode);
+        }
+
+        @Specialization(guards = "isNoValue(real)")
+        Object complexFromLong(VirtualFrame frame, Object cls, @SuppressWarnings("unused") PNone real, PInt imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared("isPrimitive") @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile isPrimitiveProfile,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            return complexFromObject(frame, cls, real, imag, inliningTarget, createComplexNode, canBeDoubleNode, asDoubleNode, isComplexType, tryComplexNode, isPrimitiveProfile,
+                            raiseNode);
+        }
+
+        @Specialization(guards = {"isNoValue(imag)", "!isNoValue(number)", "!isString(number)"})
+        Object complexFromObject(VirtualFrame frame, Object cls, Object number, @SuppressWarnings("unused") PNone imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared("isPrimitive") @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile isPrimitiveProfile,
+                        @Cached.Shared("isBuiltinObj") @Cached PyComplexCheckExactNode complexCheck,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex value = getComplexNumberFromObject(frame, number, inliningTarget, isComplexType, tryComplexNode);
+            if (value == null) {
+                if (canBeDoubleNode.execute(inliningTarget, number)) {
+                    return createComplexNode.execute(inliningTarget, cls, asDoubleNode.execute(frame, inliningTarget, number), 0.0);
+                } else {
+                    throw raiseFirstArgError(number, inliningTarget, raiseNode);
+                }
+            }
+            if (isPrimitiveProfile.profileClass(inliningTarget, cls, PythonBuiltinClassType.PComplex)) {
+                if (complexCheck.execute(inliningTarget, value)) {
+                    return value;
+                }
+                return PFactory.createComplex(PythonLanguage.get(inliningTarget), value.getReal(), value.getImag());
+            }
+            return createComplexNode.execute(inliningTarget, cls, value.getReal(), value.getImag());
+        }
+
+        @Specialization(guards = {"!isNoValue(imag)", "isNoValue(number)"})
+        Object complexFromObject(VirtualFrame frame, Object cls, @SuppressWarnings("unused") PNone number, Object imag,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared("isPrimitive") @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile isPrimitiveProfile,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex value = getComplexNumberFromObject(frame, imag, inliningTarget, isComplexType, tryComplexNode);
+            if (value == null) {
+                if (canBeDoubleNode.execute(inliningTarget, imag)) {
+                    return createComplexNode.execute(inliningTarget, cls, 0.0, asDoubleNode.execute(frame, inliningTarget, imag));
+                } else {
+                    throw raiseSecondArgError(imag, inliningTarget, raiseNode);
+                }
+            }
+            if (isPrimitiveProfile.profileClass(inliningTarget, cls, PythonBuiltinClassType.PComplex)) {
+                return PFactory.createComplex(PythonLanguage.get(inliningTarget), -value.getImag(), 0.0);
+            }
+            return createComplexNode.execute(inliningTarget, cls, -value.getImag(), 0.0);
+        }
+
+        @Specialization
+        static Object complexFromLongComplex(Object cls, long one, PComplex two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, one - two.getImag(), two.getReal());
+        }
+
+        @Specialization
+        static Object complexFromPIntComplex(Object cls, PInt one, PComplex two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, one.doubleValueWithOverflow(inliningTarget) - two.getImag(), two.getReal());
+        }
+
+        @Specialization
+        static Object complexFromDoubleComplex(Object cls, double one, PComplex two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode) {
+            return createComplexNode.execute(inliningTarget, cls, one - two.getImag(), two.getReal());
+        }
+
+        @Specialization(guards = {"!isString(one)", "!isNoValue(one)"})
+        Object complexFromComplexLong(VirtualFrame frame, Object cls, Object one, long two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex value = getComplexNumberFromObject(frame, one, inliningTarget, isComplexType, tryComplexNode);
+            if (value == null) {
+                if (canBeDoubleNode.execute(inliningTarget, one)) {
+                    return createComplexNode.execute(inliningTarget, cls, asDoubleNode.execute(frame, inliningTarget, one), two);
+                } else {
+                    throw raiseFirstArgError(one, inliningTarget, raiseNode);
+                }
+            }
+            return createComplexNode.execute(inliningTarget, cls, value.getReal(), value.getImag() + two);
+        }
+
+        @Specialization(guards = {"!isString(one)", "!isNoValue(one)"})
+        Object complexFromComplexDouble(VirtualFrame frame, Object cls, Object one, double two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex value = getComplexNumberFromObject(frame, one, inliningTarget, isComplexType, tryComplexNode);
+            if (value == null) {
+                if (canBeDoubleNode.execute(inliningTarget, one)) {
+                    return createComplexNode.execute(inliningTarget, cls, asDoubleNode.execute(frame, inliningTarget, one), two);
+                } else {
+                    throw raiseFirstArgError(one, inliningTarget, raiseNode);
+                }
+            }
+            return createComplexNode.execute(inliningTarget, cls, value.getReal(), value.getImag() + two);
+        }
+
+        @Specialization(guards = {"!isString(one)", "!isNoValue(one)"})
+        Object complexFromComplexPInt(VirtualFrame frame, Object cls, Object one, PInt two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex value = getComplexNumberFromObject(frame, one, inliningTarget, isComplexType, tryComplexNode);
+            if (value == null) {
+                if (canBeDoubleNode.execute(inliningTarget, one)) {
+                    return createComplexNode.execute(inliningTarget, cls, asDoubleNode.execute(frame, inliningTarget, one), two.doubleValueWithOverflow(this));
+                } else {
+                    throw raiseFirstArgError(one, inliningTarget, raiseNode);
+                }
+            }
+            return createComplexNode.execute(inliningTarget, cls, value.getReal(), value.getImag() + two.doubleValueWithOverflow(this));
+        }
+
+        @Specialization(guards = {"!isString(one)", "!isNoValue(one)"})
+        Object complexFromComplexComplex(VirtualFrame frame, Object cls, Object one, PComplex two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex value = getComplexNumberFromObject(frame, one, inliningTarget, isComplexType, tryComplexNode);
+            if (value == null) {
+                if (canBeDoubleNode.execute(inliningTarget, one)) {
+                    return createComplexNode.execute(inliningTarget, cls, asDoubleNode.execute(frame, inliningTarget, one) - two.getImag(), two.getReal());
+                } else {
+                    throw raiseFirstArgError(one, inliningTarget, raiseNode);
+                }
+            }
+            return createComplexNode.execute(inliningTarget, cls, value.getReal() - two.getImag(), value.getImag() + two.getReal());
+        }
+
+        @Specialization(guards = {"isString(two)"})
+        Object secondArgString(VirtualFrame frame, Object cls, Object one, Object two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.COMPLEX_SECOND_ARG_CANT_BE_STRING);
+        }
+
+        @Specialization(guards = {"!isString(one)", "!isNoValue(two)", "!isPComplex(two)", "!isString(two)"})
+        @SuppressWarnings("truffle-static-method")
+        Object complexFromComplexObject(VirtualFrame frame, Object cls, Object one, Object two,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared @Cached CreateComplexNode createComplexNode,
+                        @Cached.Shared @Cached CanBeDoubleNode canBeDoubleNode,
+                        @Cached.Shared("floatAsDouble") @Cached PyFloatAsDoubleNode asDoubleNode,
+                        @Cached.Shared("isComplex") @Cached PyComplexCheckExactNode isComplexType,
+                        @Cached.Shared("tryComplex") @Cached TryComplexSpecialMethodNode tryComplexNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            PComplex oneValue = getComplexNumberFromObject(frame, one, inliningTarget, isComplexType, tryComplexNode);
+            if (canBeDoubleNode.execute(inliningTarget, two)) {
+                double twoValue = asDoubleNode.execute(frame, inliningTarget, two);
+                if (oneValue == null) {
+                    if (one == PNone.NO_VALUE) {
+                        return createComplexNode.execute(inliningTarget, cls, 0, twoValue);
+                    } else if (canBeDoubleNode.execute(inliningTarget, one)) {
+                        return createComplexNode.execute(inliningTarget, cls, asDoubleNode.execute(frame, inliningTarget, one), twoValue);
+                    } else {
+                        throw raiseFirstArgError(one, inliningTarget, raiseNode);
+                    }
+                }
+                return createComplexNode.execute(inliningTarget, cls, oneValue.getReal(), oneValue.getImag() + twoValue);
+            } else {
+                throw raiseSecondArgError(two, inliningTarget, raiseNode);
+            }
+        }
+
+        @Specialization
+        Object complexFromString(VirtualFrame frame, Object cls, TruffleString real, Object imaginary,
+                        @Bind Node inliningTarget,
+                        @Cached TruffleString.ToJavaStringNode toJavaStringNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            if (imaginary != PNone.NO_VALUE) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.COMPLEX_CANT_TAKE_ARG);
+            }
+            return convertStringToComplex(frame, inliningTarget, toJavaStringNode.execute(real), cls, real, raiseNode);
+        }
+
+        @Specialization
+        Object complexFromString(VirtualFrame frame, Object cls, PString real, Object imaginary,
+                        @Bind Node inliningTarget,
+                        @Cached CastToJavaStringNode castToStringNode,
+                        @Cached.Shared @Cached PRaiseNode raiseNode) {
+            if (imaginary != PNone.NO_VALUE) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.COMPLEX_CANT_TAKE_ARG);
+            }
+            return convertStringToComplex(frame, inliningTarget, castToStringNode.execute(real), cls, real, raiseNode);
+        }
+
+        private static PException raiseFirstArgError(Object x, Node inliningTarget, PRaiseNode raiseNode) {
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.ARG_MUST_BE_STRING_OR_NUMBER, "complex() first", x);
+        }
+
+        private static PException raiseSecondArgError(Object x, Node inliningTarget, PRaiseNode raiseNode) {
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.ARG_MUST_BE_NUMBER, "complex() second", x);
+        }
+
+        private PComplex getComplexNumberFromObject(VirtualFrame frame, Object object, Node inliningTarget,
+                        PyComplexCheckExactNode isComplexType, TryComplexSpecialMethodNode tryComplexNode) {
+            if (isComplexType.execute(inliningTarget, object)) {
+                return (PComplex) object;
+            }
+            Object result = tryComplexNode.execute(frame, inliningTarget, object);
+            if (result != PNone.NO_VALUE) {
+                return (PComplex) result;
+            }
+            return null;
+        }
+
+        @Fallback
+        @SuppressWarnings("unused")
+        static Object complexGeneric(Object cls, Object realObj, Object imaginaryObj,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "complex.__new__(X): X", cls);
+        }
+
+        // Adapted from CPython's complex_subtype_from_string
+        private Object convertStringToComplex(VirtualFrame frame, Node inliningTarget, String src, Object cls, Object origObj, PRaiseNode raiseNode) {
+            String str = FloatUtils.removeUnicodeAndUnderscores(src);
+            if (str == null) {
+                if (reprNode == null) {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    reprNode = insert(PyObjectReprAsObjectNode.create());
+                }
+                Object strStr = reprNode.executeCached(frame, origObj);
+                if (PGuards.isString(strStr)) {
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.COULD_NOT_CONVERT_STRING_TO_COMPLEX, strStr);
+                } else {
+                    // During the formatting of "ValueError: invalid literal ..." exception,
+                    // CPython attempts to raise "TypeError: __repr__ returned non-string",
+                    // which gets later overwitten with the original "ValueError",
+                    // but without any message (since the message formatting failed)
+                    throw raiseNode.raise(inliningTarget, ValueError);
+                }
+            }
+            Object c = convertStringToComplexOrNull(str, cls);
+            if (c == null) {
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.COMPLEX_ARG_IS_MALFORMED_STR);
+            }
+            return c;
+        }
+
+        // Adapted from CPython's complex_from_string_inner
+        @TruffleBoundary
+        private Object convertStringToComplexOrNull(String str, Object cls) {
+            int len = str.length();
+
+            // position on first nonblank
+            int i = FloatUtils.skipAsciiWhitespace(str, 0, len);
+
+            boolean gotBracket;
+            if (i < len && str.charAt(i) == '(') {
+                // Skip over possible bracket from repr().
+                gotBracket = true;
+                i = FloatUtils.skipAsciiWhitespace(str, i + 1, len);
+            } else {
+                gotBracket = false;
+            }
+
+            double x, y;
+            boolean expectJ;
+
+            // first look for forms starting with <float>
+            FloatUtils.StringToDoubleResult res1 = FloatUtils.stringToDouble(str, i, len);
+            if (res1 != null) {
+                // all 4 forms starting with <float> land here
+                i = res1.position;
+                char ch = i < len ? str.charAt(i) : '\0';
+                if (ch == '+' || ch == '-') {
+                    // <float><signed-float>j | <float><sign>j
+                    x = res1.value;
+                    FloatUtils.StringToDoubleResult res2 = FloatUtils.stringToDouble(str, i, len);
+                    if (res2 != null) {
+                        // <float><signed-float>j
+                        y = res2.value;
+                        i = res2.position;
+                    } else {
+                        // <float><sign>j
+                        y = ch == '+' ? 1.0 : -1.0;
+                        i++;
+                    }
+                    expectJ = true;
+                } else if (ch == 'j' || ch == 'J') {
+                    // <float>j
+                    i++;
+                    y = res1.value;
+                    x = 0;
+                    expectJ = false;
+                } else {
+                    // <float>
+                    x = res1.value;
+                    y = 0;
+                    expectJ = false;
+                }
+            } else {
+                // not starting with <float>; must be <sign>j or j
+                char ch = i < len ? str.charAt(i) : '\0';
+                if (ch == '+' || ch == '-') {
+                    // <sign>j
+                    y = ch == '+' ? 1.0 : -1.0;
+                    i++;
+                } else {
+                    // j
+                    y = 1.0;
+                }
+                x = 0;
+                expectJ = true;
+            }
+
+            if (expectJ) {
+                char ch = i < len ? str.charAt(i) : '\0';
+                if (!(ch == 'j' || ch == 'J')) {
+                    return null;
+                }
+                i++;
+            }
+
+            // trailing whitespace and closing bracket
+            i = FloatUtils.skipAsciiWhitespace(str, i, len);
+            if (gotBracket) {
+                // if there was an opening parenthesis, then the corresponding
+                // closing parenthesis should be right here
+                if (i >= len || str.charAt(i) != ')') {
+                    return null;
+                }
+                i = FloatUtils.skipAsciiWhitespace(str, i + 1, len);
+            }
+
+            // we should now be at the end of the string
+            if (i != len) {
+                return null;
+            }
+            return CreateComplexNode.executeUncached(cls, x, y);
+        }
+    }
+
+    @Builtin(name = J___COMPLEX__, minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class ComplexNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static Object complex(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached PyComplexCheckExactNode check,
+                        @Cached ToComplexValueNode toComplexValueNode) {
+            if (check.execute(inliningTarget, self)) {
+                return self;
+            } else {
+                ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+                return PFactory.createComplex(PythonLanguage.get(inliningTarget), c.real, c.imag);
+            }
+        }
+    }
+
+    @Slot(value = SlotKind.nb_absolute, isComplex = true)
+    @GenerateNodeFactory
     public abstract static class AbsNode extends PythonUnaryBuiltinNode {
 
         public abstract double executeDouble(Object arg);
 
         @Specialization
-        static double abs(PComplex c,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+        @InliningCutoff
+        static double abs(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode,
+                        @Cached PRaiseNode raiseNode) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
             double x = c.getReal();
             double y = c.getImag();
             if (Double.isInfinite(x) || Double.isInfinite(y)) {
@@ -171,7 +866,7 @@ public final class ComplexBuiltins extends PythonBuiltins {
                     // remove scaling
                     double r = scalb(scaledH, middleExp);
                     if (Double.isInfinite(r)) {
-                        throw raiseNode.get(inliningTarget).raise(PythonErrorType.OverflowError, ErrorMessages.ABSOLUTE_VALUE_TOO_LARGE);
+                        throw raiseNode.raise(inliningTarget, PythonErrorType.OverflowError, ErrorMessages.ABSOLUTE_VALUE_TOO_LARGE);
                     }
                     return r;
                 }
@@ -277,47 +972,52 @@ public final class ComplexBuiltins extends PythonBuiltins {
 
     }
 
-    @Builtin(name = J___RADD__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___ADD__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.nb_add, isComplex = true)
     @GenerateNodeFactory
-    abstract static class AddNode extends PythonBinaryBuiltinNode {
+    abstract static class AddNode extends BinaryOpBuiltinNode {
         @Specialization
-        static PComplex doComplexLong(PComplex left, long right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() + right, left.getImag());
+        static PComplex doInt(PComplex left, int right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left.getReal() + right, left.getImag() + 0.0);
         }
 
         @Specialization
-        static PComplex doComplexPInt(PComplex left, PInt right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() + right.doubleValue(), left.getImag());
+        static PComplex doDouble(PComplex left, double right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left.getReal() + right, left.getImag() + 0.0);
         }
 
         @Specialization
-        static PComplex doComplexDouble(PComplex left, double right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() + right, left.getImag());
+        static PComplex doInt(int left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left + right.getReal(), 0.0 + right.getImag());
         }
 
         @Specialization
-        static PComplex doComplex(PComplex left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() + right.getReal(), left.getImag() + right.getImag());
+        static PComplex doDouble(double left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left + right.getReal(), 0.0 + right.getImag());
         }
 
-        @SuppressWarnings("unused")
-        @Fallback
-        static PNotImplemented doComplex(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
+        @Specialization
+        static Object doGeneric(Object leftObj, Object rightObj,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexLeft,
+                        @Cached ToComplexValueNode toComplexRight,
+                        @Cached InlinedConditionProfile notImplementedProfile,
+                        @Bind PythonLanguage language) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            ComplexValue right = toComplexRight.execute(inliningTarget, rightObj);
+            if (notImplementedProfile.profile(inliningTarget, left == null || right == null)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            return PFactory.createComplex(language, left.getReal() + right.getReal(), left.getImag() + right.getImag());
         }
     }
 
-    @Builtin(name = J___RTRUEDIV__, minNumOfPositionalArgs = 2, reverseOperation = true)
-    @Builtin(name = J___TRUEDIV__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.nb_true_divide, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class DivNode extends PythonBinaryBuiltinNode {
+    public abstract static class DivNode extends BinaryOpBuiltinNode {
 
         public abstract PComplex executeComplex(VirtualFrame frame, Object left, Object right);
 
@@ -327,36 +1027,20 @@ public final class ComplexBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        static PComplex doComplexDouble(PComplex left, double right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            double opNormSq = right * right;
-            double realPart = left.getReal() * right;
-            double imagPart = left.getImag() * right;
-            return factory.createComplex(realPart / opNormSq, imagPart / opNormSq);
-        }
-
-        @Specialization
-        static PComplex doComplexInt(PComplex left, long right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            double opNormSq = right * right;
-            double realPart = left.getReal() * right;
-            double imagPart = left.getImag() * right;
-            return factory.createComplex(realPart / opNormSq, imagPart / opNormSq);
-        }
-
-        @Specialization
-        static PComplex doComplexPInt(PComplex left, PInt right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return doComplexDouble(left, right.doubleValue(), factory);
-        }
-
-        @Specialization
-        static PComplex doComplex(PComplex left, PComplex right,
-                        @Bind("this") Node inliningTarget,
+        static Object doComplex(Object leftObj, Object rightObj,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexLeft,
+                        @Cached ToComplexValueNode toComplexRight,
+                        @Cached InlinedConditionProfile notImplementedProfile,
                         @Cached InlinedConditionProfile topConditionProfile,
                         @Cached InlinedConditionProfile zeroDivisionProfile,
-                        @Shared @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            ComplexValue right = toComplexRight.execute(inliningTarget, rightObj);
+            if (notImplementedProfile.profile(inliningTarget, left == null || right == null)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
             double absRightReal = right.getReal() < 0 ? -right.getReal() : right.getReal();
             double absRightImag = right.getImag() < 0 ? -right.getImag() : right.getImag();
             double real;
@@ -364,7 +1048,7 @@ public final class ComplexBuiltins extends PythonBuiltins {
             if (topConditionProfile.profile(inliningTarget, absRightReal >= absRightImag)) {
                 /* divide tops and bottom by right.real */
                 if (zeroDivisionProfile.profile(inliningTarget, absRightReal == 0.0)) {
-                    throw raiseNode.get(inliningTarget).raise(PythonErrorType.ZeroDivisionError, ErrorMessages.S_DIVISION_BY_ZERO, "complex");
+                    throw raiseNode.raise(inliningTarget, PythonErrorType.ZeroDivisionError, ErrorMessages.S_DIVISION_BY_ZERO, "complex");
                 } else {
                     double ratio = right.getImag() / right.getReal();
                     double denom = right.getReal() + right.getImag() * ratio;
@@ -378,375 +1062,269 @@ public final class ComplexBuiltins extends PythonBuiltins {
                 real = (left.getReal() * ratio + left.getImag()) / denom;
                 imag = (left.getImag() * ratio - left.getReal()) / denom;
             }
-            return factory.createComplex(real, imag);
+            return PFactory.createComplex(language, real, imag);
         }
 
-        @Specialization
-        static PComplex doComplexDouble(double left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return doubleDivComplex(left, right, factory);
-        }
-
-        @Specialization
-        static PComplex doComplexInt(long left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
+        static PComplex doubleDivComplex(double left, PComplex right, PythonLanguage language) {
             double oprealSq = right.getReal() * right.getReal();
             double opimagSq = right.getImag() * right.getImag();
             double realPart = right.getReal() * left;
             double imagPart = right.getImag() * left;
             double denom = oprealSq + opimagSq;
-            return factory.createComplex(realPart / denom, -imagPart / denom);
-        }
-
-        @Specialization
-        static PComplex doComplexPInt(PInt left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return doComplexDouble(left.doubleValue(), right, factory);
-        }
-
-        @SuppressWarnings("unused")
-        @Fallback
-        static PNotImplemented doComplex(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-
-        static PComplex doubleDivComplex(double left, PComplex right, PythonObjectFactory factory) {
-            double oprealSq = right.getReal() * right.getReal();
-            double opimagSq = right.getImag() * right.getImag();
-            double realPart = right.getReal() * left;
-            double imagPart = right.getImag() * left;
-            double denom = oprealSq + opimagSq;
-            return factory.createComplex(realPart / denom, -imagPart / denom);
+            return PFactory.createComplex(language, realPart / denom, -imagPart / denom);
         }
     }
 
+    @Slot(value = SlotKind.nb_multiply, isComplex = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    abstract static class RDivNode extends PythonBinaryBuiltinNode {
-        @SuppressWarnings("unused")
-        @Fallback
-        static PNotImplemented doComplex(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @GenerateNodeFactory
-    @Builtin(name = J___RMUL__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___MUL__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    abstract static class MulNode extends PythonBinaryBuiltinNode {
+    abstract static class MulNode extends BinaryOpBuiltinNode {
         @Specialization
-        static PComplex doComplexDouble(PComplex left, double right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() * right, left.getImag() * right);
+        static Object doComplex(Object leftObj, Object rightObj,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexLeft,
+                        @Cached ToComplexValueNode toComplexRight,
+                        @Cached InlinedConditionProfile notImplementedProfile,
+                        @Bind PythonLanguage language) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            ComplexValue right = toComplexRight.execute(inliningTarget, rightObj);
+            if (notImplementedProfile.profile(inliningTarget, left == null || right == null)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            ComplexValue res = multiply(left, right);
+            return PFactory.createComplex(language, res.getReal(), res.getImag());
         }
 
-        @Specialization
-        static PComplex doComplex(PComplex left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return multiply(left, right, factory);
-        }
-
-        @Specialization
-        static PComplex doComplexLong(PComplex left, long right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return doComplexDouble(left, right, factory);
-        }
-
-        @Specialization
-        static PComplex doComplexPInt(PComplex left, PInt right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return doComplexDouble(left, right.doubleValue(), factory);
-        }
-
-        @SuppressWarnings("unused")
-        @Fallback
-        static PNotImplemented doGeneric(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-
-        static PComplex multiply(PComplex left, PComplex right, PythonObjectFactory factory) {
+        static ComplexValue multiply(ComplexValue left, ComplexValue right) {
             double newReal = left.getReal() * right.getReal() - left.getImag() * right.getImag();
             double newImag = left.getReal() * right.getImag() + left.getImag() * right.getReal();
-            return factory.createComplex(newReal, newImag);
+            return new ComplexValue(newReal, newImag);
         }
     }
 
     @GenerateNodeFactory
-    @Builtin(name = J___RSUB__, minNumOfPositionalArgs = 2, reverseOperation = true)
-    @Builtin(name = J___SUB__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    abstract static class SubNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static PComplex doComplexDouble(PComplex left, double right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() - right, left.getImag());
+    @Slot(value = SlotKind.nb_subtract, isComplex = true)
+    abstract static class SubNode extends BinaryOpBuiltinNode {
+        static PComplex doComplex(PComplex left, double right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left.getReal() - right, left.getImag() - 0.0);
         }
 
         @Specialization
-        static PComplex doComplex(PComplex left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() - right.getReal(), left.getImag() - right.getImag());
+        static PComplex doComplex(PComplex left, int right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left.getReal() - right, left.getImag() - 0.0);
         }
 
         @Specialization
-        static PComplex doComplex(PComplex left, long right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left.getReal() - right, left.getImag());
+        static PComplex doComplex(int left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left - right.getReal(), 0.0 - right.getImag());
         }
 
         @Specialization
-        static PComplex doComplexDouble(double left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left - right.getReal(), -right.getImag());
+        static PComplex doComplex(double left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left - right.getReal(), 0.0 - right.getImag());
         }
 
         @Specialization
-        static PComplex doComplex(long left, PComplex right,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createComplex(left - right.getReal(), -right.getImag());
-        }
-
-        @SuppressWarnings("unused")
-        @Fallback
-        static PNotImplemented doComplex(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
+        static Object doComplex(Object leftObj, Object rightObj,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexLeft,
+                        @Cached ToComplexValueNode toComplexRight,
+                        @Cached InlinedConditionProfile notImplementedProfile,
+                        @Bind PythonLanguage language) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            ComplexValue right = toComplexRight.execute(inliningTarget, rightObj);
+            if (notImplementedProfile.profile(inliningTarget, left == null || right == null)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            return PFactory.createComplex(language, left.getReal() - right.getReal(), left.getImag() - right.getImag());
         }
     }
 
-    @Builtin(name = J___RPOW__, minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 3, reverseOperation = true)
-    @Builtin(name = J___POW__, minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 3)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.nb_power, isComplex = true)
     @GenerateNodeFactory
     abstract static class PowerNode extends PythonTernaryBuiltinNode {
 
-        static boolean isSmallPositive(long l) {
-            return l > 0 && l <= 100;
-        }
-
-        static boolean isSmallNegative(long l) {
-            return l <= 0 && l >= -100;
-        }
-
-        @Specialization(guards = "isSmallPositive(right)")
-        static PComplex doComplexLongSmallPos(PComplex left, long right, @SuppressWarnings("unused") PNone mod,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PythonObjectFactory factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            return checkOverflow(inliningTarget, complexToSmallPositiveIntPower(left, right, factory), raiseNode);
-        }
-
-        @Specialization(guards = "isSmallNegative(right)")
-        static PComplex doComplexLongSmallNeg(PComplex left, long right, @SuppressWarnings("unused") PNone mod,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PythonObjectFactory factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            return checkOverflow(inliningTarget, DivNode.doubleDivComplex(1.0, complexToSmallPositiveIntPower(left, -right, factory), factory), raiseNode);
-        }
-
-        @Specialization(guards = "!isSmallPositive(right) || !isSmallNegative(right)")
-        static PComplex doComplexLong(PComplex left, long right, @SuppressWarnings("unused") PNone mod,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PythonObjectFactory factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            return checkOverflow(inliningTarget, complexToComplexPower(left, factory.createComplex(right, 0.0), inliningTarget), raiseNode);
-        }
-
         @Specialization
-        static PComplex doComplexComplex(PComplex left, PComplex right, @SuppressWarnings("unused") PNone mod,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            return checkOverflow(inliningTarget, complexToComplexPower(left, right, inliningTarget), raiseNode);
-        }
-
-        @Specialization
-        static PComplex doGeneric(VirtualFrame frame, Object left, Object right, @SuppressWarnings("unused") PNone mod,
-                        @Bind("this") Node inliningTarget,
-                        @Cached CoerceToComplexNode coerceLeft,
-                        @Cached CoerceToComplexNode coerceRight,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            return checkOverflow(inliningTarget, complexToComplexPower(coerceLeft.execute(frame, inliningTarget, left), coerceRight.execute(frame, inliningTarget, right), inliningTarget), raiseNode);
+        static Object doGeneric(Object leftObj, Object rightObj, @SuppressWarnings("unused") PNone mod,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexLeft,
+                        @Cached ToComplexValueNode toComplexRight,
+                        @Cached InlinedConditionProfile notImplementedProfile,
+                        @Cached InlinedBranchProfile rightZeroProfile,
+                        @Cached InlinedBranchProfile leftZeroProfile,
+                        @Cached InlinedBranchProfile smallPositiveProfile,
+                        @Cached InlinedBranchProfile smallNegativeProfile,
+                        @Cached InlinedBranchProfile complexProfile,
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            ComplexValue right = toComplexRight.execute(inliningTarget, rightObj);
+            if (notImplementedProfile.profile(inliningTarget, left == null || right == null)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            PComplex result;
+            if (right.getReal() == 0.0 && right.getImag() == 0.0) {
+                rightZeroProfile.enter(inliningTarget);
+                result = PFactory.createComplex(language, 1.0, 0.0);
+            } else if (left.getReal() == 0.0 && left.getImag() == 0.0) {
+                leftZeroProfile.enter(inliningTarget);
+                if (right.getImag() != 0.0 || right.getReal() < 0.0) {
+                    throw PRaiseNode.raiseStatic(inliningTarget, ZeroDivisionError, ErrorMessages.COMPLEX_ZERO_TO_NEGATIVE_POWER);
+                }
+                result = PFactory.createComplex(language, 0.0, 0.0);
+            } else if (right.getImag() == 0.0 && right.getReal() == (int) right.getReal() && right.getReal() < 100 && right.getReal() > -100) {
+                if (right.getReal() >= 0) {
+                    smallPositiveProfile.enter(inliningTarget);
+                    result = complexToSmallPositiveIntPower(left, (int) right.getReal(), language);
+                } else {
+                    smallNegativeProfile.enter(inliningTarget);
+                    result = DivNode.doubleDivComplex(1.0, complexToSmallPositiveIntPower(left, -(int) right.getReal(), language), language);
+                }
+            } else {
+                complexProfile.enter(inliningTarget);
+                result = complexToComplexBoundary(left.getReal(), left.getImag(), right.getReal(), right.getImag(), language);
+            }
+            if (Double.isInfinite(result.getReal()) || Double.isInfinite(result.getImag())) {
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.COMPLEX_EXPONENTIATION);
+            }
+            return result;
         }
 
         @Specialization(guards = "!isPNone(mod)")
+        @InliningCutoff
         @SuppressWarnings("unused")
-        static Object doGeneric(Object left, Object right, Object mod,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.COMPLEX_MODULO);
+        static Object error(Object left, Object right, Object mod,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.COMPLEX_MODULO);
         }
 
-        private static PComplex complexToSmallPositiveIntPower(PComplex x, long n, PythonObjectFactory factory) {
+        private static PComplex complexToSmallPositiveIntPower(ComplexValue x, long n, PythonLanguage language) {
             long mask = 1;
-            PComplex r = factory.createComplex(1.0, 0.0);
-            PComplex p = x;
+            ComplexValue r = new ComplexValue(1.0, 0.0);
+            ComplexValue p = x;
             while (mask > 0 && n >= mask) {
                 if ((n & mask) != 0) {
-                    r = MulNode.multiply(r, p, factory);
+                    r = MulNode.multiply(r, p);
                 }
                 mask <<= 1;
-                p = MulNode.multiply(p, p, factory);
+                p = MulNode.multiply(p, p);
             }
-            return r;
+            return PFactory.createComplex(language, r.getReal(), r.getImag());
         }
 
         @TruffleBoundary
-        private static PComplex complexToComplexPower(PComplex a, PComplex b, Node raisingNode) {
-            PythonObjectFactory factory = PythonObjectFactory.getUncached();
-            if (b.getReal() == 0.0 && b.getImag() == 0.0) {
-                return factory.createComplex(1.0, 0.0);
+        private static PComplex complexToComplexBoundary(double leftRead, double leftImag, double rightReal, double rightImag, PythonLanguage language) {
+            PComplex result;
+            double vabs = Math.hypot(leftRead, leftImag);
+            double len = Math.pow(vabs, rightReal);
+            double at = Math.atan2(leftImag, leftRead);
+            double phase = at * rightReal;
+            if (rightImag != 0.0) {
+                len /= Math.exp(at * rightImag);
+                phase += rightImag * Math.log(vabs);
             }
-            if (a.getReal() == 0.0 && a.getImag() == 0.0) {
-                if (b.getImag() != 0.0 || b.getReal() < 0.0) {
-                    throw PRaiseNode.raiseUncached(raisingNode, ZeroDivisionError, ErrorMessages.COMPLEX_ZERO_TO_NEGATIVE_POWER);
-                }
-                return factory.createComplex(0.0, 0.0);
-            }
-            double vabs = Math.hypot(a.getReal(), a.getImag());
-            double len = Math.pow(vabs, b.getReal());
-            double at = Math.atan2(a.getImag(), a.getReal());
-            double phase = at * b.getReal();
-            if (b.getImag() != 0.0) {
-                len /= Math.exp(at * b.getImag());
-                phase += b.getImag() * Math.log(vabs);
-            }
-            return factory.createComplex(len * Math.cos(phase), len * Math.sin(phase));
-        }
-
-        private static PComplex checkOverflow(Node inliningTarget, PComplex result, PRaiseNode.Lazy raiseNode) {
-            if (Double.isInfinite(result.getReal()) || Double.isInfinite(result.getImag())) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.COMPLEX_EXPONENTIATION);
-            }
+            result = PFactory.createComplex(language, len * Math.cos(phase), len * Math.sin(phase));
             return result;
         }
     }
 
-    @GenerateNodeFactory
-    @Builtin(name = J___EQ__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    abstract static class EqNode extends PythonBinaryBuiltinNode {
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    @TypeSystemReference(PythonIntegerAndFloatTypes.class)
+    abstract static class ComplexEqNode extends Node {
+        public abstract Object execute(Node inliningTarget, Object left, Object right);
+
         @Specialization
-        static boolean doComplex(PComplex left, PComplex right) {
-            return left.equals(right);
+        static Object doComplex(PComplex left, PComplex right) {
+            return left.getReal() == right.getReal() && left.getImag() == right.getImag();
+        }
+
+        @Specialization(guards = "check.execute(inliningTarget, rightObj)", limit = "1")
+        static Object doComplex(Node inliningTarget, Object leftObj, Object rightObj,
+                        @SuppressWarnings("unused") @Cached PyComplexCheckNode check,
+                        @Exclusive @Cached ToComplexValueNode toComplexLeft,
+                        @Exclusive @Cached ToComplexValueNode toComplexRight) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            ComplexValue right = toComplexRight.execute(inliningTarget, rightObj);
+            return left.getReal() == right.getReal() && left.getImag() == right.getImag();
         }
 
         @Specialization
-        static boolean doComplexInt(PComplex left, long right,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile longFitsToDoubleProfile) {
-            return left.getImag() == 0 && FloatBuiltins.EqNode.compareDoubleToLong(inliningTarget, left.getReal(), right, longFitsToDoubleProfile) == 0;
-        }
-
-        @Specialization
-        static boolean doComplexInt(PComplex left, PInt right) {
-            return left.getImag() == 0 && FloatBuiltins.EqNode.compareDoubleToLargeInt(left.getReal(), right) == 0;
-        }
-
-        @Specialization
-        static boolean doComplexInt(PComplex left, double right) {
+        static boolean doComplexDouble(Node inliningTarget, Object leftObj, double right,
+                        @Exclusive @Cached ToComplexValueNode toComplexLeft) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
             return left.getImag() == 0 && left.getReal() == right;
         }
 
-        @SuppressWarnings("unused")
-        @Fallback
-        static PNotImplemented doGeneric(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @GenerateNodeFactory
-    @Builtin(name = J___GE__, minNumOfPositionalArgs = 2)
-    abstract static class GeNode extends PythonBinaryBuiltinNode {
-        @SuppressWarnings("unused")
         @Specialization
-        static PNotImplemented doGeneric(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @GenerateNodeFactory
-    @Builtin(name = J___GT__, minNumOfPositionalArgs = 2)
-    abstract static class GtNode extends PythonBinaryBuiltinNode {
-        @SuppressWarnings("unused")
-        @Specialization
-        static PNotImplemented doGeneric(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @GenerateNodeFactory
-    @Builtin(name = J___LT__, minNumOfPositionalArgs = 2)
-    abstract static class LtNode extends PythonBinaryBuiltinNode {
-        @SuppressWarnings("unused")
-        @Specialization
-        static PNotImplemented doGeneric(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @GenerateNodeFactory
-    @Builtin(name = J___LE__, minNumOfPositionalArgs = 2)
-    abstract static class LeNode extends PythonBinaryBuiltinNode {
-        @SuppressWarnings("unused")
-        @Specialization
-        static PNotImplemented doGeneric(Object left, Object right) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    @Builtin(name = J___NE__, minNumOfPositionalArgs = 2)
-    abstract static class NeNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static boolean doComplex(PComplex left, PComplex right) {
-            return left.notEqual(right);
-        }
-
-        @Specialization
-        static boolean doComplex(PComplex left, long right,
-                        @Bind("this") Node inliningTarget,
+        static boolean doComplexInt(Node inliningTarget, Object leftObj, long right,
+                        @Exclusive @Cached ToComplexValueNode toComplexLeft,
                         @Cached InlinedConditionProfile longFitsToDoubleProfile) {
-            return left.getImag() != 0 || FloatBuiltins.EqNode.compareDoubleToLong(inliningTarget, left.getReal(), right, longFitsToDoubleProfile) != 0;
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            return left.getImag() == 0 && FloatBuiltins.ComparisonHelperNode.compareDoubleToLong(inliningTarget, left.getReal(), right, longFitsToDoubleProfile) == 0;
         }
 
         @Specialization
-        static boolean doComplex(PComplex left, PInt right) {
-            return left.getImag() != 0 || FloatBuiltins.EqNode.compareDoubleToLargeInt(left.getReal(), right) != 0;
-        }
-
-        @Specialization
-        static boolean doComplex(PComplex left, double right) {
-            return left.getImag() != 0 || left.getReal() != right;
+        static boolean doComplexInt(Node inliningTarget, Object leftObj, PInt right,
+                        @Exclusive @Cached ToComplexValueNode toComplexLeft) {
+            ComplexValue left = toComplexLeft.execute(inliningTarget, leftObj);
+            return left.getImag() == 0 && FloatBuiltins.ComparisonHelperNode.compareDoubleToLargeInt(left.getReal(), right) == 0;
         }
 
         @SuppressWarnings("unused")
         @Fallback
-        static PNotImplemented doGeneric(Object left, Object right) {
+        static PNotImplemented doNotImplemented(Object left, Object right) {
             return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
 
+    @Slot(SlotKind.tp_richcompare)
     @GenerateNodeFactory
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @GenerateUncached
+    abstract static class ComplexRichCmpNode extends TpSlotRichCompare.RichCmpBuiltinNode {
+        @Specialization
+        static Object doComplex(Object left, Object right, RichCmpOp op,
+                        @Bind Node inliningTarget,
+                        @Cached ComplexEqNode complexEqNode,
+                        @Cached InlinedConditionProfile isNotImplementedProfile) {
+            if (!op.isEqOrNe()) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            Object result = complexEqNode.execute(inliningTarget, left, right);
+            if (isNotImplementedProfile.profile(inliningTarget, result == PNotImplemented.NOT_IMPLEMENTED)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            return (boolean) result == (op == RichCmpOp.Py_EQ);
+        }
+    }
+
+    @GenerateNodeFactory
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
+        @InliningCutoff
+        static TruffleString repr(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+            return doFormat(inliningTarget, c.getReal(), c.getImag());
+        }
+
         @TruffleBoundary
-        TruffleString repr(PComplex self) {
-            ComplexFormatter formatter = new ComplexFormatter(new Spec(-1, Spec.NONE), this);
-            formatter.format(self);
+        private static TruffleString doFormat(Node inliningTarget, double real, double imag) {
+            ComplexFormatter formatter = new ComplexFormatter(new Spec(-1, Spec.NONE), inliningTarget);
+            formatter.format(real, imag);
             return formatter.pad().getResult();
         }
-    }
-
-    @GenerateNodeFactory
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1)
-    abstract static class StrNode extends ReprNode {
     }
 
     @Builtin(name = J___FORMAT__, minNumOfPositionalArgs = 2, parameterNames = {"$self", "format_spec"})
     @ArgumentClinic(name = "format_spec", conversion = ClinicConversion.TString)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class FormatNode extends FormatNodeBase {
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
@@ -754,59 +1332,72 @@ public final class ComplexBuiltins extends PythonBuiltins {
         }
 
         @Specialization(guards = "!formatString.isEmpty()")
-        static TruffleString format(PComplex self, TruffleString formatString,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+        @InliningCutoff
+        static TruffleString format(Object self, TruffleString formatString,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode,
+                        @Cached PRaiseNode raiseNode) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
             InternalFormat.Spec spec = InternalFormat.fromText(formatString, Spec.NONE, '>', inliningTarget);
             validateSpec(inliningTarget, spec, raiseNode);
-            return doFormat(inliningTarget, self, spec);
+            return doFormat(inliningTarget, c.getReal(), c.getImag(), spec);
         }
 
         @TruffleBoundary
-        private static TruffleString doFormat(Node raisingNode, PComplex self, Spec spec) {
+        private static TruffleString doFormat(Node raisingNode, double real, double imag, Spec spec) {
             ComplexFormatter formatter = new ComplexFormatter(validateForFloat(spec, "complex", raisingNode), raisingNode);
-            formatter.format(self);
+            formatter.format(real, imag);
             return formatter.pad().getResult();
         }
 
-        private static void validateSpec(Node inliningTarget, Spec spec, PRaiseNode.Lazy raiseNode) {
+        private static void validateSpec(Node inliningTarget, Spec spec, PRaiseNode raiseNode) {
             if (spec.getFill(' ') == '0') {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.ZERO_PADDING_NOT_ALLOWED_FOR_COMPLEX_FMT);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.ZERO_PADDING_NOT_ALLOWED_FOR_COMPLEX_FMT);
             }
 
             char align = spec.getAlign('>');
             if (align == '=') {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.S_ALIGNMENT_FLAG_NOT_ALLOWED_FOR_COMPLEX_FMT, align);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.S_ALIGNMENT_FLAG_NOT_ALLOWED_FOR_COMPLEX_FMT, align);
             }
         }
     }
 
+    @Slot(SlotKind.nb_bool)
+    @GenerateUncached
     @GenerateNodeFactory
-    @Builtin(name = J___BOOL__, minNumOfPositionalArgs = 1)
-    abstract static class BoolNode extends PythonUnaryBuiltinNode {
+    abstract static class BoolNode extends NbBoolBuiltinNode {
         @Specialization
-        static boolean bool(PComplex self) {
-            return self.getReal() != 0.0 || self.getImag() != 0.0;
+        static boolean bool(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+            return c.getReal() != 0.0 || c.getImag() != 0.0;
         }
     }
 
+    @Slot(value = SlotKind.nb_negative, isComplex = true)
     @GenerateNodeFactory
-    @Builtin(name = J___NEG__, minNumOfPositionalArgs = 1)
     abstract static class NegNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static PComplex neg(PComplex self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createComplex(-self.getReal(), -self.getImag());
+        static PComplex neg(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode,
+                        @Bind PythonLanguage language) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+            return PFactory.createComplex(language, -c.getReal(), -c.getImag());
         }
     }
 
+    @Slot(value = SlotKind.nb_positive, isComplex = true)
     @GenerateNodeFactory
-    @Builtin(name = J___POS__, minNumOfPositionalArgs = 1)
     abstract static class PosNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static PComplex pos(PComplex self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createComplex(self.getReal(), self.getImag());
+        static PComplex pos(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode,
+                        @Bind PythonLanguage language) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+            return PFactory.createComplex(language, c.getReal(), c.getImag());
         }
     }
 
@@ -814,9 +1405,12 @@ public final class ComplexBuiltins extends PythonBuiltins {
     @Builtin(name = J___GETNEWARGS__, minNumOfPositionalArgs = 1)
     abstract static class GetNewArgsNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static PTuple get(PComplex self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createTuple(new Object[]{self.getReal(), self.getImag()});
+        static PTuple get(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode,
+                        @Bind PythonLanguage language) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+            return PFactory.createTuple(language, new Object[]{c.getReal(), c.getImag()});
         }
     }
 
@@ -827,6 +1421,12 @@ public final class ComplexBuiltins extends PythonBuiltins {
         static double get(PComplex self) {
             return self.getReal();
         }
+
+        @Specialization
+        @InliningCutoff
+        static double getNative(PythonAbstractNativeObject self) {
+            return readDoubleField(self.getPtr(), PyComplexObject__cval__real);
+        }
     }
 
     @GenerateNodeFactory
@@ -836,39 +1436,41 @@ public final class ComplexBuiltins extends PythonBuiltins {
         static double get(PComplex self) {
             return self.getImag();
         }
+
+        @Specialization
+        @InliningCutoff
+        static double getNative(PythonAbstractNativeObject self) {
+            return readDoubleField(self.getPtr(), PyComplexObject__cval__imag);
+        }
     }
 
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
-    @Builtin(name = J___HASH__, minNumOfPositionalArgs = 1)
-    abstract static class HashNode extends PythonUnaryBuiltinNode {
+    abstract static class HashNode extends HashBuiltinNode {
         @Specialization
-        static long doPComplex(PComplex self) {
-            return complexHash(self.getReal(), self.getImag());
-        }
-
-        @Specialization
-        static long doNative(PythonAbstractNativeObject self,
-                        @Cached CStructAccess.ReadDoubleNode read) {
-            double real = read.readFromObj(self, PyComplexObject__cval__real);
-            double imag = read.readFromObj(self, PyComplexObject__cval__imag);
-            return complexHash(real, imag);
-        }
-
-        private static long complexHash(double real, double imag) {
+        static long doPComplex(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
             // just like CPython
-            long realHash = PyObjectHashNode.hash(real);
-            long imagHash = PyObjectHashNode.hash(imag);
-            return realHash + SysModuleBuiltins.HASH_IMAG * imagHash;
+            long realHash = PyObjectHashNode.hash(c.getReal());
+            long imagHash = PyObjectHashNode.hash(c.getImag());
+            long combined = realHash + SysModuleBuiltins.HASH_IMAG * imagHash;
+            return combined == -1L ? -2L : combined;
         }
+
     }
 
     @GenerateNodeFactory
     @Builtin(name = "conjugate", minNumOfPositionalArgs = 1)
     abstract static class ConjugateNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static PComplex hash(PComplex self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createComplex(self.getReal(), -self.getImag());
+        static PComplex hash(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ToComplexValueNode toComplexValueNode,
+                        @Bind PythonLanguage language) {
+            ComplexValue c = toComplexValueNode.execute(inliningTarget, self);
+            return PFactory.createComplex(language, c.getReal(), -c.getImag());
         }
     }
 }

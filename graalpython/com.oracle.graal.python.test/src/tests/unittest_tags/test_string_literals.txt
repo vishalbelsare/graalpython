@@ -1,17 +1,18 @@
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_bytes_incomplete
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_bytes_invalid_escape
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_bytes_normal
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_bytes_raw
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_str_incomplete
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_str_invalid_escape
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_str_normal
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_str_raw
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_eval_str_u
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_file_iso_8859_1
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_file_latin9
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_file_latin_1
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_file_utf8
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_file_utf_8
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_file_utf_8_error
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_template
-*graalpython.lib-python.3.test.test_string_literals.TestLiterals.test_uppercase_prefixes
+test.test_string_literals.TestLiterals.test_eval_bytes_incomplete @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_bytes_invalid_escape @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_bytes_normal @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_bytes_raw @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_str_incomplete @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_str_invalid_escape @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_str_normal @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_str_raw @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_eval_str_u @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_file_iso_8859_1 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_file_latin9 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_file_latin_1 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_file_utf8 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_file_utf_8 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_file_utf_8_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_invalid_escape_locations_with_offset @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_template @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_string_literals.TestLiterals.test_uppercase_prefixes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

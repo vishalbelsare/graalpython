@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,32 +40,41 @@
  */
 package com.oracle.graal.python.builtins.objects.itertools;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_ITER;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinFunctions;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
 import com.oracle.graal.python.nodes.BuiltinNames;
+import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -77,12 +86,36 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PGrouper})
 public final class GrouperBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = GrouperBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return GrouperBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "_grouper", minNumOfPositionalArgs = 2, parameterNames = {"$self", "parent", "tgtkey"})
+    @GenerateNodeFactory
+    public abstract static class GrouperNode extends PythonTernaryBuiltinNode {
+        @Specialization
+        static PGrouper construct(Object cls, Object parent, Object tgtKey,
+                        @Bind Node inliningTarget,
+                        @Cached InlinedConditionProfile wrongTypeProfile,
+                        @Cached InlinedConditionProfile isPGroupByProfile,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
+            if (!wrongTypeProfile.profile(inliningTarget, isTypeNode.execute(inliningTarget, cls))) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+            }
+            if (!isPGroupByProfile.profile(inliningTarget, parent instanceof PGroupBy)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.INCORRECT_USAGE_OF_INTERNAL_GROUPER);
+            }
+            return PFactory.createGrouper(language, (PGroupBy) parent, tgtKey);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -91,32 +124,31 @@ public final class GrouperBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object next(VirtualFrame frame, PGrouper self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached BuiltinFunctions.NextNode nextNode,
+                        @Bind Node inliningTarget,
+                        @Cached PyIterNextNode nextNode,
                         @Cached CallNode callNode,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode,
+                        @Cached PyObjectRichCompareBool eqNode,
                         @Cached InlinedBranchProfile currGrouperProfile,
                         @Cached InlinedBranchProfile currValueMarkerProfile,
                         @Cached InlinedBranchProfile currValueTgtProfile,
-                        @Cached InlinedConditionProfile hasFuncProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached InlinedConditionProfile hasFuncProfile) {
             PGroupBy gbo = self.getParent();
             if (gbo.getCurrGrouper() != self) {
                 currGrouperProfile.enter(inliningTarget);
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
             if (gbo.getCurrValue() == null) {
                 currValueMarkerProfile.enter(inliningTarget);
                 gbo.groupByStep(frame, inliningTarget, nextNode, callNode, hasFuncProfile);
             }
-            if (!eqNode.compare(frame, inliningTarget, self.getTgtKey(), gbo.getCurrKey())) {
+            if (!eqNode.executeEq(frame, inliningTarget, self.getTgtKey(), gbo.getCurrKey())) {
                 currValueTgtProfile.enter(inliningTarget);
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
             Object r = gbo.getCurrValue();
             gbo.setCurrValue(null);
@@ -126,26 +158,23 @@ public final class GrouperBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         @Specialization(guards = "currValueIsSelf(self)")
-        static Object reduce(PGrouper self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClassNode,
-                        @Shared @Cached PythonObjectFactory factory) {
-            Object type = getClassNode.execute(inliningTarget, self);
-            PTuple tuple = factory.createTuple(new Object[]{self.getParent(), self.getTgtKey()});
-            return factory.createTuple(new Object[]{type, tuple});
+        static Object reduce(PGrouper self) {
+            PythonLanguage language = PythonLanguage.get(null);
+            Object type = GetClassNode.executeUncached(self);
+            PTuple tuple = PFactory.createTuple(language, new Object[]{self.getParent(), self.getTgtKey()});
+            return PFactory.createTuple(language, new Object[]{type, tuple});
         }
 
         @Specialization(guards = "!currValueIsSelf(self)")
-        Object reduceCurrNotSelf(VirtualFrame frame, @SuppressWarnings("unused") PGrouper self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectGetAttr getAttrNode,
-                        @Shared @Cached PythonObjectFactory factory) {
-            PythonModule builtins = getContext().getCore().lookupBuiltinModule(BuiltinNames.T_BUILTINS);
-            Object iterCallable = getAttrNode.execute(frame, inliningTarget, builtins, T_ITER);
+        Object reduceCurrNotSelf(@SuppressWarnings("unused") PGrouper self) {
+            PythonContext ctx = PythonContext.get(null);
+            PythonLanguage language = ctx.getLanguage();
+            PythonModule builtins = ctx.lookupBuiltinModule(BuiltinNames.T_BUILTINS);
+            Object iterCallable = PyObjectGetAttr.executeUncached(builtins, T_ITER);
             // return Py_BuildValue("N(())", _PyEval_GetBuiltinId(&PyId_iter));
-            return factory.createTuple(new Object[]{iterCallable, factory.createTuple(new Object[]{factory.createEmptyTuple()})});
+            return PFactory.createTuple(language, new Object[]{iterCallable, PFactory.createTuple(language, new Object[]{PFactory.createEmptyTuple(language)})});
         }
 
         protected boolean currValueIsSelf(PGrouper self) {

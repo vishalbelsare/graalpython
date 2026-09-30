@@ -1,0 +1,126 @@
+name: Run downstream test
+description: Shared steps for running a downstream package test against a GraalPy standalone build (latest CE dev build on Mac OS)
+
+inputs:
+  package:
+    description: Downstream package name as accepted by mx.graalpython/downstream_tests.py
+    required: true
+  needs_cmake:
+    description: Whether to install CMake
+    required: false
+    default: "false"
+  needs_rust:
+    description: Whether to install Rust toolchain
+    required: false
+    default: "false"
+  needs_uv:
+    description: Whether to install uv
+    required: false
+    default: "false"
+  platform:
+    description: Platform identifier (linux/macos)
+    required: true
+  arch:
+    description: Architecture identifier (e.g. amd64/aarch64)
+    required: true
+  github_token:
+    description: Token used only for querying GraalPy CE dev-build releases on macOS
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install CMake (Linux)
+      if: ${{ inputs.platform == 'linux' && inputs.needs_cmake == 'true' }}
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake
+
+    - name: Install CMake (Darwin)
+      if: ${{ inputs.platform == 'macos' && inputs.needs_cmake == 'true' }}
+      shell: bash
+      run: |
+        if brew list cmake >/dev/null 2>&1; then
+          echo "cmake already installed"
+        else
+          brew install cmake
+        fi
+
+    - name: Install Rust toolchain
+      if: ${{ inputs.needs_rust == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        case "${{ inputs.platform }}-${{ inputs.arch }}" in
+          linux-amd64)
+            target="x86_64-unknown-linux-gnu"
+            ;;
+          macos-aarch64)
+            target="aarch64-apple-darwin"
+            ;;
+          *)
+            echo "Unsupported Rust toolchain platform/arch: ${{ inputs.platform }}/${{ inputs.arch }}" >&2
+            exit 1
+            ;;
+        esac
+
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+
+        curl -fsSLo "$tmpdir/rustup-init" \
+          "https://static.rust-lang.org/rustup/dist/${target}/rustup-init"
+        curl -fsSLo "$tmpdir/rustup-init.sha256" \
+          "https://static.rust-lang.org/rustup/dist/${target}/rustup-init.sha256"
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          (cd "$tmpdir" && sha256sum -c rustup-init.sha256)
+        else
+          (cd "$tmpdir" && shasum -a 256 -c rustup-init.sha256)
+        fi
+
+        chmod +x "$tmpdir/rustup-init"
+        "$tmpdir/rustup-init" -y --profile minimal --default-toolchain stable
+        echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+
+    - name: Install uv
+      if: ${{ inputs.needs_uv == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        python3 -m venv "$RUNNER_TEMP/uv-venv"
+        "$RUNNER_TEMP/uv-venv/bin/python" -m pip install "uv==0.11.21"
+        echo "$RUNNER_TEMP/uv-venv/bin" >> "$GITHUB_PATH"
+
+    - name: Get GraalPy CE dev build
+      if: ${{ inputs.platform == 'macos' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        tarball="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg platform "${{ inputs.platform }}" --arg arch "${{ inputs.arch }}" 'first(.assets[] | select(.name | test("^graalpy[0-9.]+-community-dev-\($platform)-\($arch)\\.(tar\\.gz|zip)$")) | .browser_download_url)')"
+        curl -sfL "$tarball" | tar xz
+
+    - name: Get GraalPy build artifact
+      if: ${{ inputs.platform == 'linux' }}
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      with:
+        name: graalpy-native-standalonelinux
+        path: graalpynative
+
+    - name: Unpack GraalPy build artifact
+      if: ${{ inputs.platform == 'linux' }}
+      shell: bash
+      env:
+        ARTIFACT_PATH: graalpy-native-standalonelinux
+        ARTIFACT_PATH_PREFIX: graalpynative
+      run: |
+        ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
+        mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+
+    - name: Run downstream tests for ${{ inputs.package }}
+      shell: bash
+      run: python mx.graalpython/downstream_tests.py graalpy-*/bin/python ${{ inputs.package }}

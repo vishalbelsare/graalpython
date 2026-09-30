@@ -32,7 +32,11 @@ Notes:
 import atexit
 import builtins
 import inspect
+import keyword
+import re
+import types
 import __main__
+import warnings
 
 __all__ = ["Completer"]
 
@@ -86,10 +90,11 @@ class Completer:
                 return None
 
         if state == 0:
-            if "." in text:
-                self.matches = self.attr_matches(text)
-            else:
-                self.matches = self.global_matches(text)
+            with warnings.catch_warnings(action="ignore"):
+                if "." in text:
+                    self.matches = self.attr_matches(text)
+                else:
+                    self.matches = self.global_matches(text)
         try:
             return self.matches[state]
         except IndexError:
@@ -113,18 +118,17 @@ class Completer:
         defined in self.namespace that match.
 
         """
-        import keyword
         matches = []
         seen = {"__builtins__"}
         n = len(text)
-        for word in keyword.kwlist:
+        for word in keyword.kwlist + keyword.softkwlist:
             if word[:n] == text:
                 seen.add(word)
                 if word in {'finally', 'try'}:
                     word = word + ':'
                 elif word not in {'False', 'None', 'True',
                                   'break', 'continue', 'pass',
-                                  'else'}:
+                                  'else', '_'}:
                     word = word + ' '
                 matches.append(word)
         for nspace in [self.namespace, builtins.__dict__]:
@@ -146,7 +150,6 @@ class Completer:
         with a __getattr__ hook is evaluated.
 
         """
-        import re
         m = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
         if not m:
             return []
@@ -176,14 +179,14 @@ class Completer:
                 if (word[:n] == attr and
                     not (noprefix and word[:n+1] == noprefix)):
                     match = "%s.%s" % (expr, word)
-                    if isinstance(getattr(type(thisobject), word, None),
-                                  property):
-                        # bpo-44752: thisobject.word is a method decorated by
-                        # `@property`. What follows applies a postfix if
-                        # thisobject.word is callable, but know we know that
-                        # this is not callable (because it is a property).
-                        # Also, getattr(thisobject, word) will evaluate the
-                        # property method, which is not desirable.
+
+                    class_attr = getattr(type(thisobject), word, None)
+                    if isinstance(
+                        class_attr,
+                        (property, types.GetSetDescriptorType, types.MemberDescriptorType)
+                    ) or (hasattr(class_attr, '__get__') and not callable(class_attr)):
+                        # Avoid evaluating descriptors, which could run
+                        # arbitrary code or raise exceptions.
                         matches.append(match)
                         continue
                     if (value := getattr(thisobject, word, None)) is not None:

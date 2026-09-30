@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,46 +41,140 @@
 package com.oracle.graal.python.builtins.modules.cext;
 
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PYWEAKREFERENCE_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectBorrowed;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectPtr;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Void;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_PROXY_TYPE;
+import static com.oracle.graal.python.nodes.BuiltinNames.T__WEAKREF;
+import static com.oracle.graal.python.nodes.ErrorMessages.EXPECTED_A_WEAKREF;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.writePtr;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.modules.WeakRefModuleBuiltins.ReferenceTypeNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
+import com.oracle.graal.python.builtins.modules.weakref.PProxyType;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.ToNativeBorrowedNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.referencetype.PReferenceType;
+import com.oracle.graal.python.builtins.objects.referencetype.ReferenceTypeBuiltins.ReferenceTypeNode;
+import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
+import com.oracle.graal.python.nodes.HiddenAttr;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.nodes.Node;
 
 public final class PythonCextWeakrefBuiltins {
 
-    @CApiBuiltin(ret = Void, args = {PyObject}, call = Direct)
-    abstract static class PyObject_ClearWeakRefs extends CApiUnaryBuiltinNode {
+    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject}, call = Direct)
+    abstract static class GraalPyPrivate_GetManagedWeakRefs extends PythonCextBuiltins.CApiUnaryBuiltinNode {
         @Specialization
-        static Object warn(@SuppressWarnings("unused") Object ref) {
-            // TODO: implement
-            return PNone.NONE;
+        static Object get(PythonAbstractObject object,
+                        @Bind Node inliningTarget,
+                        @Cached HiddenAttr.ReadNode readWeaklistNode) {
+            Object ref = readWeaklistNode.execute(inliningTarget, object, HiddenAttr.WEAKLIST, null);
+            return ref == null ? PNone.NONE : ref;
         }
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject}, call = Direct)
+    @CApiBuiltin(ret = Void, args = {PyObjectRawPointer}, call = Direct, acquireGil = false, canRaise = false)
+    public static void PyObject_ClearWeakRefs(long pyObject) {
+        CApiTransitions.removeNativeWeakRef(PythonContext.get(null), pyObject);
+    }
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject}, call = Direct, acquireGil = false, canRaise = true)
     abstract static class PyWeakref_NewRef extends CApiBinaryBuiltinNode {
         @Specialization
         static Object refType(Object object, Object callback,
                         @Cached ReferenceTypeNode referenceType) {
-            return referenceType.execute(null, PythonBuiltinClassType.PReferenceType, object, callback);
+            return referenceType.execute(PythonBuiltinClassType.PReferenceType, object, callback);
         }
     }
 
-    @CApiBuiltin(ret = PyObjectBorrowed, args = {PyObject}, call = Direct)
-    abstract static class PyWeakref_GetObject extends CApiUnaryBuiltinNode {
-        @Specialization
-        static Object call(PReferenceType self) {
-            return self.getPyObject();
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyObjectRawPointer, PyObjectRawPointer}, call = Direct, acquireGil = false, canRaise = true)
+    public static long PyWeakref_NewProxy(long objectPtr, long callbackPtr) {
+        PythonModule weakrefModule = PythonContext.get(null).lookupBuiltinModule(T__WEAKREF);
+        Object callback;
+        if (callbackPtr == NULLPTR) {
+            callback = PNone.NO_VALUE;
+        } else {
+            callback = NativeToPythonInternalNode.executeUncached(callbackPtr, false);
         }
+        Object object = NativeToPythonInternalNode.executeUncached(objectPtr, false);
+        Object proxy = PyObjectCallMethodObjArgs.executeUncached(weakrefModule, T_PROXY_TYPE, object, callback);
+        return PythonToNativeInternalNode.executeNewRefUncached(proxy);
+    }
+
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyObjectRawPointer}, call = Direct, acquireGil = false)
+    public static long PyWeakref_GetObject(long referencePtr) {
+        Object reference = NativeToPythonInternalNode.executeUncached(referencePtr, false);
+        if (reference instanceof PReferenceType ref) {
+            return ToNativeBorrowedNode.executeUncached(ref.getPyObject());
+        } else if (reference instanceof PProxyType proxy) {
+            PReferenceType ref = proxy.weakReference;
+            if (ref != null) {
+                return ToNativeBorrowedNode.executeUncached(ref.getPyObject());
+            }
+        } else {
+            throw PythonCextBuiltins.badInternalCall("PyWeakref_GetObject", "referencePtr");
+        }
+        /*
+         * This weak reference has died in the managed side due to its referent being collected.
+         */
+        return PythonContext.get(null).getCApiContext().getNonePtr();
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObjectRawPointer, PyObjectPtr}, call = Direct, acquireGil = false)
+    public static int PyWeakref_GetRef(long referencePtr, long resultPtr) {
+        long result = NULLPTR;
+        try {
+            if (referencePtr == NULLPTR) {
+                throw PythonCextBuiltins.badInternalCall("PyWeakref_GetRef", "referencePtr");
+            }
+
+            Object reference = NativeToPythonInternalNode.executeUncached(referencePtr, false);
+            Object referent;
+            if (reference instanceof PReferenceType ref) {
+                referent = ref.getObject();
+            } else if (reference instanceof PProxyType proxy) {
+                referent = proxy.weakReference.getObject();
+            } else {
+                throw PRaiseNode.raiseStatic(null, PythonBuiltinClassType.TypeError, EXPECTED_A_WEAKREF);
+            }
+
+            if (referent == null) {
+                return 0;
+            }
+            result = PythonToNativeInternalNode.executeNewRefUncached(referent);
+            return 1;
+        } finally {
+            writePtr(resultPtr, result);
+        }
+    }
+
+    @CApiBuiltin(name = "_PyWeakref_ClearRef", ret = Void, args = {PYWEAKREFERENCE_PTR}, call = Direct, acquireGil = false, canRaise = false)
+    public static void PyWeakref_ClearRef(long referencePtr) {
+        Object reference = NativeToPythonInternalNode.executeUncached(referencePtr, false);
+        if (reference instanceof PReferenceType ref) {
+            ref.clearRef();
+        }
+    }
+
+    @CApiBuiltin(name = "_PyWeakref_IsDead", ret = Int, args = {PyObjectRawPointer}, call = Direct, acquireGil = false, canRaise = false)
+    public static int PyWeakref_IsDead(long referencePtr) {
+        PReferenceType reference = (PReferenceType) NativeToPythonInternalNode.executeUncached(referencePtr, false);
+        return reference.getObject() == null ? 1 : 0;
     }
 }

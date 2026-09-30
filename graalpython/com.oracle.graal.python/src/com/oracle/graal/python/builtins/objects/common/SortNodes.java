@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,11 +50,11 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.builtins.objects.str.StringUtils;
-import com.oracle.graal.python.lib.PyObjectIsTrueNode;
+import com.oracle.graal.python.lib.PyObjectRichCompareBool.CachedPyObjectRichCompareBool;
+import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRootNode;
 import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.nodes.expression.BinaryComparisonNode;
 import com.oracle.graal.python.runtime.ExecutionContext;
 import com.oracle.graal.python.runtime.ExecutionContext.CallContext;
 import com.oracle.graal.python.runtime.ExecutionContext.IndirectCalleeContext;
@@ -79,6 +79,7 @@ import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
@@ -100,12 +101,11 @@ public abstract class SortNodes {
     }
 
     private static class ObjectComparatorRootNode extends PRootNode {
-        private static final Signature SIGNATURE = new Signature(-1, false, -1, false, tsArray("a", "b"), PythonUtils.EMPTY_TRUFFLESTRING_ARRAY);
+        private static final Signature SIGNATURE = new Signature(-1, false, -1, tsArray("a", "b"), PythonUtils.EMPTY_TRUFFLESTRING_ARRAY);
 
         @Child private ExecutionContext.CalleeContext calleeContext = ExecutionContext.CalleeContext.create();
-        @Child private PyObjectIsTrueNode isTrueNode = PyObjectIsTrueNode.create();
-        @Child private BinaryComparisonNode.LtNode ltNodeA = BinaryComparisonNode.LtNode.create();
-        @Child private BinaryComparisonNode.LtNode ltNodeB = BinaryComparisonNode.LtNode.create();
+        @Child private CachedPyObjectRichCompareBool ltNodeA = CachedPyObjectRichCompareBool.create();
+        @Child private CachedPyObjectRichCompareBool ltNodeB = CachedPyObjectRichCompareBool.create();
 
         enum Result {
             LT(-1),
@@ -126,14 +126,14 @@ public abstract class SortNodes {
 
         @Override
         public Object execute(VirtualFrame frame) {
-            calleeContext.enter(frame);
+            calleeContext.enter(frame, this);
             try {
                 Object[] arguments = frame.getArguments();
                 Object a = arguments[PArguments.USER_ARGUMENTS_OFFSET];
                 Object b = arguments[PArguments.USER_ARGUMENTS_OFFSET + 1];
-                if (isTrueNode.executeCached(frame, ltNodeA.executeObject(frame, a, b))) {
+                if (ltNodeA.execute(frame, a, b, RichCmpOp.Py_LT)) {
                     return Result.LT;
-                } else if (isTrueNode.executeCached(frame, ltNodeB.executeObject(frame, b, a))) {
+                } else if (ltNodeB.execute(frame, b, a, RichCmpOp.Py_LT)) {
                     return Result.GT;
                 } else {
                     return Result.EQ;
@@ -236,7 +236,7 @@ public abstract class SortNodes {
 
         @TruffleBoundary
         private static void sortStrings(ObjectSequenceStorage storage, boolean reverse) {
-            Object[] array = storage.getInternalArray();
+            Object[] array = storage.getInternalObjectArray();
             int len = storage.length();
             Comparator<Object> comparator;
             if (reverse) {
@@ -250,7 +250,7 @@ public abstract class SortNodes {
         protected boolean isStringOnly(Node inliningTarget, ObjectSequenceStorage storage, InlinedLoopConditionProfile isStringOnlyLoopProfile,
                         InlinedCountingConditionProfile isStringOnlyBreakProfile) {
             int length = storage.length();
-            Object[] array = storage.getInternalArray();
+            Object[] array = storage.getInternalObjectArray();
             for (int i = 0; isStringOnlyLoopProfile.profile(inliningTarget, i < length); i++) {
                 Object value = array[i];
                 if (isStringOnlyBreakProfile.profile(inliningTarget, !(value instanceof TruffleString))) {
@@ -265,7 +265,7 @@ public abstract class SortNodes {
         @Specialization
         @SuppressWarnings("truffle-static-method")
         void sortObjSeqStorage(VirtualFrame frame, ObjectSequenceStorage storage, @SuppressWarnings("unused") PNone keyfunc, boolean reverse,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedConditionProfile isStringOnlyProfile,
                         @Cached InlinedLoopConditionProfile isStringOnlyLoopProfile,
                         @Cached InlinedCountingConditionProfile isStringOnlyBreakProfile,
@@ -276,7 +276,7 @@ public abstract class SortNodes {
                 // specialized code with generic object storage code
                 sortStrings(storage, reverse);
             } else {
-                sortWithoutKey(frame, storage.getInternalArray(), storage.length(), reverse, callContext);
+                sortWithoutKey(frame, storage.getInternalObjectArray(), storage.length(), reverse, callContext);
             }
         }
 
@@ -284,13 +284,13 @@ public abstract class SortNodes {
         void sort(VirtualFrame frame, ObjectSequenceStorage storage, Object keyfunc, boolean reverse,
                         @Shared @Cached CallNode callNode,
                         @Shared @Cached CallContext callContext) {
-            sortWithKey(frame, storage.getInternalArray(), storage.length(), keyfunc, reverse, callNode, callContext);
+            sortWithKey(frame, storage.getInternalObjectArray(), storage.length(), keyfunc, reverse, callNode, callContext);
         }
 
         @Fallback
         @SuppressWarnings("truffle-static-method")
         void sort(VirtualFrame frame, SequenceStorage storage, Object keyfunc, boolean reverse,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached CallContext callContext,
                         @Shared @Cached CallNode callNode,
                         @Cached SequenceStorageNodes.GetItemScalarNode getItemScalarNode,
@@ -322,15 +322,21 @@ public abstract class SortNodes {
             final RootCallTarget callTarget = getComparatorCallTarget(language);
             if (frame == null) {
                 PythonThreadState threadState = PythonContext.get(this).getThreadState(language);
-                Object state = IndirectCalleeContext.enter(threadState, arguments, callTarget);
+                Object state = IndirectCalleeContext.enter(threadState, arguments);
                 try {
                     callSortWithoutKey(array, len, callTarget, arguments);
                 } finally {
                     IndirectCalleeContext.exit(threadState, state);
                 }
             } else {
-                callContext.prepareCall(frame, arguments, callTarget, this);
-                callSortWithoutKey(array, len, callTarget, arguments);
+                callContext.prepareCall(frame, arguments, callTarget);
+                EncapsulatingNodeReference nodeRef = EncapsulatingNodeReference.getCurrent();
+                Node prev = nodeRef.set(this);
+                try {
+                    callSortWithoutKey(array, len, callTarget, arguments);
+                } finally {
+                    nodeRef.set(prev);
+                }
             }
             if (reverse) {
                 reverseArray(array, len);
@@ -423,15 +429,21 @@ public abstract class SortNodes {
                 final RootCallTarget callTarget = getComparatorCallTarget(language);
                 if (frame == null) {
                     PythonThreadState threadState = PythonContext.get(this).getThreadState(language);
-                    Object state = IndirectCalleeContext.enter(threadState, arguments, callTarget);
+                    Object state = IndirectCalleeContext.enter(threadState, arguments);
                     try {
                         callSortWithKey(pairArray, len, callTarget, arguments);
                     } finally {
                         IndirectCalleeContext.exit(threadState, state);
                     }
                 } else {
-                    callContext.prepareCall(frame, arguments, callTarget, this);
-                    callSortWithKey(pairArray, len, callTarget, arguments);
+                    callContext.prepareCall(frame, arguments, callTarget);
+                    EncapsulatingNodeReference nodeRef = EncapsulatingNodeReference.getCurrent();
+                    Node prev = nodeRef.set(this);
+                    try {
+                        callSortWithKey(pairArray, len, callTarget, arguments);
+                    } finally {
+                        nodeRef.set(prev);
+                    }
                 }
             }
             for (int i = 0; i < len; i++) {

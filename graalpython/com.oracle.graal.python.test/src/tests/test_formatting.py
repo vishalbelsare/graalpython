@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,6 +38,86 @@
 # SOFTWARE.
 
 import unittest
+
+
+def test_named_format_fields():
+    from string import Formatter
+    from types import SimpleNamespace
+
+    names = ('id', 'style', '_private', 'name_1', 'caf\u00e9', '\u540d\u524d',
+             '\U0001f600', '\u00b2', ' ', '+', '-', '-1', '-0', '-00', '+0', '+1',
+             '-\u0660', '+\uff11', '1_name', '1\u00b2', '\U0001d7d9_name')
+    for name in names:
+        template = '{' + name + '}'
+        assert template.format(**{name: 'value'}) == 'value'
+        assert template.format_map({name: 'value'}) == 'value'
+        assert ('{data[' + name + ']}').format(data={name: 'item'}) == 'item'
+        assert Formatter().format(template, **{name: 'value'}) == 'value'
+        assert Formatter().format('{data[' + name + ']}', data={name: 'item'}) == 'item'
+
+    style = SimpleNamespace(font_family='sans-serif', sizes={'title': 20})
+    assert '{id}: {style.font_family} {style.sizes[title]}'.format(id='chart', style=style) == 'chart: sans-serif 20'
+    assert '{value:{width}.{precision}f}'.format(value=1.25, width=6, precision=2) == '  1.25'
+    with unittest.TestCase().assertRaises(KeyError):
+        '{missing}'.format(present=1)
+
+
+def test_format_field_numeric_indices():
+    from string import Formatter
+
+    for index in ('1', '01', '\u0661', '\uff11', '\U0001d7d9', '\u0660\U0001d7d9', '0' * 100 + '1'):
+        assert ('{' + index + '}').format('zero', 'one') == 'one'
+        assert ('{data[' + index + ']}').format(data={1: 'one'}) == 'one'
+        assert Formatter().format('{' + index + '}', 'zero', 'one') == 'one'
+        assert Formatter().format('{data[' + index + ']}', data={1: 'one'}) == 'one'
+    assert '{} {}'.format('zero', 'one') == 'zero one'
+    assert '{0} {name}'.format('zero', name='one') == 'zero one'
+    with unittest.TestCase().assertRaises(IndexError):
+        '{2}'.format('zero', 'one')
+    with unittest.TestCase().assertRaises(ValueError):
+        ('{' + '9' * 100 + '}').format('zero')
+    with unittest.TestCase().assertRaises(ValueError):
+        '{0} {}'.format('zero', 'one')
+
+
+def test_format_field_integer_overflow():
+    import sys
+
+    maximum = str(sys.maxsize)
+    assert ('{data[' + maximum + ']}').format(data={sys.maxsize: 'maximum'}) == 'maximum'
+    assert ('{data[' + '0' * 100 + maximum + ']}').format(data={sys.maxsize: 'maximum'}) == 'maximum'
+    with unittest.TestCase().assertRaises(IndexError):
+        ('{' + maximum + '}').format('zero')
+
+    # A non-digit before overflow makes the field a string key.
+    name = maximum + '_name'
+    assert ('{' + name + '}').format(**{name: 'named'}) == 'named'
+    assert ('{data[' + name + ']}').format(data={name: 'named'}) == 'named'
+
+    # Overflow is detected immediately, even when a non-digit follows it.
+    overflow = str(sys.maxsize + 1)
+    for name in (overflow, overflow + '_name', maximum + '0', '9' * 100,
+                 ''.join(chr(0x0660 + int(digit)) for digit in overflow)):
+        with unittest.TestCase().assertRaisesRegex(ValueError, 'Too many decimal digits in format string'):
+            ('{' + name + '}').format(**{name: 'named'})
+        with unittest.TestCase().assertRaisesRegex(ValueError, 'Too many decimal digits in format string'):
+            ('{data[' + name + ']}').format(data={name: 'named'})
+
+
+def test_formatter_field_name_integer_parsing():
+    import _string
+    import sys
+
+    for name in ('', '-0', '-00', '+0', '+1', str(sys.maxsize) + '_name'):
+        first, rest = _string.formatter_field_name_split(name)
+        assert first == name
+        assert list(rest) == []
+    first, rest = _string.formatter_field_name_split(str(sys.maxsize))
+    assert first == sys.maxsize
+    assert list(rest) == []
+    for name in (str(sys.maxsize + 1), str(sys.maxsize + 1) + '_name'):
+        with unittest.TestCase().assertRaisesRegex(ValueError, 'Too many decimal digits in format string'):
+            _string.formatter_field_name_split(name)
 
 
 class Polymorph:
@@ -123,6 +203,23 @@ def test_complex_formatting():
     assert format(MyComplex(3j), "") == "42"
     assert format(MyComplex(3j), " <5") == "3j   "
     assert format(complex(2**53 + 1, 0)) == '(9007199254740992+0j)'
+    assert format(1j, "+.1") == "+1j"
+    assert format(1j, " .2") == " 1j"
+    assert format(1000j, ",.4") == "1,000j"
+    assert format(1000+2000j, ",") == "(1,000+2,000j)"
+    assert format(1000j, "#") == "1000.j"
+    assert format(1+2j, "#") == "(1.+2.j)"
+    assert format(0j, "+.0") == "+0j"
+    assert format(1+2j, "+") == "(+1+2j)"
+
+
+def test_alternate_float_formatting():
+    assert format(0.0, ".0") == "0e+00"
+    assert format(1000.0, "#") == "1000.0"
+    assert format(6.103515625e-05, "#.11g") == "6.1035156250e-05"
+    assert format(2.220446049250313e-16, "#.038g") == "2.2204460492503130808472633361816406250e-16"
+    assert format(2.220446049250313e-16j, "#.038g") == (
+        "0.0000000000000000000000000000000000000+2.2204460492503130808472633361816406250e-16j")
 
 
 class AnyRepr:

@@ -1,4 +1,4 @@
-/* Copyright (c) 2019, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2019, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -8,7 +8,7 @@
  * distribution.
  */
 #ifndef EXPAT_CONFIG_H
-#define EXPAT_CONFIG_H
+#define EXPAT_CONFIG_H 1
 
 #include <pyconfig.h>
 #ifdef WORDS_BIGENDIAN
@@ -21,6 +21,16 @@
 
 #define XML_NS 1
 #define XML_DTD 1
+#define XML_GE 1
 #define XML_CONTEXT_BYTES 1024
+
+// bpo-30947: Python uses best available entropy sources to
+// call XML_SetHashSalt(), expat entropy sources are not needed
+#define XML_POOR_ENTROPY 1
+#undef HAVE_ARC4RANDOM
+#undef HAVE_ARC4RANDOM_BUF
+#undef HAVE_GETENTROPY
+#undef HAVE_GETRANDOM
+#undef HAVE_SYSCALL_GETRANDOM
 
 #endif /* EXPAT_CONFIG_H */

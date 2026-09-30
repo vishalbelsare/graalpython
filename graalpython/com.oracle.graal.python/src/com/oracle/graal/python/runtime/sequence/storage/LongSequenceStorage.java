@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,18 +25,18 @@
  */
 package com.oracle.graal.python.runtime.sequence.storage;
 
-import java.math.BigInteger;
 import java.util.Arrays;
 
-import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives;
 
-public final class LongSequenceStorage extends TypedSequenceStorage {
+public final class LongSequenceStorage extends ArrayBasedSequenceStorage {
 
     private long[] values;
 
     public LongSequenceStorage() {
-        values = new long[]{};
+        this.values = new long[DEFAULT_CAPACITY];
+        this.capacity = values.length;
     }
 
     public LongSequenceStorage(long[] elements) {
@@ -57,129 +57,22 @@ public final class LongSequenceStorage extends TypedSequenceStorage {
         this.length = 0;
     }
 
-    @Override
-    protected void increaseCapacityExactWithCopy(int newCapacity) {
-        values = Arrays.copyOf(values, newCapacity);
+    private void increaseCapacityExactWithCopy(int newCapacity) {
+        values = PythonUtils.arrayCopyOf(values, newCapacity);
         capacity = values.length;
     }
 
-    @Override
-    protected void increaseCapacityExact(int newCapacity) {
-        values = new long[newCapacity];
-        capacity = values.length;
+    public void ensureCapacity(int newCapacity) throws ArithmeticException {
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.UNLIKELY_PROBABILITY, newCapacity > capacity)) {
+            increaseCapacityExactWithCopy(capacityFor(newCapacity));
+        }
     }
 
     @Override
-    public SequenceStorage copy() {
-        return new LongSequenceStorage(PythonUtils.arrayCopyOf(values, length));
-    }
-
-    @Override
-    public SequenceStorage createEmpty(int newCapacity) {
+    public LongSequenceStorage createEmpty(int newCapacity) {
         return new LongSequenceStorage(newCapacity);
     }
 
-    @Override
-    public Object[] getInternalArray() {
-        /**
-         * Have to box and copy.
-         */
-        Object[] boxed = new Object[length];
-
-        for (int i = 0; i < length; i++) {
-            boxed[i] = values[i];
-        }
-
-        return boxed;
-    }
-
-    public long[] getInternalLongArray() {
-        return values;
-    }
-
-    @Override
-    public Object getItemNormalized(int idx) {
-        return getLongItemNormalized(idx);
-    }
-
-    public long getLongItemNormalized(int idx) {
-        return values[idx];
-    }
-
-    @Override
-    public void setItemNormalized(int idx, Object val) throws SequenceStoreException {
-        Object value = (val instanceof Integer) ? BigInteger.valueOf((int) val).longValue() : val;
-        value = (val instanceof BigInteger) ? ((BigInteger) val).longValue() : value;
-        if (value instanceof Long) {
-            setLongItemNormalized(idx, (long) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    public void setLongItemNormalized(int idx, long value) {
-        values[idx] = value;
-    }
-
-    @Override
-    public void insertItem(int idx, Object val) throws SequenceStoreException {
-        long value;
-        if (val instanceof Integer) {
-            value = (int) val;
-        } else if (val instanceof BigInteger) {
-            value = PInt.longValue((BigInteger) val);
-        } else if (val instanceof Long) {
-            value = (long) val;
-        } else {
-            throw new SequenceStoreException(val);
-        }
-        insertLongItem(idx, value);
-    }
-
-    public void insertLongItem(int idx, long value) {
-        ensureCapacity(length + 1);
-
-        // shifting tail to the right by one slot
-        for (int i = values.length - 1; i > idx; i--) {
-            values[i] = values[i - 1];
-        }
-
-        values[idx] = value;
-        incLength();
-    }
-
-    @Override
-    public void copyItem(int idxTo, int idxFrom) {
-        values[idxTo] = values[idxFrom];
-    }
-
-    @Override
-    public LongSequenceStorage getSliceInBound(int start, int stop, int step, int sliceLength) {
-        long[] newArray = new long[sliceLength];
-
-        if (step == 1) {
-            PythonUtils.arraycopy(values, start, newArray, 0, sliceLength);
-            return new LongSequenceStorage(newArray);
-        }
-
-        for (int i = start, j = 0; j < sliceLength; i += step, j++) {
-            newArray[j] = values[i];
-        }
-
-        return new LongSequenceStorage(newArray);
-    }
-
-    public int indexOfLong(long value) {
-        for (int i = 0; i < length; i++) {
-            if (values[i] == value) {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    @Override
     public void reverse() {
         if (length > 0) {
             int head = 0;
@@ -194,25 +87,43 @@ public final class LongSequenceStorage extends TypedSequenceStorage {
         }
     }
 
-    @Override
-    public Object getIndicativeValue() {
-        return 0;
+    public long[] getInternalLongArray() {
+        return values;
     }
 
-    @Override
-    public boolean equals(SequenceStorage other) {
-        if (other.length() != length() || !(other instanceof LongSequenceStorage)) {
-            return false;
+    public long getLongItemNormalized(int idx) {
+        return values[idx];
+    }
+
+    public void setLongItemNormalized(int idx, long value) {
+        values[idx] = value;
+    }
+
+    public void insertLongItem(int idx, long value) {
+        ensureCapacity(length + 1);
+
+        // shifting tail to the right by one slot
+        if (idx < length) {
+            PythonUtils.arraycopy(values, idx, values, idx + 1, length - idx);
         }
 
-        long[] otherArray = ((LongSequenceStorage) other).getInternalLongArray();
-        for (int i = 0; i < length(); i++) {
-            if (values[i] != otherArray[i]) {
-                return false;
+        values[idx] = value;
+        incLength();
+    }
+
+    public int indexOfLong(long value) {
+        for (int i = 0; i < length; i++) {
+            if (values[i] == value) {
+                return i;
             }
         }
 
-        return true;
+        return -1;
+    }
+
+    @Override
+    public Object getIndicativeValue() {
+        return 0;
     }
 
     @Override
@@ -225,9 +136,17 @@ public final class LongSequenceStorage extends TypedSequenceStorage {
         return Arrays.copyOf(values, length);
     }
 
-    @Override
     public Object[] getCopyOfInternalArray() {
-        return getInternalArray();
+        /*
+         * Have to box and copy.
+         */
+        Object[] boxed = new Object[length];
+
+        for (int i = 0; i < length; i++) {
+            boxed[i] = values[i];
+        }
+
+        return boxed;
     }
 
     @Override
@@ -236,7 +155,7 @@ public final class LongSequenceStorage extends TypedSequenceStorage {
     }
 
     @Override
-    public ListStorageType getElementType() {
-        return ListStorageType.Long;
+    public StorageType getElementType() {
+        return StorageType.Long;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,26 +43,39 @@ package com.oracle.graal.python.builtins.objects.common;
 import static com.oracle.graal.python.nodes.ErrorMessages.IS_NOT_A_SEQUENCE;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
+import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodesFactory.CachedGetObjectArrayNodeGen;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodesFactory.GetObjectArrayNodeGen;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodesFactory.SetSequenceStorageNodeGen;
-import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.str.StringNodes;
+import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.builtins.objects.list.PList;
+import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.lib.PySequenceCheckNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.GetTupleStorage;
+import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
 import com.oracle.graal.python.runtime.sequence.PSequence;
+import com.oracle.graal.python.runtime.sequence.storage.ForeignSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
+import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
 public abstract class SequenceNodes {
 
@@ -70,30 +83,46 @@ public abstract class SequenceNodes {
     @GenerateInline
     @GenerateCached(false)
     @ImportStatic(PGuards.class)
-    public abstract static class LenNode extends Node {
-
-        public abstract int execute(Node inliningTarget, PSequence seq);
-
-        public static int executeUncached(PSequence seq) {
-            return SequenceNodesFactory.LenNodeGen.getUncached().execute(null, seq);
-        }
+    public abstract static class IsInBoundsNode extends Node {
+        public abstract boolean execute(Node inliningTarget, PSequence seq, long idx);
 
         @Specialization
-        static int doPString(PString str,
-                        @Cached(inline = false) StringNodes.StringLenNode lenNode) {
-            return lenNode.execute(str);
-        }
-
-        @Specialization(guards = "!isPString(seq)")
-        static int doWithStorage(Node inliningTarget, PSequence seq,
+        static boolean doWithStorage(Node inliningTarget, PSequence seq, long idx,
                         @Cached SequenceNodes.GetSequenceStorageNode getStorage) {
-            return getStorage.execute(inliningTarget, seq).length();
+            int length = getStorage.execute(inliningTarget, seq).length();
+            return 0 <= idx && idx < length;
         }
     }
 
     @GenerateUncached
     @GenerateInline(inlineByDefault = true)
-    public abstract static class GetSequenceStorageNode extends Node {
+    public abstract static class GetPSequenceStorageNode extends PNodeWithContext {
+        public abstract SequenceStorage execute(Node inliningTarget, PSequence seq);
+
+        @Specialization
+        static SequenceStorage doTuple(PTuple seq) {
+            return seq.getSequenceStorage();
+        }
+
+        @Specialization
+        static SequenceStorage doBytesLike(PBytesLike seq) {
+            return seq.getSequenceStorage();
+        }
+
+        @Specialization
+        static SequenceStorage doList(PList seq) {
+            return seq.getSequenceStorage();
+        }
+
+        @Specialization
+        static SequenceStorage doSequence(@SuppressWarnings("unused") PSequence seq) {
+            throw CompilerDirectives.shouldNotReachHere();
+        }
+    }
+
+    @GenerateUncached
+    @GenerateInline(inlineByDefault = true)
+    public abstract static class GetSequenceStorageNode extends PNodeWithContext {
 
         public abstract SequenceStorage execute(Node inliningTarget, Object seq);
 
@@ -105,25 +134,39 @@ public abstract class SequenceNodes {
             return execute(this, seq);
         }
 
-        @Specialization(guards = {"seq.getClass() == cachedClass"}, limit = "2")
-        static SequenceStorage doSequenceCached(PSequence seq,
-                        @Cached("seq.getClass()") Class<? extends PSequence> cachedClass) {
-            return CompilerDirectives.castExact(seq, cachedClass).getSequenceStorage();
+        @Specialization
+        static SequenceStorage doSequence(Node inliningTarget, PSequence seq,
+                        @Cached GetPSequenceStorageNode getPSequenceStorageNode) {
+            return getPSequenceStorageNode.execute(inliningTarget, seq);
         }
 
-        @Specialization(replaces = "doSequenceCached")
-        static SequenceStorage doSequence(PSequence seq) {
-            return seq.getSequenceStorage();
+        @Specialization(guards = "isNativeTuple(seq)")
+        static SequenceStorage doNativeTuple(PythonAbstractNativeObject seq) {
+            return GetTupleStorage.doNative(seq);
         }
 
-        @Specialization(guards = "!isPSequence(seq)")
-        static SequenceStorage doFallback(@SuppressWarnings("unused") Object seq) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw new IllegalStateException("cannot get sequence storage of non-sequence object");
+        static boolean isNativeTuple(PythonAbstractNativeObject seq) {
+            return PyTupleCheckNode.doNative(seq);
         }
 
-        static boolean isPSequence(Object object) {
-            return object instanceof PSequence;
+        // Note: this does not seem currently used but is good to accept foreign lists in more
+        // places
+        @Specialization(guards = {"isForeignObjectNode.execute(inliningTarget, seq)", "interop.hasArrayElements(seq)"}, limit = "1")
+        static SequenceStorage doForeign(Node inliningTarget, Object seq,
+                        @SuppressWarnings("unused") @Cached IsForeignObjectNode isForeignObjectNode,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop,
+                        @Cached InlinedBranchProfile errorProfile) {
+            try {
+                long size = interop.getArraySize(seq);
+                return new ForeignSequenceStorage(seq, PInt.long2int(inliningTarget, size, errorProfile));
+            } catch (UnsupportedMessageException e) {
+                throw CompilerDirectives.shouldNotReachHere();
+            }
+        }
+
+        @Fallback
+        static SequenceStorage doFallback(Node inliningTarget, Object seq) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, IS_NOT_A_SEQUENCE, seq);
         }
 
         @NeverDefault
@@ -141,6 +184,10 @@ public abstract class SequenceNodes {
     @GenerateInline
     @GenerateCached(false)
     public abstract static class GetObjectArrayNode extends Node {
+
+        public static GetObjectArrayNode getUncached() {
+            return GetObjectArrayNodeGen.getUncached();
+        }
 
         public abstract Object[] execute(Node inliningTarget, Object seq);
 
@@ -205,9 +252,9 @@ public abstract class SequenceNodes {
         @Specialization
         static void check(Node inliningTarget, Object obj,
                         @Cached PySequenceCheckNode sequenceCheckNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             if (!sequenceCheckNode.execute(inliningTarget, obj)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, IS_NOT_A_SEQUENCE, obj);
+                throw raiseNode.raise(inliningTarget, TypeError, IS_NOT_A_SEQUENCE, obj);
             }
         }
     }

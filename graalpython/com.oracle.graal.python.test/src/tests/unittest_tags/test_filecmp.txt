@@ -1,10 +1,16 @@
-*graalpython.lib-python.3.test.test_filecmp.DirCompareTestCase.test_cmpfiles
-*graalpython.lib-python.3.test.test_filecmp.DirCompareTestCase.test_default_ignores
-*graalpython.lib-python.3.test.test_filecmp.DirCompareTestCase.test_dircmp
-*graalpython.lib-python.3.test.test_filecmp.DirCompareTestCase.test_dircmp_subdirs_type
-*graalpython.lib-python.3.test.test_filecmp.DirCompareTestCase.test_report_full_closure
-*graalpython.lib-python.3.test.test_filecmp.DirCompareTestCase.test_report_partial_closure
-*graalpython.lib-python.3.test.test_filecmp.FileCompareTestCase.test_cache_clear
-*graalpython.lib-python.3.test.test_filecmp.FileCompareTestCase.test_different
-*graalpython.lib-python.3.test.test_filecmp.FileCompareTestCase.test_matching
-*graalpython.lib-python.3.test.test_filecmp.TestMain.test_main
+test.test_filecmp.DirCompareTestCase.test_cmpfiles @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_cmpfiles_invalid_names @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_default_ignores @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_different_directories @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_different_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_identical_directories @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_invalid_names @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_no_shallow_different_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_shallow_is_keyword_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_shallow_same_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_dircmp_subdirs_type @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_report_full_closure @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.DirCompareTestCase.test_report_partial_closure @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.FileCompareTestCase.test_cache_clear @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.FileCompareTestCase.test_different @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_filecmp.FileCompareTestCase.test_matching @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

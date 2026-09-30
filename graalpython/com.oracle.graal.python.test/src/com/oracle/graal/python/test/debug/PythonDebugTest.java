@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -81,6 +81,7 @@ public class PythonDebugTest {
         Builder newBuilder = Context.newBuilder();
         newBuilder.allowExperimentalOptions(true);
         newBuilder.allowAllAccess(true);
+        newBuilder.option("engine.WarnInterpreterOnly", "false");
         PythonTests.closeContext();
         tester = new DebuggerTester(newBuilder);
     }
@@ -158,15 +159,17 @@ public class PythonDebugTest {
                 assertEquals(7, frame.getSourceSection().getStartLine());
                 event.prepareStepOver(1);
             });
+            // for i in >genfunc()<:
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
                 assertEquals(8, frame.getSourceSection().getStartLine());
                 event.prepareStepInto(1);
             });
+            // steppping into genfunc()
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
                 assertEquals(12, frame.getSourceSection().getStartLine());
-                event.prepareStepOver(1);
+                event.prepareStepOut(1);
             });
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
@@ -179,6 +182,30 @@ public class PythonDebugTest {
                 event.prepareStepOver(1);
             });
             assertEquals("1", tester.expectDone());
+        }
+    }
+
+    @Test
+    public void testSteppingMultipleStatementsOnSameLine() throws Throwable {
+        final Source source = Source.newBuilder("python", "a = 1; b = 2; a + b", "test_same_line.py").buildLiteral();
+
+        try (DebuggerSession session = tester.startSession()) {
+            session.suspendNextExecution();
+            tester.startEval(source);
+
+            expectSuspended((SuspendedEvent event) -> {
+                assertEquals("a = 1", event.getSourceSection().getCharacters().toString());
+                event.prepareStepOver(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                assertEquals("b = 2", event.getSourceSection().getCharacters().toString());
+                event.prepareStepOver(1);
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                assertEquals("a + b", event.getSourceSection().getCharacters().toString());
+                event.prepareContinue();
+            });
+            assertEquals("3", tester.expectDone());
         }
     }
 
@@ -212,51 +239,42 @@ public class PythonDebugTest {
                         "def foo(x):\n" +
                         "  a = 1\n" +
                         "  b = 2\n" +
-                        "  def bar():\n" +
+                        "  q = 42\n" +
+                        "  def bar(z = 24):\n" +
                         "    return a + b\n" +
                         "  return bar() + x + y\n" +
                         "foo(3)", "test_inline.py").buildLiteral();
 
         try (DebuggerSession session = tester.startSession()) {
-            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(5).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(6).build());
             session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(7).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(8).build());
             tester.startEval(source);
 
+            // breakpoint at bar declaration
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(5, frame.getSourceSection().getStartLine());
+                assertEquals("42", frame.eval("q").toDisplayString());
                 assertEquals("3", frame.eval("a + b").toDisplayString());
+                assertEquals(6, frame.getSourceSection().getStartLine());
                 event.prepareContinue();
             });
+            // breakpoint at bar call site
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(7, frame.getSourceSection().getStartLine());
+                assertEquals(8, frame.getSourceSection().getStartLine());
                 assertEquals("6", frame.eval("bar() * 2").toDisplayString());
                 event.prepareContinue();
             });
-            assertEquals("10", tester.expectDone());
-        }
-    }
-
-    @Test
-    @SuppressWarnings("try")
-    public void testBreakpointBuiltin() throws Throwable {
-        final Source source = Source.newBuilder("python", "" +
-                        "def foo():\n" +
-                        "  a = 1\n" +
-                        "  breakpoint()\n" +
-                        "  return 1\n" +
-                        "foo()\n", "test_breakpoint_builtin.py").buildLiteral();
-
-        try (DebuggerSession session = tester.startSession()) {
-            tester.startEval(source);
-
+            // breakpoint inside bar
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(3, frame.getSourceSection().getStartLine());
+                assertEquals("24", frame.eval("z").toDisplayString());
+                assertEquals("3", frame.eval("a + b").toDisplayString());
+                assertEquals(7, frame.getSourceSection().getStartLine());
                 event.prepareContinue();
             });
-            assertEquals("1", tester.expectDone());
+            assertEquals("10", tester.expectDone());
         }
     }
 
@@ -329,6 +347,50 @@ public class PythonDebugTest {
     }
 
     @Test
+    public void testGeneralLocals() throws Throwable {
+        final Source source = Source.newBuilder("python", """
+                        def gen_fun(a, b):
+                            yield 1
+                            c = 3
+                            yield 2
+                        r = 0
+                        for i in gen_fun(1,2):
+                            r += i
+                        r
+                        """, "testGeneratorLocals.py").buildLiteral();
+
+        try (DebuggerSession session = tester.startSession()) {
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(2).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(4).build());
+            tester.startEval(source);
+
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(2, frame.getSourceSection().getStartLine());
+                checkStack(frame, "gen_fun", "a", "1", "b", "2");
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(2, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(4, frame.getSourceSection().getStartLine());
+                checkStack(frame, "gen_fun", "a", "1", "b", "2", "c", "3");
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(4, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            assertEquals("3", tester.expectDone());
+        }
+    }
+
+    @Test
     public void testReenterArgumentsAndValues() throws Throwable {
         // Test that after a re-enter, arguments are kept and variables are cleared.
         final Source source = Source.newBuilder("python", "" +
@@ -357,7 +419,7 @@ public class PythonDebugTest {
 
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(6, frame.getSourceSection().getStartLine());
+                assertEquals("first breakpoint at 6", 6, frame.getSourceSection().getStartLine());
                 checkStack(frame, "fnc", "n", "11", "m", "20");
                 event.prepareStepOver(4);
             });
@@ -374,7 +436,7 @@ public class PythonDebugTest {
             });
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(6, frame.getSourceSection().getStartLine());
+                assertEquals("first breakpoint at 6", 6, frame.getSourceSection().getStartLine());
                 checkStack(frame, "fnc", "n", "11", "m", "20");
             });
             assertEquals("50.0", tester.expectDone());
@@ -498,8 +560,17 @@ public class PythonDebugTest {
 
     @Test
     public void testSourceFileURI() throws Throwable {
+        testSourceFileURIImpl(false);
+    }
+
+    @Test
+    public void testSourceFileURIBytecode() throws Throwable {
+        testSourceFileURIImpl(true);
+    }
+
+    private void testSourceFileURIImpl(boolean runFromBytecode) throws Throwable {
         if (System.getProperty("os.name").toLowerCase().contains("mac")) {
-            // on the mac machines we run with symlinked directories and such and it's annoying to
+            // on the mac machines we run with symlinked directories and such, and it's annoying to
             // cater for that
             return;
         }
@@ -513,6 +584,11 @@ public class PythonDebugTest {
                             "sys.path.insert(0, '" + tempDir.toString() + "')\n" +
                             "import imported\n" +
                             "imported.sum(2, 3)\n").getBytes());
+
+            if (runFromBytecode) {
+                compileToBytecode(importedFile, importingFile);
+            }
+
             Source source = Source.newBuilder("python", importingFile.toFile()).build();
             try (DebuggerSession session = tester.startSession()) {
                 Breakpoint breakpoint = Breakpoint.newBuilder(importingFile.toUri()).lineIs(4).build();
@@ -547,6 +623,47 @@ public class PythonDebugTest {
             }
         } finally {
             deleteRecursively(tempDir);
+        }
+    }
+
+    private void compileToBytecode(Path... files) {
+        StringBuilder sourceCode = new StringBuilder("import py_compile\n");
+        for (Path file : files) {
+            sourceCode.append("py_compile.compile(r\"").append(file).append("\")\n");
+        }
+        Source compileSource = Source.newBuilder("python", sourceCode.toString(), "compile_source_uri.py").buildLiteral();
+        tester.startEval(compileSource);
+        tester.expectDone();
+    }
+
+    @Test
+    public void testInlineEvaluationBreakpointBuiltin() throws Throwable {
+        final Source source = Source.newBuilder("python", """
+                        a = 1
+                        breakpoint()
+                        b = 2
+                        breakpoint # not invoking, therefore no breakpoint inserted
+                        """, "test_inline.py").buildLiteral();
+
+        try (DebuggerSession session = tester.startSession()) {
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(1).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(3).build());
+            tester.startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(1, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(2, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(3, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
         }
     }
 
@@ -590,4 +707,5 @@ public class PythonDebugTest {
             }
         });
     }
+
 }

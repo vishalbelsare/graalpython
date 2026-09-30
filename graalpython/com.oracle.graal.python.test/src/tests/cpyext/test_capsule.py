@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,18 +36,23 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import gc
+import re
 
-import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+import os
+import time
+
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare, CPyExtType
+
+
+def _capsule_repr_cmpfunc(a, b):
+    if isinstance(a, str) and (b, str):
+        a = re.sub("0x[a-f0-9]+", "0xaaa", a)
+        b = re.sub("0x[a-f0-9]+", "0xaaa", b)
+    return unhandled_error_compare(a, b)
 
 
 class TestPyCapsule(CPyExtTestCase):
-
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyCapsule, self).compile_module(name)
-
     test_PyCapsule_CheckExact = CPyExtFunction(
         lambda args: True,
         lambda: (
@@ -78,6 +83,43 @@ class TestPyCapsule(CPyExtTestCase):
         resultspec="i",
         argspec='sn',
         arguments=["char* name", "Py_ssize_t ptr"],
+        callfunction="wrap_PyCapsule_Check",
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyCapsule_GetName = CPyExtFunction(
+        lambda args: True,
+        lambda: (
+            ("hello",),
+        ),
+        # Test that the returned name is pointer-identical, pybind11 relies on that
+        code='''int wrap_PyCapsule_Check(char * name) {
+            PyObject* capsule = PyCapsule_New((void *)1, name, NULL);
+            return PyCapsule_GetName(capsule) == name;
+        }
+        ''',
+        resultspec="i",
+        argspec='s',
+        arguments=["char* name"],
+        callfunction="wrap_PyCapsule_Check",
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyCapsule_SetName = CPyExtFunction(
+        lambda args: True,
+        lambda: (
+            ("hello",),
+        ),
+        # Test that the returned name is pointer-identical, pybind11 relies on that
+        code='''int wrap_PyCapsule_Check(char * name) {
+            PyObject* capsule = PyCapsule_New((void *)1, NULL, NULL);
+            PyCapsule_SetName(capsule, name);
+            return PyCapsule_GetName(capsule) == name;
+        }
+        ''',
+        resultspec="i",
+        argspec='s',
+        arguments=["char* name"],
         callfunction="wrap_PyCapsule_Check",
         cmpfunc=unhandled_error_compare
     )
@@ -116,3 +158,51 @@ class TestPyCapsule(CPyExtTestCase):
         callfunction="wrap_PyCapsule_SetContext",
         cmpfunc=unhandled_error_compare
     )
+
+    test_PyCapsule__repr__ = CPyExtFunction(
+        lambda args: f'<capsule object "{args[0]}" at 0xaaaa>',
+        lambda: (
+            ("hello", 0xDEADBEEF),
+        ),
+        code='''
+        PyObject* wrap_PyCapsule__repr__(char * name, Py_ssize_t ptr) {
+            PyObject* capsule = PyCapsule_New((void*)ptr, name, NULL);
+            return PyObject_Repr(capsule);
+        }
+        ''',
+        resultspec="O",
+        argspec='sn',
+        arguments=["char* name", "Py_ssize_t ptr"],
+        callfunction="wrap_PyCapsule__repr__",
+        cmpfunc=_capsule_repr_cmpfunc,
+    )
+
+    if os.environ.get('GRAALPYTEST_RUN_GC_TESTS'):
+        def test_capsule_destructor(self):
+            Tester = CPyExtType(
+                "CapsuleDestructorTester",
+                code="""
+                static void capsule_destructor(PyObject* capsule) {
+                    PyObject* contents = (PyObject*) PyCapsule_GetPointer(capsule, "capsule");
+                    assert(PyDict_Check(contents));
+                    PyDict_SetItemString(contents, "destructor_was_here", Py_NewRef(Py_True));
+                    Py_DECREF(contents);
+                }
+
+                static PyObject* create_capsule(PyObject* unused, PyObject* contents) {
+                    return PyCapsule_New(Py_NewRef(contents), "capsule", capsule_destructor);
+                }
+                """,
+                tp_methods='{"create_capsule", (PyCFunction)create_capsule, METH_O | METH_STATIC, NULL}',
+            )
+            d = {}
+            capsule = Tester.create_capsule(d)
+            assert capsule
+            assert not d
+            del capsule
+            start = time.time()
+            while "destructor_was_here" not in d:
+                if time.time() - start > 60:
+                    raise AssertionError("Capsule destructor didn't execute within timeout")
+                gc.collect()
+                time.sleep(0.01)

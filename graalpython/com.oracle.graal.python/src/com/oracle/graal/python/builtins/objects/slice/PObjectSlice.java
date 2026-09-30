@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,11 +48,11 @@ import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerAsserts;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
+import com.oracle.truffle.api.nodes.Node;
 
 public final class PObjectSlice extends PSlice {
 
@@ -93,10 +93,6 @@ public final class PObjectSlice extends PSlice {
         return stepObject;
     }
 
-    public SliceInfo computeIndices(int length) {
-        return PSlice.computeIndices(getStart(), getStop(), getStep(), length);
-    }
-
     @ValueType
     public static final class SliceObjectInfo {
         public final Object start;
@@ -129,14 +125,13 @@ public final class PObjectSlice extends PSlice {
      * _PySlice_GetLongIndices
      */
     @TruffleBoundary
-    public static SliceObjectInfo computeIndicesSlowPath(PObjectSlice slice, Object lengthIn, PythonObjectFactory factory) {
+    public static SliceObjectInfo computeIndicesSlowPath(Node nodeForRaise, PObjectSlice slice, Object lengthIn, boolean usePInt) {
         boolean stepIsNegative;
         BigInteger lower, upper;
         BigInteger start, stop, step, length;
         length = (BigInteger) lengthIn;
         if (pySign(length) < 0) {
-            CompilerDirectives.transferToInterpreter();
-            throw PRaiseNode.raiseUncached(null, ValueError, ErrorMessages.LENGTH_SHOULD_NOT_BE_NEG);
+            throw PRaiseNode.raiseStatic(nodeForRaise, ValueError, ErrorMessages.LENGTH_SHOULD_NOT_BE_NEG);
         }
         if (slice.getStep() == PNone.NONE) {
             step = ONE;
@@ -145,8 +140,7 @@ public final class PObjectSlice extends PSlice {
             step = (BigInteger) slice.getStep();
             stepIsNegative = pySign(step) < 0;
             if (pySign(step) == 0) {
-                CompilerDirectives.transferToInterpreter();
-                throw PRaiseNode.raiseUncached(null, ValueError, ErrorMessages.SLICE_STEP_CANNOT_BE_ZERO);
+                throw PRaiseNode.raiseStatic(nodeForRaise, ValueError, ErrorMessages.SLICE_STEP_CANNOT_BE_ZERO);
             }
         }
 
@@ -197,8 +191,9 @@ public final class PObjectSlice extends PSlice {
             }
         }
 
-        if (factory != null) {
-            return new SliceObjectInfo(factory.createInt(start), factory.createInt(stop), factory.createInt(step));
+        if (usePInt) {
+            PythonLanguage language = PythonLanguage.get(null);
+            return new SliceObjectInfo(PFactory.createInt(language, start), PFactory.createInt(language, stop), PFactory.createInt(language, step));
         } else {
             return new SliceObjectInfo(start, stop, step);
         }

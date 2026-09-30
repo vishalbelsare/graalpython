@@ -1,1 +1,2 @@
-*graalpython.lib-python.3.test.test_unpack.TestMain.test_main
+DocTestCase.test.test_unpack.__test__.doctests @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_unpack.TestCornerCases.test_extended_oparg_not_ignored @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

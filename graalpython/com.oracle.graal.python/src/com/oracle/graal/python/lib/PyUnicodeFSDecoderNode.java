@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package com.oracle.graal.python.lib;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.truffle.api.strings.TruffleString.Encoding.UTF_8;
 
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
@@ -61,6 +62,8 @@ import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.strings.AbstractTruffleString;
+import com.oracle.truffle.api.strings.TranscodingErrorHandler;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
@@ -71,38 +74,44 @@ import com.oracle.truffle.api.strings.TruffleString.Encoding;
 @GenerateUncached
 @GenerateInline(false)
 public abstract class PyUnicodeFSDecoderNode extends PNodeWithContext {
+    public static final TranscodingErrorHandler SURROGATE_ESCAPE_FROM_UTF8_TRANSCODING_ERROR_HANDLER = PyUnicodeFSDecoderNode::surrogateEscapeTranscodingError;
+
     public abstract TruffleString execute(Frame frame, Object object);
 
     @Specialization
     TruffleString doString(TruffleString object,
                     @Shared("byteIndexOfCP") @Cached TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
-        return checkString(object, byteIndexOfCodePointNode);
+        return checkString(this, object, byteIndexOfCodePointNode);
     }
 
     @Specialization
-    @SuppressWarnings("truffle-static-method")
-    TruffleString doPString(PString object,
-                    @Bind("this") Node inliningTarget,
+    static TruffleString doPString(PString object,
+                    @Bind Node inliningTarget,
                     @Cached CastToTruffleStringNode cast,
                     @Shared("byteIndexOfCP") @Cached TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
-        return checkString(cast.execute(inliningTarget, object), byteIndexOfCodePointNode);
+        return checkString(inliningTarget, cast.execute(inliningTarget, object), byteIndexOfCodePointNode);
     }
 
     @Specialization(limit = "1")
     TruffleString doBytes(PBytes object,
                     @CachedLibrary("object") PythonBufferAccessLibrary bufferLib,
                     @Cached TruffleString.FromByteArrayNode fromByteArrayNode,
+                    @Cached TruffleString.IsValidNode isValidNode,
                     @Cached TruffleString.SwitchEncodingNode switchEncodingNode,
                     @Shared("byteIndexOfCP") @Cached TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
-        // TODO PyUnicode_DecodeFSDefault
-        TruffleString utf8 = fromByteArrayNode.execute(bufferLib.getCopiedByteArray(object), Encoding.UTF_8, false);
-        return checkString(switchEncodingNode.execute(utf8, TS_ENCODING), byteIndexOfCodePointNode);
+        TruffleString utf8 = fromByteArrayNode.execute(bufferLib.getCopiedByteArray(object), UTF_8, false);
+        TruffleString str;
+        if (isValidNode.execute(utf8, UTF_8)) {
+            str = switchEncodingNode.execute(utf8, TS_ENCODING);
+        } else {
+            str = switchEncodingNode.execute(utf8, TS_ENCODING, SURROGATE_ESCAPE_FROM_UTF8_TRANSCODING_ERROR_HANDLER);
+        }
+        return checkString(this, str, byteIndexOfCodePointNode);
     }
 
     @Fallback
-    @SuppressWarnings("truffle-static-method")
-    TruffleString doPathLike(VirtualFrame frame, Object object,
-                    @Bind("this") Node inliningTarget,
+    static TruffleString doPathLike(VirtualFrame frame, Object object,
+                    @Bind Node inliningTarget,
                     @Cached PyOSFSPathNode fspathNode,
                     @Cached PyUnicodeFSDecoderNode recursive) {
         Object path = fspathNode.execute(frame, inliningTarget, object);
@@ -110,10 +119,19 @@ public abstract class PyUnicodeFSDecoderNode extends PNodeWithContext {
         return recursive.execute(frame, path);
     }
 
-    private TruffleString checkString(TruffleString str, TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
+    private static TruffleString checkString(Node raisingNode, TruffleString str, TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
         if (byteIndexOfCodePointNode.execute(str, 0, 0, str.byteLength(TS_ENCODING), TS_ENCODING) >= 0) {
-            throw PRaiseNode.raiseUncached(this, ValueError, ErrorMessages.EMBEDDED_NULL_BYTE);
+            throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.EMBEDDED_NULL_BYTE);
         }
         return str;
     }
+
+    private static TranscodingErrorHandler.ReplacementString surrogateEscapeTranscodingError(AbstractTruffleString sourceString, int byteIndex, int estimatedByteLength,
+                    Encoding sourceEncoding, Encoding targetEncoding) {
+        assert sourceEncoding == UTF_8 && targetEncoding == TS_ENCODING;
+        int b = sourceString.readByteUncached(byteIndex, UTF_8);
+        assert b >= 0x80;
+        return new TranscodingErrorHandler.ReplacementString(TruffleString.fromCodePointUncached(0xdc00 | b, TS_ENCODING, true), 1);
+    }
+
 }

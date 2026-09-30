@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,37 +40,35 @@
  */
 package com.oracle.graal.python.builtins.modules.lzma;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PLZMACompressor;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PLZMADecompressor;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
-import static com.oracle.graal.python.runtime.NFILZMASupport.CHECK_CRC32_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.CHECK_CRC64_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.CHECK_ID_MAX_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.CHECK_NONE_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.CHECK_SHA256_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.CHECK_UNKNOWN_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_ARMTHUMB_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_ARM_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_DELTA_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_IA64_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_LZMA1_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_LZMA2_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_POWERPC_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_SPARC_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FILTER_X86_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FORMAT_ALONE_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FORMAT_AUTO_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FORMAT_RAW_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.FORMAT_XZ_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MF_BT2_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MF_BT3_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MF_BT4_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MF_HC3_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MF_HC4_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MODE_FAST_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MODE_NORMAL_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.PRESET_DEFAULT_INDEX;
-import static com.oracle.graal.python.runtime.NFILZMASupport.PRESET_EXTREME_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.CHECK_CRC32_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.CHECK_CRC64_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.CHECK_ID_MAX_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.CHECK_NONE_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.CHECK_SHA256_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.CHECK_UNKNOWN_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_ARMTHUMB_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_ARM_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_DELTA_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_IA64_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_LZMA1_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_LZMA2_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_POWERPC_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_SPARC_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FILTER_X86_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FORMAT_ALONE_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FORMAT_AUTO_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FORMAT_RAW_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.FORMAT_XZ_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MF_BT2_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MF_BT3_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MF_BT4_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MF_HC3_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MF_HC4_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MODE_FAST_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MODE_NORMAL_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.PRESET_DEFAULT_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.PRESET_EXTREME_INDEX;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
@@ -80,7 +78,8 @@ import org.graalvm.shadowed.org.tukaani.xz.LZMA2Options;
 import org.graalvm.shadowed.org.tukaani.xz.XZ;
 import org.graalvm.shadowed.org.tukaani.xz.XZOutputStream;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -90,21 +89,17 @@ import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
 import com.oracle.graal.python.nodes.util.CastToJavaLongLossyNode;
-import com.oracle.graal.python.runtime.NFILZMASupport;
-import com.oracle.graal.python.runtime.NativeLibrary;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.NativeLZMASupport;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -183,18 +178,10 @@ public final class LZMAModuleBuiltins extends PythonBuiltins {
         super.initialize(core);
     }
 
-    private static Object as(Python3Core core, int[] a) {
-        return core.getContext().getEnv().asGuestValue(a);
-    }
-
-    private static Object as(Python3Core core, long[] a) {
-        return core.getContext().getEnv().asGuestValue(a);
-    }
-
     @Override
     public void postInitialize(Python3Core c) {
         super.postInitialize(c);
-        NFILZMASupport lzmaSupport = c.getContext().getNFILZMASupport();
+        NativeLZMASupport lzmaSupport = c.getContext().getNativeLZMASupport();
         PythonModule lzmaModule = c.lookupBuiltinModule(T__LZMA);
         int[] formats = new int[4];
         int[] checks = new int[6];
@@ -203,9 +190,9 @@ public final class LZMAModuleBuiltins extends PythonBuiltins {
         long[] preset = new long[2];
         if (lzmaSupport.isAvailable()) {
             try {
-                lzmaSupport.getMacros(as(c, formats),
-                                as(c, checks), as(c, FILTERS),
-                                as(c, mfs), as(c, modes), as(c, preset));
+                lzmaSupport.getMacros(formats,
+                                checks, FILTERS,
+                                mfs, modes, preset);
                 FORMAT_AUTO = formats[FORMAT_AUTO_INDEX];
                 FORMAT_XZ = formats[FORMAT_XZ_INDEX];
                 FORMAT_ALONE = formats[FORMAT_ALONE_INDEX];
@@ -225,8 +212,8 @@ public final class LZMAModuleBuiltins extends PythonBuiltins {
                 MODE_NORMAL = modes[MODE_NORMAL_INDEX];
                 PRESET_DEFAULT = preset[PRESET_DEFAULT_INDEX];
                 PRESET_EXTREME = preset[PRESET_EXTREME_INDEX];
-            } catch (NativeLibrary.NativeLibraryCannotBeLoaded e) {
-                lzmaSupport.notAvailable();
+            } catch (UnsupportedOperationException e) {
+                lzmaSupport.setNotAvailable();
                 // ignore and proceed without native lzma support and use the java port.
             }
         }
@@ -260,40 +247,13 @@ public final class LZMAModuleBuiltins extends PythonBuiltins {
         lzmaModule.setAttribute(tsLiteral("MF_HC4"), MF_HC4);
     }
 
-    @Builtin(name = "LZMACompressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true, constructsClass = PLZMACompressor)
-    @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    abstract static class LZMACompressorNode extends PythonBuiltinNode {
-
-        @Specialization
-        LZMAObject doNew(Object cls, @SuppressWarnings("unused") Object arg,
-                        @Cached PythonObjectFactory factory) {
-            // data filled in subsequent __init__ call - see LZMACompressorBuiltins.InitNode
-            return factory.createLZMACompressor(cls, getContext().getNFILZMASupport().isAvailable());
-        }
-    }
-
-    @Builtin(name = "LZMADecompressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true, constructsClass = PLZMADecompressor)
-    @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    abstract static class LZMADecompressorNode extends PythonBuiltinNode {
-
-        @Specialization
-        LZMAObject doNew(Object cls, @SuppressWarnings("unused") Object arg,
-                        @Cached PythonObjectFactory factory) {
-            // data filled in subsequent __init__ call - see LZMADecompressorBuiltins.InitNode
-            return factory.createLZMADecompressor(cls, getContext().getNFILZMASupport().isAvailable());
-        }
-    }
-
     @Builtin(name = "is_check_supported", minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class IsCheckSupportedNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         static boolean doInt(VirtualFrame frame, Object checkID,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyNumberAsSizeNode asSizeNode,
                         @Cached LZMANodes.IsCheckSupported isCheckSupported) {
             return isCheckSupported.execute(inliningTarget, asSizeNode.executeExact(frame, inliningTarget, checkID, ValueError));
@@ -302,31 +262,29 @@ public final class LZMAModuleBuiltins extends PythonBuiltins {
 
     @Builtin(name = "_encode_filter_properties", minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class EncodeFilterPropertiesNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         static PBytes encode(VirtualFrame frame, Object filter,
                         @Cached LZMANodes.EncodeFilterProperties encodeFilterProperties,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createBytes(encodeFilterProperties.execute(frame, filter));
+                        @Bind PythonLanguage language) {
+            return PFactory.createBytes(language, encodeFilterProperties.execute(frame, filter));
         }
     }
 
     @Builtin(name = "_decode_filter_properties", minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class DecodeFilterPropertiesNode extends PythonBinaryBuiltinNode {
 
         @Specialization
         static PDict encode(VirtualFrame frame, Object id, Object encodedProps,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached CastToJavaLongLossyNode toLong,
                         @Cached BytesNodes.ToBytesNode toBytes,
-                        @Cached LZMANodes.DecodeFilterProperties decodeFilterProperties,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached LZMANodes.DecodeFilterProperties decodeFilterProperties) {
             byte[] bytes = toBytes.execute(frame, encodedProps);
-            PDict dict = factory.createDict();
+            PDict dict = PFactory.createDict(language);
             decodeFilterProperties.execute(frame, toLong.execute(inliningTarget, id), bytes, dict);
             return dict;
         }

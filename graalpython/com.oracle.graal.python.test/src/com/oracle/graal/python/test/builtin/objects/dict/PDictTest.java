@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,11 +48,18 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
 import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageDelItem;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageLen;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.builtins.objects.object.PythonObject;
+import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
+import com.oracle.graal.python.nodes.attributes.WriteAttributeToPythonObjectNode;
+import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.test.PythonTests;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -81,8 +88,50 @@ public class PDictTest {
     }
 
     @Test
+    public void dynamicStorageAttributeWrites() {
+        PythonObject object = PFactory.createSimpleNamespace(PythonLanguage.get(null));
+        WriteAttributeToPythonObjectNode.executeUncached(object, ts("key"), 1);
+        PDict dict = GetOrCreateDictNode.executeUncached(object);
+        assertEquals(1, length(dict));
+        WriteAttributeToObjectNode.getUncached().execute(object, ts("key"), PNone.NO_VALUE);
+        assertEquals(0, length(dict));
+        WriteAttributeToObjectNode.getUncached().execute(object, ts("key"), 2);
+        assertEquals(1, length(dict));
+        WriteAttributeToObjectNode.getUncached().execute(object, ts("key"), PNone.NO_VALUE);
+        assertEquals(0, length(dict));
+    }
+
+    @Test(expected = AssertionError.class)
+    public void directAttributeWriteRejectsBackingDict() {
+        PythonObject object = PFactory.createSimpleNamespace(PythonLanguage.get(null));
+        GetOrCreateDictNode.executeUncached(object);
+        WriteAttributeToPythonObjectNode.executeUncached(object, ts("key"), 1);
+    }
+
+    @Test(expected = AssertionError.class)
+    public void dynamicStorageDetectsStaleTemporaryWrapper() {
+        PythonObject object = PFactory.createSimpleNamespace(PythonLanguage.get(null));
+        DynamicObjectStorage storage = new DynamicObjectStorage(object);
+        assertEquals(0, HashingStorageLen.executeUncached(storage));
+        WriteAttributeToObjectNode.getUncached().execute(object, ts("key"), 1);
+        HashingStorageLen.executeUncached(storage);
+    }
+
+    @Test(expected = AssertionError.class)
+    public void dynamicStorageDetectsStaleTemporaryWrapperWithDict() {
+        PythonObject object = PFactory.createSimpleNamespace(PythonLanguage.get(null));
+        PDict dict = GetOrCreateDictNode.executeUncached(object);
+        DynamicObjectStorage storage = new DynamicObjectStorage(object);
+        assertEquals(0, HashingStorageLen.executeUncached(storage));
+        assertEquals(0, length(dict));
+        WriteAttributeToObjectNode.getUncached().execute(object, ts("key"), 1);
+        assertEquals(1, length(dict));
+        HashingStorageLen.executeUncached(storage);
+    }
+
+    @Test
     public void economicMapStorageTransition() {
-        PDict dict = PythonObjectFactory.getUncached().createDict();
+        PDict dict = PFactory.createDict(PythonLanguage.get(null));
         dict.setItem(ts("key1"), 42);
         dict.setItem(11, ts("abc"));
         assertTrue(dict.getDictStorage() instanceof EconomicMapStorage);
@@ -91,19 +140,20 @@ public class PDictTest {
 
     @Test
     public void economicMapStorageSet() {
-        PDict dict = PythonObjectFactory.getUncached().createDict();
+        PDict dict = PFactory.createDict(PythonLanguage.get(null));
         dict.setItem(11, ts("abc"));
         assertTrue(dict.getDictStorage() instanceof EconomicMapStorage);
 
         dict.setItem(ts("key1"), 42);
         assertEquals(2, length(dict));
+        assertTrue(dict.getDictStorage() instanceof EconomicMapStorage);
 
         assertEquals(42, dict.getItem(ts("key1")));
     }
 
     @Test
     public void economicMapStorageDel() {
-        PDict dict = PythonObjectFactory.getUncached().createDict();
+        PDict dict = PFactory.createDict(PythonLanguage.get(null));
         dict.setItem(11, ts("abc"));
         dict.setItem(ts("key1"), 42);
         dict.setItem(ts("key2"), 24);
@@ -112,9 +162,20 @@ public class PDictTest {
 
         delItem(dict, ts("key2"));
         assertEquals(2, length(dict));
+        assertTrue(dict.getDictStorage() instanceof EconomicMapStorage);
 
         assertEquals(42, dict.getItem(ts("key1")));
 
         assertNull(dict.getItem(ts("key2")));
+    }
+
+    @Test
+    public void economicMapStorageEightEntries() {
+        PDict dict = PFactory.createDict(PythonLanguage.get(null));
+        for (int i = 0; i < 8; i++) {
+            dict.setItem(i, i);
+        }
+        assertTrue(dict.getDictStorage() instanceof EconomicMapStorage);
+        assertEquals(8, length(dict));
     }
 }

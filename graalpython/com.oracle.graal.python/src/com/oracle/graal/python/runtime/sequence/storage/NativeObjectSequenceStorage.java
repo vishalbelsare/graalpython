@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,11 +41,10 @@
 package com.oracle.graal.python.runtime.sequence.storage;
 
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
-import com.oracle.truffle.api.CompilerAsserts;
 
 public final class NativeObjectSequenceStorage extends NativeSequenceStorage {
 
-    private NativeObjectSequenceStorage(Object ptr, int length, int capacity) {
+    private NativeObjectSequenceStorage(long ptr, int length, int capacity) {
         super(ptr, length, capacity);
     }
 
@@ -53,7 +52,7 @@ public final class NativeObjectSequenceStorage extends NativeSequenceStorage {
      * @param ownsMemory whether the memory should be freed when this object dies. Should be true
      *            when actually used as a sequence storage
      */
-    public static NativeObjectSequenceStorage create(Object ptr, int length, int capacity, boolean ownsMemory) {
+    public static NativeObjectSequenceStorage create(long ptr, int length, int capacity, boolean ownsMemory) {
         NativeObjectSequenceStorage storage = new NativeObjectSequenceStorage(ptr, length, capacity);
         if (ownsMemory) {
             CApiTransitions.registerNativeSequenceStorage(storage);
@@ -61,15 +60,14 @@ public final class NativeObjectSequenceStorage extends NativeSequenceStorage {
         return storage;
     }
 
-    @Override
-    public ListStorageType getElementType() {
-        // TODO Auto-generated method stub
-        return ListStorageType.Generic;
+    public static NativeObjectSequenceStorage create(long ptr, int length, int capacity, Object owner) {
+        NativeObjectSequenceStorage storage = new NativeObjectSequenceStorage(ptr, length, capacity);
+        storage.setBorrowedMemoryOwner(owner);
+        return storage;
     }
 
     @Override
-    public String toString(boolean isList) {
-        CompilerAsserts.neverPartOfCompilation();
-        return String.format("%sNativeObjectSequenceStorage(len=%d, cap=%d) at %s%s", isList ? "[" : "(", length, capacity, getPtr(), isList ? "]" : ")");
+    public StorageType getElementType() {
+        return StorageType.Generic;
     }
 }

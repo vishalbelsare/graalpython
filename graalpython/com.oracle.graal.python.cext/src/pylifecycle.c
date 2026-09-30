@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -38,14 +38,112 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+#include "Python.h"
+
+#include "pycore_call.h"          // _PyObject_CallMethod()
+#include "pycore_ceval.h"         // _PyEval_FiniGIL()
+#include "pycore_fileutils.h"     // _Py_ResetForceASCII()
+#include "pycore_floatobject.h"   // _PyFloat_InitTypes()
+#include "pycore_long.h"          // _PyLong_InitTypes()
+#include "pycore_object.h"        // _PyDebug_PrintTotalRefs()
+#include "pycore_pyerrors.h"      // _PyErr_Occurred()
+#include "pycore_pymem.h"         // _PyObject_DebugMallocStats()
+#include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_runtime.h"       // _Py_ID()
+#include "pycore_runtime_init.h"  // _PyRuntimeState_INIT
+#include "pycore_typeobject.h"    // _PyTypes_InitTypes()
+#include "pycore_unicodeobject.h" // _PyUnicode_InitTypes()
+
+
+#include <locale.h>               // setlocale()
+#include <stdarg.h>               // va_list
+#include <stdlib.h>               // getenv()
+#ifdef HAVE_UNISTD_H
+#  include <unistd.h>             // isatty()
+#endif
+
 #include "capi.h"
 
 int Py_IsInitialized(void) {
-    return 1;
+    return !graalpy_finalizing;
+}
+
+int
+Py_IsFinalizing(void)
+{
+    return graalpy_finalizing;
+}
+
+// GraalPy change: compatibility alias for pybind11
+int
+_Py_IsFinalizing(void)
+{
+    return Py_IsFinalizing();
+}
+
+static void
+graalpy_fork_not_supported(void)
+{
+    PyErr_SetString(PyExc_SystemError, "fork is not supported by GraalPy");
+}
+
+void
+PyOS_BeforeFork(void)
+{
+    graalpy_fork_not_supported();
+}
+
+void
+PyOS_AfterFork_Parent(void)
+{
+    graalpy_fork_not_supported();
+}
+
+void
+PyOS_AfterFork_Child(void)
+{
+    graalpy_fork_not_supported();
+}
+
+void
+PyOS_AfterFork(void)
+{
+    PyOS_AfterFork_Child();
 }
 
 void _Py_NO_RETURN  _Py_FatalErrorFunc(const char *func, const char *msg) {
-	GraalPyTruffle_FatalErrorFunc(func, msg, -1);
-	/* If the above upcall returns, then we just fall through to the 'abort' call. */
-	abort();
+    const char *prefix1 = "", *prefix2 = "";
+    if (func) {
+        prefix1 = func;
+        prefix2 = ": ";
+    }
+    if (!msg) {
+        msg = "<message not set>";
+    }
+    fprintf(stderr, "Fatal Python error: %s%s%s\n", prefix1, prefix2, msg);
+    abort();
 }
+
+void _Py_NO_RETURN
+_Py_FatalErrorFormat(const char *func, const char *format, ...)
+{
+    char buffer[256];
+    va_list vargs;
+
+    if (!format) {
+        _Py_FatalErrorFunc(func, NULL);
+    }
+
+    va_start(vargs, format);
+    PyOS_vsnprintf(buffer, sizeof(buffer), format, vargs);
+    va_end(vargs);
+    _Py_FatalErrorFunc(func, buffer);
+}
+
+_PyRuntimeState _PyRuntime
+#if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+__attribute__ ((section (".PyRuntime")))
+#endif
+= _PyRuntimeState_INIT(_PyRuntime, _Py_Debug_Cookie);
+
+static int runtime_initialized = 0;

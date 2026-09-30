@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,113 +41,208 @@
 package com.oracle.graal.python.runtime;
 
 import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.utilities.TruffleWeakReference;
 
-public final class IndirectCallData {
+/**
+ * Classes {@link InteropCallData} and {@link BoundaryCallData} mark a point where we transition
+ * from code with access to the Python Truffle virtual frame to code to which we cannot pass the
+ * virtual frame (e.g., TruffleBoundary, or Truffle interop call). Those should be passed to
+ * {@link com.oracle.graal.python.runtime.ExecutionContext.InteropCallContext} or
+ * {@link com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext}.
+ * <p>
+ * These classes hold assumptions that let us avoid storing the current exception state and PFrame
+ * into the thread state unless some callee down the stack asked for it.
+ * <p>
+ * During a Truffle stack walk, we need to be able to traverse the AST from the "call node" to the
+ * indirect call data. It would be cumbersome if all the nodes that need to do the transition would
+ * have to implement some interface with getters/setters for the assumptions, so instead the
+ * indirect call data objects are their children. This means that we need a mapping from the nodes
+ * that do the transition to their indirect call data and this is kept in {@link PythonLanguage}.
+ */
+public abstract class IndirectCallData {
 
-    private static final IndirectCallData UNCACHED = new IndirectCallData();
-
-    private final TruffleWeakReference<Node> nodeRef;
-    @CompilationFinal private Assumption nativeCodeDoesntNeedExceptionState;
-    @CompilationFinal private Assumption nativeCodeDoesntNeedMyFrame;
-
-    private IndirectCallData() {
-        this.nodeRef = new TruffleWeakReference<>(null);
-        nativeCodeDoesntNeedMyFrame = Assumption.ALWAYS_VALID;
-        nativeCodeDoesntNeedExceptionState = Assumption.ALWAYS_VALID;
+    /**
+     * For given {@link Node} retried as "call node" during stack walk, finds the corresponding
+     * {@link BoundaryCallData} and if it exists sets the caller flags on it.
+     */
+    public static void setCallerFlagsOnIndirectCallData(final Node callNode, int callerFlags) {
+        // If the call was made from non-Python frame, i.e., code without access to its
+        // current Truffle virtual frame, e.g., TruffleBoundary code, we must find the point
+        // where the transition from Python frame to non-Python frame was made and
+        // invalidate the "don't pass caller frame" assumption there, so next time we avoid
+        // this stack walk. Such transition is marked with IndirectCallData node or a node
+        // associated with IndirectCallData.
+        if (callNode instanceof BoundaryCallData boundaryCallData) {
+            // Situation where Python itself set a BoundaryCallData as EncapsulatingNodeReference
+            boundaryCallData.updateCallerFlags(callerFlags);
+        }
+        // In any case we need to traverse the AST to find InteropCallData and BoundaryCallData in
+        // case the EncapsulatingNodeReference was overridden.
+        Node pythonCallNode = callNode;
+        while (pythonCallNode != null) {
+            InteropCallData interopCallData = PythonLanguage.lookupInteropCallData(pythonCallNode);
+            if (interopCallData != null) {
+                interopCallData.updateCallerFlags(callerFlags);
+            }
+            BoundaryCallData boundaryCallData = PythonLanguage.lookupBoundaryCallData(pythonCallNode);
+            if (boundaryCallData != null) {
+                boundaryCallData.updateCallerFlags(callerFlags);
+            }
+            pythonCallNode = pythonCallNode.getParent();
+        }
     }
 
-    public IndirectCallData(Node node) {
-        assert node != null;
-        this.nodeRef = new TruffleWeakReference<>(node);
+    public static class CallerFlagsAssumptionSet {
+        @CompilationFinal private volatile int callerFlags;
+        @CompilationFinal private volatile Assumption callerFlagsAssumption = createAssumption();
+
+        private static final CallerFlagsAssumptionSet UNCACHED = new CallerFlagsAssumptionSet();
+        static {
+            UNCACHED.callerFlags = ~0;
+        }
+
+        public CallerFlagsAssumptionSet() {
+        }
+
+        public boolean isUncached() {
+            return this == UNCACHED;
+        }
+
+        /**
+         * Returns {@link CallerFlags} representing what this call site needs to pass in the context
+         * to the calees within the scope of the indirect call
+         */
+        public int getCallerFlags() {
+            if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(this) && !callerFlagsAssumption.isValid()) {
+                /*
+                 * We create a new assumption after each invalidation, we shouldn't normally get
+                 * here except when the compilation races with the assumption resetting
+                 */
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+            }
+            return callerFlags;
+        }
+
+        @TruffleBoundary
+        public void updateCallerFlags(int newFlags) {
+            if ((newFlags & CallerFlags.NEEDS_MATERIALIZED_LOCALS) != 0) {
+                newFlags |= CallerFlags.NEEDS_LOCALS;
+            }
+            if ((newFlags & (CallerFlags.NEEDS_LOCALS | CallerFlags.NEEDS_LASTI)) != 0) {
+                newFlags |= CallerFlags.NEEDS_PFRAME;
+            }
+            if ((newFlags & CallerFlags.NEEDS_PFRAME) != 0) {
+                newFlags |= CallerFlags.NEEDS_FRAME_REFERENCE;
+            }
+            if ((callerFlags & newFlags) != newFlags) {
+                synchronized (this) {
+                    if ((callerFlags & newFlags) != newFlags) {
+                        CompilerDirectives.transferToInterpreterAndInvalidate();
+                        callerFlagsAssumption.invalidate("caller flags changed");
+                        callerFlags |= newFlags;
+                        callerFlagsAssumption = createAssumption();
+                    }
+                }
+            }
+        }
+
+        private static Assumption createAssumption() {
+            return Truffle.getRuntime().createAssumption("caller flags");
+        }
     }
 
-    public boolean isUncached() {
-        assert (nodeRef.get() == null) == (this == UNCACHED);
-        return this == UNCACHED;
-    }
+    public abstract static class IndirectCallDataBase extends Node {
+        @CompilationFinal protected CallerFlagsAssumptionSet callerFlagsAssumptionSet = new CallerFlagsAssumptionSet();
+        @Child private MaterializeFrameNode materializeFrameNode;
 
-    public Node getNode() {
-        assert !isUncached();
-        return nodeRef.get();
-    }
+        public int getCallerFlags() {
+            return callerFlagsAssumptionSet.getCallerFlags();
+        }
 
-    public boolean calleeNeedsCallerFrame() {
-        return !needNotPassFrameAssumption().isValid();
-    }
+        public void updateCallerFlags(int callerFlags) {
+            callerFlagsAssumptionSet.updateCallerFlags(callerFlags);
+        }
 
-    public boolean calleeNeedsExceptionState() {
-        return !needNotPassExceptionAssumption().isValid();
-    }
+        public abstract boolean isUncached();
 
-    public void setCalleeNeedsCallerFrame() {
-        needNotPassFrameAssumption().invalidate();
-    }
-
-    public void setCalleeNeedsExceptionState() {
-        needNotPassExceptionAssumption().invalidate();
+        public MaterializeFrameNode getMaterializeFrameNode() {
+            if (isUncached()) {
+                return MaterializeFrameNode.getUncached();
+            }
+            if (materializeFrameNode == null) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                materializeFrameNode = insert(MaterializeFrameNode.create());
+            }
+            return materializeFrameNode;
+        }
     }
 
     /**
-     * Finds the parent of {@code callNode} that has an {@link IndirectCallData} instance attached
-     * and marks it so that it will pass the state via the context the next time.
-     *
-     * @return {@code true} if the marking was successful, {@code false} otherwise
+     * Truffle interop overrides the {@link com.oracle.truffle.api.nodes.EncapsulatingNodeReference}
+     * with its own node when doing transition to uncached, or it does not transition to uncached at
+     * all and makes a cached call. In either case, during a stack walk the "location" will be some
+     * interop AST node connected to our AST.
+     * <p>
+     * This scheme is used also for our interop buffer Truffle libraries.
      */
-    public static boolean setEncapsulatingNeedsToPassCallerFrame(final Node callNode) {
-        Node pythonCallNode = callNode;
-        while (pythonCallNode != null) {
-            IndirectCallData data = PythonLanguage.lookupIndirectCallData(pythonCallNode);
-            if (data != null) {
-                data.setCalleeNeedsCallerFrame();
-                return true;
-            }
-            pythonCallNode = pythonCallNode.getParent();
-        }
-        return false;
-    }
+    public static final class InteropCallData extends IndirectCallDataBase {
 
-    public static void setEncapsulatingNeedsToPassExceptionState(Node callNode) {
-        Node pythonCallNode = callNode;
-        while (pythonCallNode != null) {
-            IndirectCallData data = PythonLanguage.lookupIndirectCallData(pythonCallNode);
-            if (data != null) {
-                data.setCalleeNeedsExceptionState();
-                break;
-            }
-            pythonCallNode = pythonCallNode.getParent();
+        private static final InteropCallData UNCACHED = new InteropCallData();
+
+        static {
+            UNCACHED.callerFlagsAssumptionSet = CallerFlagsAssumptionSet.UNCACHED;
+        }
+
+        public boolean isUncached() {
+            return this == UNCACHED;
+        }
+
+        @NeverDefault
+        public static InteropCallData createFor(Node node) {
+            return PythonLanguage.createInteropCallData(node);
+        }
+
+        @NeverDefault
+        public static InteropCallData getUncached() {
+            return UNCACHED;
         }
     }
 
-    private Assumption needNotPassFrameAssumption() {
-        if (nativeCodeDoesntNeedMyFrame == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            nativeCodeDoesntNeedMyFrame = Truffle.getRuntime().createAssumption();
+    /**
+     * This node is set as {@link com.oracle.truffle.api.nodes.EncapsulatingNodeReference#set(Node)}
+     * before the transition, so that when we do Truffle stack walk or materialize a Truffle
+     * exception we can access it as the "location" unless someone else overridden the location, for
+     * example, if the code behind TruffleBoundary uses cached nodes to make a call. For this
+     * situation we still need to maintain a mapping of this node and its parent like for
+     * {@link InteropCallData}.
+     */
+    public static final class BoundaryCallData extends IndirectCallDataBase {
+
+        private static final BoundaryCallData UNCACHED = new BoundaryCallData();
+
+        static {
+            UNCACHED.callerFlagsAssumptionSet = CallerFlagsAssumptionSet.UNCACHED;
         }
-        return nativeCodeDoesntNeedMyFrame;
-    }
 
-    private Assumption needNotPassExceptionAssumption() {
-        if (nativeCodeDoesntNeedExceptionState == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            nativeCodeDoesntNeedExceptionState = Truffle.getRuntime().createAssumption();
+        public boolean isUncached() {
+            return this == UNCACHED;
         }
-        return nativeCodeDoesntNeedExceptionState;
-    }
 
-    @NeverDefault
-    public static IndirectCallData createFor(Node node) {
-        return PythonLanguage.createIndirectCallData(node);
-    }
+        @NeverDefault
+        public static BoundaryCallData createFor(Node node) {
+            return PythonLanguage.createBoundaryCallData(node);
+        }
 
-    @NeverDefault
-    public static IndirectCallData getUncached() {
-        return UNCACHED;
+        @NeverDefault
+        public static BoundaryCallData getUncached() {
+            return UNCACHED;
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -65,14 +65,14 @@ public abstract class SliceIndexConversionNode extends IntConversionBaseNode {
 
     @Specialization(guards = "!isHandledPNone(value)")
     static int doOthers(VirtualFrame frame, Object value,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached PyIndexCheckNode indexCheckNode,
                     @Cached PyNumberAsSizeNode asSizeNode,
-                    @Cached PRaiseNode.Lazy raiseNode) {
+                    @Cached PRaiseNode raiseNode) {
         if (indexCheckNode.execute(inliningTarget, value)) {
             return asSizeNode.executeLossy(frame, inliningTarget, value);
         }
-        throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.SLICE_INDICES_TYPE_ERROR);
+        throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.SLICE_INDICES_TYPE_ERROR);
     }
 
     @ClinicConverterFactory(shortCircuitPrimitive = PrimitiveType.Int)

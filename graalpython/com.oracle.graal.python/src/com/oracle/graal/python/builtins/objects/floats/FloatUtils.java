@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,6 +44,8 @@ import java.math.BigDecimal;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
+import com.oracle.truffle.api.dsl.ImplicitCast;
+import com.oracle.truffle.api.dsl.TypeSystem;
 
 /**
  * Contains helper methods for parsing float numbers in float() and complex() constructors.
@@ -234,11 +236,30 @@ public final class FloatUtils {
     /**
      * Parses a string that contains a valid string representation of a float number.
      */
+    @TruffleBoundary
     public static double parseValidString(String substr) {
         double d = Double.parseDouble(substr);
         if (!Double.isFinite(d)) {
-            d = new BigDecimal(substr).doubleValue();
+            try {
+                d = new BigDecimal(substr).doubleValue();
+            } catch (NumberFormatException e) {
+                // Can happen when the number is too large, just let it return +-infinity then
+            }
         }
         return d;
+    }
+
+    /**
+     * Unboxes {@link PFloat}. Use only in situations where this is correct behavior.
+     */
+    @TypeSystem
+    public static class PFloatUnboxing {
+        @ImplicitCast
+        public static double PFloatToDouble(PFloat value) {
+            // NOTE: That's correct because we just use it in arithmetic operations where CPython
+            // also access the value ('f_val') directly. So, even if the object is subclassed, it
+            // is ignored.
+            return value.getValue();
+        }
     }
 }

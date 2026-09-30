@@ -1,3 +1,0 @@
-[[rules]]
-version = '== 0.13.3'
-patch = 'tokenizers-0.13.3.patch'

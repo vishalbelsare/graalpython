@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,78 +40,57 @@
  */
 package com.oracle.graal.python.lib;
 
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.iterator.PBigRangeIterator;
-import com.oracle.graal.python.builtins.objects.iterator.PIntRangeIterator;
-import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.CallSlotTpIterNextNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.exception.PythonErrorType;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 
 /**
- * Obtains the next value of an iterator. When the iterator is exhausted it returns {@code null}. It
- * never raises {@code StopIteration}.
+ * Obtains the next value of an iterator. It throws {@link IteratorExhausted} upon exhaustion. It
+ * never raises python {@code StopIteration}.
  */
 @GenerateUncached
-@GenerateInline(false)
+@GenerateInline(inlineByDefault = true)
 public abstract class PyIterNextNode extends PNodeWithContext {
-    public abstract Object execute(Frame frame, Object iterator);
+    public abstract Object execute(Frame frame, Node inliningTarget, Object iterator);
 
-    @Specialization
-    Object doIntRange(PIntRangeIterator iterator) {
-        if (iterator.hasNextInt()) {
-            return iterator.nextInt();
-        }
-        iterator.setExhausted();
-        return null;
+    public final Object executeCached(VirtualFrame frame, Object iterator) {
+        return execute(frame, this, iterator);
+    }
+
+    public static Object executeUncached(Object iterator) {
+        return PyIterNextNodeGen.getUncached().execute(null, null, iterator);
     }
 
     @Specialization
-    Object doBigIntRange(PBigRangeIterator iterator,
-                    @Cached PythonObjectFactory factory) {
-        if (iterator.hasNextBigInt()) {
-            return factory.createInt(iterator.nextBigInt());
-        }
-        iterator.setExhausted();
-        return null;
-    }
-
-    // TODO list, tuple, enumerate, dict keys, dict values, dict items, string, bytes
-
-    @Specialization
-    static Object doGeneric(VirtualFrame frame, Object iterator,
-                    @Bind("this") Node inliningTarget,
+    static Object doGeneric(VirtualFrame frame, Node inliningTarget, Object iterator,
                     @Cached GetClassNode getClassNode,
-                    @Cached(parameters = "Next") LookupSpecialMethodSlotNode lookupNext,
-                    @Cached CallUnaryMethodNode callNext,
-                    @Cached IsBuiltinObjectProfile stopIterationProfile,
-                    @Cached PRaiseNode.Lazy raiseNode) {
-        Object nextMethod = lookupNext.execute(frame, getClassNode.execute(inliningTarget, iterator), iterator);
-        if (nextMethod == PNone.NO_VALUE) {
-            throw raiseNode.get(inliningTarget).raise(PythonErrorType.TypeError, ErrorMessages.OBJ_NOT_ITERABLE, iterator);
-        }
+                    @Cached GetCachedTpSlotsNode getSlots,
+                    @Cached CallSlotTpIterNextNode callNext,
+                    @Cached IsBuiltinObjectProfile stopIterationProfile) {
+        TpSlots slots = getSlots.execute(inliningTarget, getClassNode.execute(inliningTarget, iterator));
+        assert slots.tp_iternext() != null;
         try {
-            return callNext.executeObject(frame, nextMethod, iterator);
+            return callNext.execute(frame, inliningTarget, slots.tp_iternext(), iterator);
         } catch (PException e) {
             e.expectStopIteration(inliningTarget, stopIterationProfile);
-            return null;
+            throw TpIterNextBuiltin.iteratorExhausted();
         }
     }
 
+    @NeverDefault
     public static PyIterNextNode create() {
         return PyIterNextNodeGen.create();
     }

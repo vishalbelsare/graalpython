@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -93,7 +93,7 @@ def test_base():
 
     class B(BB): pass
 
-    class C (A): 
+    class C (A):
         __slots__ = ['a']
 
     class D (B, C): pass
@@ -135,7 +135,7 @@ def test_base():
 
     assert C.__bases__ == (A, B)
     assert A.__subclasses__() == [C]
-    assert B.__subclasses__() == [C]    
+    assert B.__subclasses__() == [C]
 
     #-----------------------------------------------
 
@@ -162,6 +162,7 @@ def test_namespace_with_non_string_keys():
         MyStr("x"): 42
     })
     assert any(type(k) == MyStr for k in A.__dict__.keys())
+    assert any(type(k) == MyStr for k in type.__dir__(A))
 
 
 def test_mro():
@@ -186,20 +187,77 @@ def test_dir_sorted():
     assert dir(C()) == sorted(dir(C()))
 
 
+def test_type_dir_many_string_attributes():
+    base_attributes = {f"base_{i}": i for i in range(200)}
+    attributes = {f"attribute_{i}": i for i in range(1000)}
+    base = type("Base", (), base_attributes)
+    cls = type("ManyAttributes", (base,), attributes)
+    del cls.attribute_5
+    expected = set(base.__dict__) | set(cls.__dict__) | set(object.__dict__)
+    assert set(type.__dir__(cls)) == expected
+    assert dir(cls) == sorted(expected)
+
+
+def test_type_dir_custom_mappingproxy_falls_back():
+    lookups = []
+
+    class Meta(type):
+        @property
+        def __dict__(self):
+            lookups.append(self)
+            return {"custom": 1}
+
+    class C(metaclass=Meta):
+        hidden_by_metaclass = 1
+
+    result = type.__dir__(C)
+    assert "custom" in result
+    assert "hidden_by_metaclass" not in result
+    assert lookups == [C]
+
+
 def test_isinstance_non_type():
     import typing
     assert isinstance(1, typing.AbstractSet) is False
 
 
+def test_object_new_with_generic_base_and_slots():
+    from typing import Generic, TypeVar
+
+    KT = TypeVar("KT")
+    VT = TypeVar("VT")
+
+    class Foo(Generic[KT, VT]):
+        __slots__ = ("x", "y")
+
+        def __new__(cls, x, y):
+            self = super(Foo, cls).__new__(cls)
+            self.x = x
+            self.y = y
+            return self
+
+    foo = Foo(1, 2)
+    assert foo.x == 1
+    assert foo.y == 2
+
+
 @skipIf(sys.implementation.name == 'cpython' and sys.version_info[0:2] < (3, 8), "skipping for cPython versions < 3.8")
 def test_flags():
     import functools
+    import typing
 
     def testfunction(self):
         """some doc"""
         return self
 
+    TPFLAGS_SEQUENCE = 1 << 5
+    TPFLAGS_MAPPING = 1 << 6
+    TPFLAGS_HEAPTYPE = 1 << 9
+    TPFLAGS_BASETYPE = 1 << 10
+    TPFLAGS_HAVE_GC = 1 << 14
     TPFLAGS_METHOD_DESCRIPTOR = 1 << 17
+    TPFLAGS_MATCH_SELF = 1 << 22
+    TPFLAGS_ITEMS_AT_END = 1 << 23
     TPFLAGS_LONG_SUBCLASS = 1 << 24
     TPFLAGS_LIST_SUBCLASS = 1 << 25
     TPFLAGS_TUPLE_SUBCLASS = 1 << 26
@@ -211,6 +269,18 @@ def test_flags():
 
     cached = functools.lru_cache(1)(testfunction)
 
+    assert typing.Generic.__flags__ & TPFLAGS_HEAPTYPE
+    assert object.__flags__ & TPFLAGS_BASETYPE
+    assert not slice.__flags__ & TPFLAGS_BASETYPE
+    assert type.__flags__ & TPFLAGS_HAVE_GC
+    assert list.__flags__ & TPFLAGS_SEQUENCE
+    assert list.__flags__ & TPFLAGS_MATCH_SELF
+    assert dict.__flags__ & TPFLAGS_MAPPING
+    assert BaseException.__flags__ & TPFLAGS_BASE_EXC_SUBCLASS
+    assert ValueError.__flags__ & TPFLAGS_BASE_EXC_SUBCLASS
+    assert ValueError.__flags__ & TPFLAGS_HAVE_GC
+    assert type.__flags__ & TPFLAGS_ITEMS_AT_END
+    assert type.__flags__ & TPFLAGS_TYPE_SUBCLASS
     assert not type(repr).__flags__ & TPFLAGS_METHOD_DESCRIPTOR, "masked __flags__ = {}, expected {}".format(type(repr).__flags__ & TPFLAGS_METHOD_DESCRIPTOR, 0)
     assert type(list.append).__flags__ & TPFLAGS_METHOD_DESCRIPTOR, "masked __flags__ = {}, expected {}".format(type(repr).__flags__ & TPFLAGS_METHOD_DESCRIPTOR, TPFLAGS_METHOD_DESCRIPTOR)
     assert type(list.__add__).__flags__ & TPFLAGS_METHOD_DESCRIPTOR, "masked __flags__ = {}, expected {}".format(type(repr).__flags__ & TPFLAGS_METHOD_DESCRIPTOR, TPFLAGS_METHOD_DESCRIPTOR)
@@ -264,63 +334,75 @@ def test_dict():
             o['__dict__']
         except err:
             raised = True
-        assert raised        
-        
+        assert raised
+
     class Base:
         pass
-    
+
     class Sub(Base):
         pass
-    
+
     str(type(Base.__dict__['__dict__'])) == "<class 'get_set_desc'>"
-    dict_element_raises(Sub.__dict__, KeyError)    
-    Base().__dict__ == {}    
-    Sub().__dict__ == {}            
+    dict_element_raises(Sub.__dict__, KeyError)
+    Base().__dict__ == {}
+    Sub().__dict__ == {}
 
     class BaseSlots:
         __slots__ = ['a']
-        
-    dict_element_raises(BaseSlots.__dict__, KeyError)        
+
+    dict_element_raises(BaseSlots.__dict__, KeyError)
     raised = False
     try:
         BaseSlots().__dict__
     except AttributeError:
         raised = True
     assert raised
-    
+
     class SubSlots(BaseSlots):
         pass
 
     str(type(SubSlots.__dict__['__dict__'])) == "<class 'get_set_desc'>"
     assert SubSlots().__dict__ == {}
-    
+
     class SubSlots(BaseSlots, Base):
         pass
-    
+
     str(type(SubSlots.__dict__['__dict__'])) == "<class 'get_set_desc'>"
     assert SubSlots().__dict__ == {}
 
 
 def test_itemsize():
+    import types
+
     assert object.__itemsize__ == 0
     assert list.__itemsize__ == 0
     assert type.__itemsize__ == 40
+    assert bytes.__itemsize__ == 1
+    assert int.__itemsize__ == 4
+    assert bool.__itemsize__ == 4
     assert tuple.__itemsize__ == 8
-    
+    assert types.CodeType.__itemsize__ == 2
+    assert types.GeneratorType.__itemsize__ == 8
+    assert types.CoroutineType.__itemsize__ == 8
+    assert types.AsyncGeneratorType.__itemsize__ == 8
+    assert types.FrameType.__itemsize__ == 8
+    assert memoryview.__itemsize__ == 8
+    assert type(sys.version_info).__itemsize__ == 8
+
     class C: pass
     assert C.__itemsize__ == 0
-    
+
     class C(tuple): pass
     assert C.__itemsize__ == 8
-    
-    
+
+
     raised = False
     try:
         object.__itemsize__ = 1
     except TypeError:
         raised = True
     assert raised
-    
+
     raised = False
     try:
         C.__itemsize__ = 1
@@ -331,13 +413,13 @@ def test_itemsize():
     class C():
         __itemsize__ = 'abc'
     assert C.__itemsize__ == 0
-    
+
     class C(tuple):
         __itemsize__ = 42
     assert C.__itemsize__ == 8
 
 
-def test_descr_name_qualname():    
+def test_descr_name_qualname():
     assert float.real.__qualname__ == 'float.real'
     assert float.real.__name__ == 'real'
     class C: __slots__ = ['a']
@@ -348,13 +430,13 @@ def test_descr_name_qualname():
         C.a.__qualname__ = 'b'
     except AttributeError:
         raised = True
-    assert raised    
+    assert raised
     raised = False
     try:
         C.a.__name__ = 'b'
     except AttributeError:
         raised = True
-    assert raised    
+    assert raised
 
 
 def test_cant_set_builtin_attributes():
@@ -364,41 +446,41 @@ def test_cant_set_builtin_attributes():
     except TypeError:
         raised = True
     assert raised
-    
+
     raised = False
     try:
         float.__qualname__ = 'b'
     except TypeError:
         raised = True
     assert raised
-    
+
     raised = False
     try:
         float.__dictoffset__ = 'b'
     except TypeError:
         raised = True
     assert raised
-    
+
     raised = False
     try:
         float.__module__ = 'b'
     except TypeError:
         raised = True
     assert raised
-    
+
     raised = False
     try:
         float.__itemsize__ = 'b'
     except TypeError:
         raised = True
     assert raised
-    
+
     raised = False
     try:
         float.__basicsize__ = 'b'
     except TypeError:
         raised = True
-    assert raised    
+    assert raised
 
 
 def test_slots_no_instance_layout_conflict():
@@ -443,3 +525,55 @@ def test_call_not_function():
     class Callable:
         __call__ = dict
     assert Callable()(a=1) == {'a': 1}
+
+
+def test_class_firstlineno():
+    def identity(cls):
+        return cls
+
+    namespace = {"identity": identity, "__name__": "test_firstlineno"}
+    exec("""\
+
+class Plain:
+    pass
+
+@identity
+@identity
+class Decorated:
+    pass
+""", namespace)
+
+    assert namespace["Plain"].__firstlineno__ == 2
+    assert namespace["Decorated"].__firstlineno__ == 5
+
+    namespace["Plain"].__module__ = "elsewhere"
+    assert not hasattr(namespace["Plain"], "__firstlineno__")
+
+
+def test_class_static_attributes():
+    class C:
+        def f(self, obj):
+            self.z = self.a = 42
+            self.a = 43
+            self.read
+            self.augmented += 1
+            del self.deleted
+            obj.self = 44
+
+            def nested(self):
+                self.nested = 45
+
+    assert C.__static_attributes__ == ("a", "nested", "z")
+
+
+def test_class_static_attributes_nested_classes():
+    class Outer:
+        def f(self):
+            self.outer = 1
+
+        class Inner:
+            def f(self):
+                self.inner = 2
+
+    assert Outer.__static_attributes__ == ("outer",)
+    assert Outer.Inner.__static_attributes__ == ("inner",)

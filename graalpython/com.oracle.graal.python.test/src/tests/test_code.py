@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,6 +36,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import os
 
 
 def a_function():
@@ -75,11 +76,11 @@ def test_name():
 
 
 def test_filename():
-    assert a_function.__code__.co_filename.rpartition("/")[2] == "test_code.py"
+    assert a_function.__code__.co_filename.rpartition(os.sep)[2] == "test_code.py"
 
 
 def test_firstlineno():
-    assert a_function.__code__.co_firstlineno == 41
+    assert a_function.__code__.co_firstlineno == 42
 
 
 def test_code_attributes():
@@ -87,7 +88,6 @@ def test_code_attributes():
     assert code.co_argcount == 3
     assert code.co_kwonlyargcount == 0
     assert code.co_nlocals == 6
-    assert code.co_stacksize >= code.co_nlocals
     assert code.co_flags & (1 << 5)
     assert not code.co_flags & (1 << 2)
     assert not code.co_flags & (1 << 3)
@@ -95,7 +95,7 @@ def test_code_attributes():
     assert set(code.co_varnames) == {'arg_l', 'kwarg_case', 'kwarg_other', 'loc_1', 'loc_3', 'inner_func'}
     assert code.co_filename.endswith("test_code.py")
     assert code.co_name == "my_func"
-    assert code.co_firstlineno == 51
+    assert code.co_firstlineno == 52
     assert set(code.co_freevars) == {'values'}
     assert set(code.co_cellvars) == {'kwarg_other', 'loc_2'}
 
@@ -117,8 +117,10 @@ def test_code_copy():
         code.co_varnames,
         code.co_filename,
         code.co_name,
+        code.co_qualname,
         code.co_firstlineno,
         code.co_linetable,
+        code.co_exceptiontable,
         code.co_freevars,
         code.co_cellvars)
 
@@ -134,27 +136,34 @@ def test_code_copy():
     assert set(code.co_varnames) == set(code2.co_varnames)
     assert code.co_filename == code2.co_filename
     assert code.co_name == code2.co_name
+    assert code.co_qualname == code2.co_qualname
     assert code.co_firstlineno == code2.co_firstlineno
     assert code.co_linetable == code2.co_linetable
+    assert code.co_exceptiontable == code2.co_exceptiontable
     assert set(code.co_freevars) == set(code2.co_freevars)
     assert set(code.co_cellvars) == set(code2.co_cellvars)
 
 
 def test_module_code():
-    m = __import__('package.moduleA')
-    with open(m.__file__, 'r') as MODULE:
-        source = MODULE.read()
-        code = compile(source, m.__file__, 'exec')
-        assert code.co_argcount == 0
-        assert code.co_kwonlyargcount == 0
-        assert code.co_nlocals == 0
-        assert {'PACKAGE DOC', 'after importing moduleY'}.issubset(set(code.co_consts))
-        assert set(code.co_varnames) == set()
-        assert code.co_filename.endswith("__init__.py")
-        assert code.co_name.startswith("<module")
-        assert code.co_firstlineno == 1
-        assert code.co_freevars == tuple()
-        assert code.co_cellvars == tuple()
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    try:
+        m = __import__('package.moduleA')
+        with open(m.__file__, 'r') as MODULE:
+            source = MODULE.read()
+            code = compile(source, m.__file__, 'exec')
+            assert code.co_argcount == 0
+            assert code.co_kwonlyargcount == 0
+            assert code.co_nlocals == 0
+            assert {'PACKAGE DOC', 'after importing moduleY'}.issubset(set(code.co_consts))
+            assert set(code.co_varnames) == set()
+            assert code.co_filename.endswith("__init__.py")
+            assert code.co_name.startswith("<module")
+            assert code.co_firstlineno == 1
+            assert code.co_freevars == tuple()
+            assert code.co_cellvars == tuple()
+    finally:
+        del sys.path[0]
 
 
 def test_function_code_consts():
@@ -171,19 +180,11 @@ def fn():
 
     code = compile(codestr, "<test>", "exec")
     assert "module doc" in code.co_consts
-    assert 1 in code.co_consts
-    assert "fn" in code.co_consts
     assert "fn doc" not in code.co_consts
     for const in code.co_consts:
         if type(const) == types.CodeType:
-            code = const 
-    assert "fn doc" in code.co_consts
-    assert "fn.<locals>.inner" in code.co_consts
-    assert "this is fun" not in code.co_consts
-    for const in code.co_consts:
-        if type(const) == types.CodeType:
             code = const
-    assert "this is fun" in code.co_consts
+    assert "fn doc" in code.co_consts
 
 
 def test_generator_code_consts():
@@ -199,13 +200,11 @@ def gen():
 
     code = compile(codestr, "<test>", "exec")
     assert "module doc" in code.co_consts
-    assert "gen" in code.co_consts
     assert "gen doc" not in code.co_consts
     for const in code.co_consts:
         if type(const) == types.CodeType:
-            code = const 
+            code = const
     assert "gen doc" in code.co_consts
-    assert "gen.<locals>.inner" in code.co_consts
     assert "this is fun" not in code.co_consts
     for const in code.co_consts:
         if type(const) == types.CodeType:
@@ -218,3 +217,96 @@ def test_consts_do_not_leak_java_types():
     code = compile(codestr, '<test>', 'exec')
     for const in code.co_consts:
         assert isinstance(const, (str, tuple)) or const is None
+
+
+def test_generator_and_gen_body_code_are_equal():
+    def g():
+        yield 42
+
+    x = g()
+    assert g.__code__ is x.gi_code
+
+def check_lines(func):
+    co = func.__code__
+    prev_line = object()  # None is a valid line value.
+    prev_end = 0
+    for start, end, line in co.co_lines():
+        assert start <= end
+        assert line != prev_line
+        assert line is None or line > 0
+        assert prev_end == start
+        prev_line = line
+        prev_end = end
+
+def test_check_lines_dedup():
+    def misshappen():
+        """
+
+
+
+
+
+        """
+        x = (
+
+
+                4
+
+                +
+
+                y
+
+        )
+        y = (
+                a
+                +
+                b
+                +
+
+                d
+        )
+        return q if (
+
+            x
+
+        ) else p
+
+    def bug93662():
+        example_report_generation_message= (
+            """
+            """
+        ).strip()
+        raise ValueError()
+
+    def singleline(): return 42
+
+    check_lines(misshappen)
+    check_lines(bug93662)
+    check_lines(singleline)
+
+
+def test_code_identity():
+    import sys
+    import marshal
+    import types
+    import _imp
+    def foo():
+        def bar():
+            return sys._getframe()
+
+        return bar
+
+    bar = foo()
+    assert bar.__code__ is foo().__code__
+    i = foo.__code__.co_consts.index(bar.__code__)
+    assert bar.__code__ is foo.__code__.co_consts[i]
+    assert bar.__code__ is bar().f_code
+
+    foo_copy = types.FunctionType(marshal.loads(marshal.dumps(foo.__code__)), globals=foo.__globals__, closure=foo.__closure__)
+    bar_copy = foo_copy()
+    assert foo_copy.__code__ is not foo.__code__
+    _imp._fix_co_filename(foo_copy.__code__, 'asdf')
+    assert foo_copy.__code__.co_filename == 'asdf'
+    assert bar_copy.__code__.co_filename == 'asdf'
+    assert foo.__code__.co_filename != 'asdf'
+    assert bar.__code__.co_filename != 'asdf'

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,19 +42,24 @@ package com.oracle.graal.python.builtins.modules.csv;
 
 import static com.oracle.graal.python.builtins.modules.csv.CSVModuleBuiltins.NOT_SET_CODEPOINT;
 import static com.oracle.graal.python.builtins.modules.csv.QuoteStyle.QUOTE_NONE;
+import static com.oracle.graal.python.builtins.modules.csv.QuoteStyle.QUOTE_NOTNULL;
+import static com.oracle.graal.python.builtins.modules.csv.QuoteStyle.QUOTE_STRINGS;
+import static com.oracle.graal.python.nodes.ErrorMessages.DELIMITER_IS_A_SPACE_AND_SKIPINITIALSPACE_IS_TRUE;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyNumberCheckNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
+import com.oracle.graal.python.lib.PyUnicodeCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
@@ -66,6 +71,7 @@ import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -73,6 +79,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 import com.oracle.truffle.api.strings.TruffleStringIterator;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.CSVWriter)
@@ -88,101 +95,141 @@ public final class CSVWriterBuiltins extends PythonBuiltins {
     public abstract static class WriteRowNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object doIt(VirtualFrame frame, CSVWriter self, Object seq,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetIter getIter,
                         @Cached GetClassNode getClass,
                         @Cached IsBuiltinObjectProfile errorProfile,
                         @Cached CallUnaryMethodNode callNode,
-                        @Cached TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
-                        @Cached TruffleStringIterator.NextNode nextNode,
-                        @Cached TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode,
-                        @Cached TruffleStringBuilder.AppendCodePointNode appendCodePointNode,
+                        @Cached JoinAppendData joinAppendData,
+                        @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode,
+                        @Cached PyUnicodeCheckNode unicodeCheckNode,
                         @Cached PyObjectStrAsTruffleStringNode objectStrAsTruffleStringNode,
                         @Cached PyNumberCheckNode pyNumberCheckNode,
-                        @Cached GetNextNode getNextNode,
-                        @Cached IsBuiltinObjectProfile isBuiltinClassProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PyIterNextNode nextNode,
+                        @Cached PRaiseNode raiseNode) {
             Object iter;
 
             try {
                 iter = getIter.execute(frame, inliningTarget, seq);
             } catch (PException e) {
                 e.expect(inliningTarget, PythonBuiltinClassType.TypeError, errorProfile);
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.CSVError, ErrorMessages.EXPECTED_ITERABLE_NOT_S, getClass.execute(inliningTarget, seq));
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.CSVError, ErrorMessages.EXPECTED_ITERABLE_NOT_S, getClass.execute(inliningTarget, seq));
             }
 
             // Join all fields of passed in sequence in internal buffer.
-            TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+            TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
             CSVDialect dialect = self.dialect;
             boolean first = true;
+            boolean nullField = false;
             while (true) {
+                Object field;
                 try {
-                    Object field = getNextNode.execute(frame, iter);
-                    /* If this is not the first field we need a field separator */
-                    if (!first) {
-                        appendStringNode.execute(sb, dialect.delimiter);
-                    } else {
-                        first = false;
-                    }
-                    joinField(inliningTarget, sb, dialect, field, createCodePointIteratorNode, nextNode, byteIndexOfCodePointNode, appendCodePointNode, appendStringNode, objectStrAsTruffleStringNode,
-                                    pyNumberCheckNode, raiseNode);
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, isBuiltinClassProfile);
+                    field = nextNode.execute(frame, inliningTarget, iter);
+                } catch (IteratorExhausted e) {
                     break;
+                }
+                /* If this is not the first field we need a field separator */
+                if (!first) {
+                    appendStringNode.execute(sb, dialect.delimiter);
+                } else {
+                    first = false;
+                }
+                boolean quoted;
+
+                switch (dialect.quoting) {
+                    case QUOTE_NONNUMERIC:
+                        quoted = !pyNumberCheckNode.execute(inliningTarget, field);
+                        break;
+                    case QUOTE_ALL:
+                        quoted = true;
+                        break;
+                    case QUOTE_STRINGS:
+                        quoted = unicodeCheckNode.execute(inliningTarget, field);
+                        break;
+                    case QUOTE_NOTNULL:
+                        quoted = field != PNone.NONE;
+                        break;
+                    default:
+                        quoted = false;
+                        break;
+                }
+
+                nullField = field == PNone.NONE;
+                if (nullField) {
+                    joinAppend(inliningTarget, sb, self, null, quoted,
+                                    raiseNode, appendStringNode, codePointLengthNode, joinAppendData);
+                } else {
+                    TruffleString str = objectStrAsTruffleStringNode.execute(null, inliningTarget, field);
+                    joinAppend(inliningTarget, sb, self, str, quoted,
+                                    raiseNode, appendStringNode, codePointLengthNode, joinAppendData);
                 }
             }
             if (!first && sb.isEmpty()) {
-                if (dialect.quoting == QUOTE_NONE) {
-                    throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.CSVError, ErrorMessages.EMPTY_FIELD_RECORD_MUST_BE_QUOTED);
+                if (dialect.quoting == QUOTE_NONE ||
+                                (nullField && (dialect.quoting == QUOTE_STRINGS || dialect.quoting == QUOTE_NOTNULL))) {
+                    throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.CSVError, ErrorMessages.EMPTY_FIELD_RECORD_MUST_BE_QUOTED);
                 }
-                joinAppend(inliningTarget, sb, dialect, null, true, createCodePointIteratorNode, nextNode, byteIndexOfCodePointNode, appendCodePointNode, appendStringNode, raiseNode);
+                joinAppend(inliningTarget, sb, self, null, true, raiseNode, appendStringNode, codePointLengthNode, joinAppendData);
             }
+            /*
+             * Add line terminator.
+             */
             appendStringNode.execute(sb, dialect.lineTerminator);
             return callNode.executeObject(frame, self.write, toStringNode.execute(sb));
         }
 
-        private static void joinField(Node inliningTarget, TruffleStringBuilder sb, CSVDialect dialect, Object field, TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
-                        TruffleStringIterator.NextNode nextNode, TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode, TruffleStringBuilder.AppendCodePointNode appendCodePointNode,
-                        TruffleStringBuilder.AppendStringNode appendStringNode, PyObjectStrAsTruffleStringNode objectStrAsTruffleStringNode, PyNumberCheckNode pyNumberCheckNode,
-                        PRaiseNode.Lazy raiseNode) {
-            boolean quoted;
-
-            switch (dialect.quoting) {
-                case QUOTE_NONNUMERIC:
-                    quoted = !pyNumberCheckNode.execute(inliningTarget, field);
-                    break;
-                case QUOTE_ALL:
-                    quoted = true;
-                    break;
-                default:
-                    quoted = false;
-                    break;
+        static void joinAppend(Node inliningTarget, TruffleStringBuilderUTF32 sb, CSVWriter self, TruffleString field, boolean quotedArg,
+                        PRaiseNode raiseNode,
+                        TruffleStringBuilder.AppendStringNode appendStringNode,
+                        TruffleString.CodePointLengthNode codePointLengthNode,
+                        JoinAppendData joinAppendData) {
+            boolean quoted = quotedArg;
+            CSVDialect dialect = self.dialect;
+            int fieldLen = 0;
+            if (field != null) {
+                fieldLen = codePointLengthNode.execute(field, TS_ENCODING);
             }
-
-            if (field == PNone.NONE) {
-                joinAppend(inliningTarget, sb, dialect, null, quoted, createCodePointIteratorNode, nextNode, byteIndexOfCodePointNode, appendCodePointNode, appendStringNode, raiseNode);
-            } else {
-                TruffleString str = objectStrAsTruffleStringNode.execute(null, inliningTarget, field);
-                joinAppend(inliningTarget, sb, dialect, str, quoted, createCodePointIteratorNode, nextNode, byteIndexOfCodePointNode, appendCodePointNode, appendStringNode, raiseNode);
+            if (fieldLen == 0 && dialect.delimiterCodePoint == ' ' && dialect.skipInitialSpace) {
+                if (dialect.quoting == QUOTE_NONE ||
+                                (field == null &&
+                                                (dialect.quoting == QUOTE_STRINGS || dialect.quoting == QUOTE_NOTNULL))) {
+                    raiseNode.raise(inliningTarget, PythonBuiltinClassType.CSVError,
+                                    DELIMITER_IS_A_SPACE_AND_SKIPINITIALSPACE_IS_TRUE);
+                }
+                quoted = true;
             }
+            quoted = joinAppendData.execute(inliningTarget, sb, dialect, field, quoted, false,
+                            raiseNode, appendStringNode);
+
+            joinAppendData.execute(inliningTarget, sb, dialect, field, quoted, true,
+                            raiseNode, appendStringNode);
         }
 
-        private static void joinAppend(Node inliningTarget, TruffleStringBuilder sb, CSVDialect dialect, TruffleString field, boolean quoted,
-                        TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode, TruffleStringIterator.NextNode nextNode, TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode,
-                        TruffleStringBuilder.AppendCodePointNode appendCodePointNode, TruffleStringBuilder.AppendStringNode appendStringNode, PRaiseNode.Lazy raiseNode) {
-            /*
-             * If we don't already know that the field must be quoted due to dialect settings, check
-             * if the field contains characters due to which it must be quoted.
-             */
-            if (!quoted) {
-                quoted = needsQuotes(dialect, field, createCodePointIteratorNode, nextNode, byteIndexOfCodePointNode);
-            }
+    }
+
+    @GenerateInline(false) // 36 -> 17
+    protected abstract static class JoinAppendData extends Node {
+
+        abstract boolean execute(Node inliningTarget, TruffleStringBuilderUTF32 sb, CSVDialect dialect, TruffleString field, boolean quoted, boolean copyPhase,
+                        PRaiseNode raiseNode,
+                        TruffleStringBuilder.AppendStringNode appendStringNode);
+
+        @Specialization
+        static boolean joinAppendData(Node inliningTarget, TruffleStringBuilderUTF32 sb, CSVDialect dialect, TruffleString field, boolean quotedArg, boolean isCopyPhase,
+                        PRaiseNode raiseNode,
+                        TruffleStringBuilder.AppendStringNode appendStringNode,
+                        @Cached TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
+                        @Cached TruffleStringIterator.NextNode nextNode,
+                        @Cached TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode,
+                        @Cached TruffleStringBuilder.AppendCodePointNode appendCodePointNode) {
+
+            boolean quoted = quotedArg;
 
             /* Handle preceding quote */
-            if (quoted) {
-                appendStringNode.execute(sb, dialect.quoteChar);
+            if (isCopyPhase && quoted) {
+                addChar(sb, dialect.quoteChar, true, appendStringNode);
             }
 
             /* Copy field data and add escape chars as needed */
@@ -193,7 +240,7 @@ public final class CSVWriterBuiltins extends PythonBuiltins {
 
                     boolean wantEscape = false;
 
-                    final int c = nextNode.execute(tsi);
+                    final int c = nextNode.execute(tsi, TS_ENCODING);
 
                     if (needsEscape(dialect, c, byteIndexOfCodePointNode)) {
                         if (dialect.quoting == QUOTE_NONE) {
@@ -201,7 +248,7 @@ public final class CSVWriterBuiltins extends PythonBuiltins {
                         } else {
                             if (c == dialect.quoteCharCodePoint) {
                                 if (dialect.doubleQuote) {
-                                    appendStringNode.execute(sb, dialect.quoteChar);
+                                    addChar(sb, dialect.quoteChar, isCopyPhase, appendStringNode);
                                 } else {
                                     wantEscape = true;
                                 }
@@ -214,41 +261,45 @@ public final class CSVWriterBuiltins extends PythonBuiltins {
                         }
                         if (wantEscape) {
                             if (dialect.escapeCharCodePoint == NOT_SET_CODEPOINT) {
-                                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.CSVError, ErrorMessages.ESCAPE_WITHOUT_ESCAPECHAR);
+                                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.CSVError, ErrorMessages.ESCAPE_WITHOUT_ESCAPECHAR);
                             }
-                            appendStringNode.execute(sb, dialect.escapeChar);
+                            addChar(sb, dialect.escapeChar, isCopyPhase, appendStringNode);
                         }
                     }
-                    appendCodePointNode.execute(sb, c, 1, true);
+                    /*
+                     * Copy field character into record buffer.
+                     */
+                    addChar(sb, c, isCopyPhase, appendCodePointNode);
                 }
             }
             if (quoted) {
-                appendStringNode.execute(sb, dialect.quoteChar);
+                addChar(sb, dialect.quoteChar, isCopyPhase, appendStringNode);
+            }
+
+            return quoted;
+        }
+
+        static void addChar(TruffleStringBuilderUTF32 sb, TruffleString c, boolean isCopyPhase,
+                        TruffleStringBuilder.AppendStringNode appendStringNode) {
+            if (isCopyPhase) {
+                appendStringNode.execute(sb, c);
             }
         }
 
-        private static boolean needsQuotes(CSVDialect dialect, TruffleString field, TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode, TruffleStringIterator.NextNode nextNode,
-                        TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
-            if (field == null) {
-                return false;
+        static void addChar(TruffleStringBuilderUTF32 sb, int c, boolean isCopyPhase,
+                        TruffleStringBuilder.AppendCodePointNode appendCodePointNode) {
+            if (isCopyPhase) {
+                appendCodePointNode.execute(sb, c, 1, true);
             }
-            TruffleStringIterator tsi = createCodePointIteratorNode.execute(field, TS_ENCODING);
-            while (tsi.hasNext()) {
-                final int c = nextNode.execute(tsi);
-                if (needsEscape(dialect, c, byteIndexOfCodePointNode)) {
-                    if (!(dialect.quoting == QUOTE_NONE ||
-                                    c == dialect.quoteCharCodePoint && !dialect.doubleQuote ||
-                                    c == dialect.escapeCharCodePoint)) {
-                        return true;
-                    }
-                }
-            }
-            return false;
         }
 
-        private static boolean needsEscape(CSVDialect dialect, int codePoint, TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
-            return codePoint == dialect.delimiterCodePoint || codePoint == dialect.escapeCharCodePoint || codePoint == dialect.quoteCharCodePoint ||
-                            byteIndexOfCodePointNode.execute(dialect.lineTerminator, codePoint, 0, dialect.lineTerminator.byteLength(TS_ENCODING), TS_ENCODING) >= 0;
+        private static boolean needsEscape(CSVDialect dialect, int c, TruffleString.ByteIndexOfCodePointNode byteIndexOfCodePointNode) {
+            return c == dialect.delimiterCodePoint ||
+                            c == dialect.escapeCharCodePoint ||
+                            c == dialect.quoteCharCodePoint ||
+                            c == '\n' ||
+                            c == '\r' ||
+                            byteIndexOfCodePointNode.execute(dialect.lineTerminator, c, 0, dialect.lineTerminator.byteLength(TS_ENCODING), TS_ENCODING) >= 0;
         }
     }
 
@@ -257,23 +308,19 @@ public final class CSVWriterBuiltins extends PythonBuiltins {
     public abstract static class WriteRowsNode extends PythonBinaryBuiltinNode {
         @Specialization
         Object doIt(VirtualFrame frame, CSVWriter self, Object seq,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetIter getIter,
-                        @Cached GetNextNode getNext,
-                        @Cached IsBuiltinObjectProfile isBuiltinClassProfile,
+                        @Cached PyIterNextNode nextNode,
                         @Cached WriteRowNode writeRow) {
-            Object iter, row;
-
-            iter = getIter.execute(frame, inliningTarget, seq);
-
+            Object iter = getIter.execute(frame, inliningTarget, seq);
             while (true) {
+                Object row;
                 try {
-                    row = getNext.execute(frame, iter);
-                    writeRow.execute(frame, self, row);
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, isBuiltinClassProfile);
+                    row = nextNode.execute(frame, inliningTarget, iter);
+                } catch (IteratorExhausted e) {
                     break;
                 }
+                writeRow.execute(frame, self, row);
             }
             return PNone.NONE;
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,27 +40,23 @@
  */
 package com.oracle.graal.python.builtins.objects;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.AttributeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.nodes.ErrorMessages.MUST_BE_TYPE_A_NOT_TYPE_B;
+import static com.oracle.graal.python.nodes.ErrorMessages.S_MUST_BE_A_S_TUPLE;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_KEYS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___DELETE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___DELITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GETATTRIBUTE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GETATTR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GET__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___SETITEM__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___SET__;
-import static com.oracle.graal.python.nodes.StringLiterals.T_DATE;
-import static com.oracle.graal.python.nodes.StringLiterals.T_DATETIME;
 import static com.oracle.graal.python.nodes.StringLiterals.T_LBRACKET;
-import static com.oracle.graal.python.nodes.StringLiterals.T_STRUCT_TIME;
-import static com.oracle.graal.python.nodes.StringLiterals.T_TIME;
 import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.isJavaString;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.math.BigInteger;
+import java.nio.ByteOrder;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -70,21 +66,20 @@ import java.util.HashSet;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PythonAbstractObjectFactory.PInteropGetAttributeNodeGen;
-import com.oracle.graal.python.builtins.objects.bytes.PBytes;
-import com.oracle.graal.python.builtins.objects.cext.capi.CApiGuards;
-import com.oracle.graal.python.builtins.objects.cext.capi.PythonNativeWrapper.PythonAbstractObjectNativeWrapper;
+import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.CApiNativeStub;
 import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIterator;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
-import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
@@ -93,34 +88,43 @@ import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.str.StringNodes.StringMaterializeNode;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.builtins.objects.type.PythonAbstractClass;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.builtins.objects.type.PythonClass;
 import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetMroNode;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
 import com.oracle.graal.python.lib.PyCallableCheckNode;
+import com.oracle.graal.python.lib.PyIterCheckNode;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyMappingCheckNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
-import com.oracle.graal.python.lib.PyObjectSizeNode;
+import com.oracle.graal.python.lib.PyObjectSetAttr;
 import com.oracle.graal.python.lib.PySequenceCheckNode;
+import com.oracle.graal.python.lib.PySequenceDelItemNode;
+import com.oracle.graal.python.lib.PySequenceGetItemNode;
+import com.oracle.graal.python.lib.PySequenceSetItemNode;
+import com.oracle.graal.python.lib.PySequenceSizeNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
 import com.oracle.graal.python.nodes.BuiltinNames;
-import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.HiddenAttr;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.SpecialMethodNames;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
+import com.oracle.graal.python.nodes.argument.keywords.MappingToKeywordsNode;
+import com.oracle.graal.python.nodes.argument.keywords.NonMappingException;
+import com.oracle.graal.python.nodes.argument.keywords.SameDictKeyException;
 import com.oracle.graal.python.nodes.attributes.LookupInheritedAttributeNode;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromModuleNode;
 import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
 import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.CallTernaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.CallVarargsMethodNode;
-import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.expression.CastToListExpressionNode.CastToListInteropNode;
 import com.oracle.graal.python.nodes.interop.GetInteropBehaviorNode;
 import com.oracle.graal.python.nodes.interop.GetInteropBehaviorValueNode;
@@ -145,10 +149,12 @@ import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
+import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
@@ -157,44 +163,40 @@ import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
-import com.oracle.truffle.api.dsl.ReportPolymorphism;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.interop.ArityException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
+import com.oracle.truffle.api.interop.InvalidBufferOffsetException;
 import com.oracle.truffle.api.interop.StopIterationException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.object.Shape;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
+import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleString.RegionEqualNode;
 import com.oracle.truffle.api.utilities.TriState;
 
 @ImportStatic(SpecialMethodNames.class)
 @ExportLibrary(InteropLibrary.class)
-public abstract class PythonAbstractObject extends DynamicObject implements TruffleObject, Comparable<Object> {
+public abstract class PythonAbstractObject extends DynamicObject implements TruffleObject, CApiNativeStub, Comparable<Object> {
+    public static final long UNINITIALIZED = -1;
+    public static final long NATIVE_POINTER_FREED = 0;
 
     private static final TruffleString T_PRIVATE_PREFIX = tsLiteral("__");
     private static final int PRIVATE_PREFIX_LENGTH = T_PRIVATE_PREFIX.codePointLengthUncached(TS_ENCODING);
-    private PythonAbstractObjectNativeWrapper nativeWrapper;
-
-    // @ImportStatic doesn't work for this for some reason
-    protected static final SpecialMethodSlot Iter = SpecialMethodSlot.Iter;
-    protected static final SpecialMethodSlot Next = SpecialMethodSlot.Next;
-    protected static final SpecialMethodSlot Len = SpecialMethodSlot.Len;
 
     protected static final Shape ABSTRACT_SHAPE = Shape.newBuilder().build();
+
+    private Object[] indexedSlots;
 
     protected PythonAbstractObject(Shape shape) {
         super(shape);
@@ -204,34 +206,38 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
         super(ABSTRACT_SHAPE);
     }
 
-    public final PythonAbstractObjectNativeWrapper getNativeWrapper() {
-        return nativeWrapper;
+    public Object[] getIndexedSlots() {
+        return indexedSlots;
     }
 
-    public final void setNativeWrapper(PythonAbstractObjectNativeWrapper nativeWrapper) {
-        assert this.nativeWrapper == null;
-
-        // we must not set the native wrapper for one of the context-insensitive singletons
-        assert !CApiGuards.isSpecialSingleton(this);
-
-        this.nativeWrapper = nativeWrapper;
+    public void setIndexedSlots(Object[] indexedSlots) {
+        this.indexedSlots = indexedSlots;
     }
 
-    public final void clearNativeWrapper() {
-        nativeWrapper = null;
+    @ExportMessage
+    @SuppressWarnings("static-method")
+    public final boolean hasLanguageId() {
+        return true;
+    }
+
+    @ExportMessage
+    @SuppressWarnings("static-method")
+    public final String getLanguageId() {
+        return PythonLanguage.ID;
     }
 
     @ExportMessage
     public void writeMember(String key, Object value,
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
-                    @Cached PInteropSetAttributeNode setAttributeNode,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                    @Shared @Cached PForeignToPTypeNode convert,
+                    @Exclusive @Cached PyObjectSetAttr setAttributeNode,
                     // GR-44020: make shared:
                     @Exclusive @Cached IsBuiltinObjectProfile attrErrorProfile,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException, UnknownIdentifierException {
         boolean mustRelease = gil.acquire();
         try {
-            setAttributeNode.execute(this, fromJavaStringNode.execute(key, TS_ENCODING), value);
+            setAttributeNode.execute(null, inliningTarget, this, fromJavaStringNode.execute(key, TS_ENCODING), convert.executeConvert(value));
         } catch (PException e) {
             e.expectAttributeError(inliningTarget, attrErrorProfile);
             // TODO(fa) not accurate; distinguish between read-only and non-existing
@@ -243,8 +249,8 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
     @ExportMessage
     public Object readMember(String key,
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
                     // GR-44020: make shared:
                     @Exclusive @Cached PyObjectLookupAttr lookup,
                     @Exclusive @Cached GilNode gil) throws UnknownIdentifierException {
@@ -265,298 +271,272 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean hasArrayElements(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Cached PySequenceCheckNode check,
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Cached(parameters = "Len") LookupCallableSlotInMRONode lookupLen,
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Cached GetObjectSlotsNode getSlotsNode,
+                    @Exclusive @Cached PySequenceCheckNode sequenceCheck,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.has_array_elements;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                return check.execute(inliningTarget, this) && lookupLen.execute(getClassNode.executeCached(this)) != PNone.NO_VALUE;
-            } finally {
-                gil.release(mustRelease);
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.has_array_elements;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return sequenceCheck.execute(inliningTarget, this) && getSlotsNode.execute(inliningTarget, this).combined_sq_mp_length() != null;
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object readArrayElement(long key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Shared("getItemNode") @Cached PInteropSubscriptNode getItemNode,
+                    @Cached PySequenceGetItemNode sequenceGetItem,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException, InvalidArrayIndexException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.read_array_element;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.execute(inliningTarget, behavior, method, this, key);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                if (interopLib.hasArrayElements(this)) {
-                    try {
-                        return getItemNode.execute(this, key);
-                    } catch (PException e) {
-                        throw InvalidArrayIndexException.create(key);
-                    }
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.read_array_element;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.execute(inliningTarget, behavior, method, this, key);
+            } else {
+                try {
+                    return sequenceGetItem.execute(this, PInt.intValueExact(key));
+                } catch (OverflowException cce) {
+                    throw InvalidArrayIndexException.create(key);
+                } catch (PException pe) {
+                    throw UnsupportedMessageException.create();
                 }
-                throw UnsupportedMessageException.create();
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public void writeArrayElement(long key, Object value,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Cached PInteropSubscriptAssignNode setItemNode,
+                    @Shared @Cached PForeignToPTypeNode convert,
+                    @Cached PySequenceSetItemNode sequenceSetItemNode,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException, InvalidArrayIndexException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.write_array_element;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            getValue.execute(inliningTarget, behavior, method, this, key, value);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                if (interopLib.hasArrayElements(this)) {
-                    try {
-                        setItemNode.execute(this, key, value);
-                    } catch (PException e) {
-                        throw InvalidArrayIndexException.create(key);
-                    }
+        boolean mustRelease = gil.acquire();
+        try {
+            value = convert.executeConvert(value);
+            InteropBehaviorMethod method = InteropBehaviorMethod.write_array_element;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                getValue.execute(inliningTarget, behavior, method, this, key, value);
+            } else {
+                try {
+                    sequenceSetItemNode.execute(null, inliningTarget, this, PInt.intValueExact(key), value);
+                } catch (OverflowException cce) {
+                    throw InvalidArrayIndexException.create(key);
+                } catch (PException pe) {
+                    throw UnsupportedMessageException.create();
                 }
-                throw UnsupportedMessageException.create();
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public void removeArrayElement(long key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Exclusive @Cached PInteropDeleteItemNode deleteItemNode,
+                    @Cached PySequenceDelItemNode sequenceDelItemNode,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException, InvalidArrayIndexException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.remove_array_element;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            getValue.execute(inliningTarget, behavior, method, this, key);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                if (interopLib.hasArrayElements(this)) {
-                    try {
-                        deleteItemNode.execute(inliningTarget, this, key);
-                    } catch (PException e) {
-                        throw InvalidArrayIndexException.create(key);
-                    }
-                } else {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.remove_array_element;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                getValue.execute(inliningTarget, behavior, method, this, key);
+            } else {
+                try {
+                    sequenceDelItemNode.execute(null, inliningTarget, this, PInt.intValueExact(key));
+                } catch (OverflowException cce) {
+                    throw InvalidArrayIndexException.create(key);
+                } catch (PException pe) {
                     throw UnsupportedMessageException.create();
                 }
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public long getArraySize(
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    @Exclusive @Cached PySequenceSizeNode sequenceSizeNode,
+                    @Exclusive @Cached PySequenceCheckNode sequenceCheck,
                     // GR-44020: make shared:
-                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    @Exclusive @Cached CastToJavaLongExactNode toLongNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Bind("$node") Node inliningTarget,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PyObjectSizeNode sizeNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.get_array_size;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            // todo: cbasca - once we remove the default behavior, we should probably use a cast to
-            // long node
-            return getValue.executeInt(inliningTarget, behavior, method, toIntNode, raiseNode, this);
-        } else {
-            boolean mustRelease = gil.acquire();
-            if (!interopLib.hasArrayElements(this)) {
-                throw UnsupportedMessageException.create();
-            }
-            try {
-                long len = sizeNode.execute(null, inliningTarget, this);
-                if (len >= 0) {
-                    return len;
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.get_array_size;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeLong(inliningTarget, behavior, method, toLongNode, raiseNode, this);
+            } else {
+                if (!sequenceCheck.execute(inliningTarget, this)) {
+                    throw UnsupportedMessageException.create();
                 }
-            } finally {
-                gil.release(mustRelease);
+                try {
+                    return sequenceSizeNode.execute(null, inliningTarget, this);
+                } catch (PException pe) {
+                    throw UnsupportedMessageException.create();
+                }
             }
-            CompilerDirectives.transferToInterpreter();
-            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
         }
+    }
+
+    private boolean isInBounds(Node inliningTarget, long idx, PySequenceSizeNode sequenceSizeNode) {
+        long length = sequenceSizeNode.execute(null, inliningTarget, this);
+        return 0 <= idx && idx < length;
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isArrayElementReadable(long idx,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Bind("$node") Node inliningTarget,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PyObjectSizeNode sizeNode,
+                    @Bind Node inliningTarget,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Shared("getItemNode") @Cached PInteropSubscriptNode getItemNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Exclusive @Cached PySequenceSizeNode sequenceSizeNode,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_readable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
-        } else {
-            boolean mustRelease = gil.acquire();
-            if (!interopLib.hasArrayElements(this)) {
-                return false;
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_readable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
+            } else {
+                try {
+                    return isInBounds(inliningTarget, idx, sequenceSizeNode);
+                } catch (PException pe) {
+                    return false;
+                }
             }
-            try {
-                return isInBounds(sizeNode.execute(null, inliningTarget, this), getItemNode, idx);
-            } finally {
-                gil.release(mustRelease);
-            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isArrayElementModifiable(long idx,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Bind("$node") Node inliningTarget,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PyObjectSizeNode sizeNode,
+                    @Bind Node inliningTarget,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Shared("getItemNode") @Cached PInteropSubscriptNode getItemNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Exclusive @Cached PySequenceSizeNode sequenceSizeNode,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_modifiable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
-        } else {
-            boolean mustRelease = gil.acquire();
-            if (!interopLib.hasArrayElements(this)) {
-                return false;
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_modifiable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
+            } else {
+                try {
+                    return isInBounds(inliningTarget, idx, sequenceSizeNode);
+                } catch (PException pe) {
+                    return false;
+                }
             }
-            try {
-                return !(this instanceof PTuple) && !(this instanceof PBytes) && isInBounds(sizeNode.execute(null, inliningTarget, this), getItemNode, idx);
-            } finally {
-                gil.release(mustRelease);
-            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isArrayElementInsertable(long idx,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Bind("$node") Node inliningTarget,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PyObjectSizeNode sizeNode,
-                    @Shared("getItemNode") @Cached PInteropSubscriptNode getItemNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Exclusive @Cached PySequenceSizeNode sequenceSizeNode,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_insertable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
-        } else {
-            boolean mustRelease = gil.acquire();
-            if (!interopLib.hasArrayElements(this)) {
-                return false;
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_insertable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
+            } else {
+                try {
+                    return !isInBounds(inliningTarget, idx, sequenceSizeNode);
+                } catch (PException pe) {
+                    return false;
+                }
             }
-            try {
-                return !(this instanceof PTuple) && !(this instanceof PBytes) && !isInBounds(sizeNode.execute(null, inliningTarget, this), getItemNode, idx);
-            } finally {
-                gil.release(mustRelease);
-            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isArrayElementRemovable(long idx,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @CachedLibrary("this") InteropLibrary interopLib,
-                    @Bind("$node") Node inliningTarget,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PyObjectSizeNode sizeNode,
-                    @Shared("getItemNode") @Cached PInteropSubscriptNode getItemNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Exclusive @Cached PySequenceSizeNode sequenceSizeNode,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_removable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
-        } else {
-            boolean mustRelease = gil.acquire();
-            if (!interopLib.hasArrayElements(this)) {
-                return false;
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_array_element_removable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, idx);
+            } else {
+                try {
+                    return isInBounds(inliningTarget, idx, sequenceSizeNode);
+                } catch (PException pe) {
+                    return false;
+                }
             }
-            try {
-                return !(this instanceof PTuple) && !(this instanceof PBytes) && isInBounds(sizeNode.execute(null, inliningTarget, this), getItemNode, idx);
-            } finally {
-                gil.release(mustRelease);
-            }
-        }
-    }
-
-    private boolean isInBounds(int len, PInteropSubscriptNode getItemNode, long idx) {
-        if (0 <= idx && idx < len) {
-            try {
-                getItemNode.execute(this, idx);
-                return true;
-            } catch (PException e) {
-                return false;
-            }
-        } else {
-            return false;
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
@@ -623,31 +603,17 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
     @ExportMessage
     public Object invokeMember(String member, Object[] arguments,
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
-                    @Exclusive @Cached LookupInheritedAttributeNode.Dynamic lookupGetattributeNode,
-                    @Exclusive @Cached CallBinaryMethodNode callGetattributeNode,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                    @Exclusive @Cached PyObjectLookupAttr lookup,
                     @Exclusive @Cached PExecuteNode executeNode,
-                    @Exclusive @Cached InlinedConditionProfile profileGetattribute,
                     @Exclusive @Cached InlinedConditionProfile profileMember,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached IsBuiltinObjectProfile attributeErrorProfile,
                     @Exclusive @Cached GilNode gil)
                     throws UnknownIdentifierException, UnsupportedMessageException {
         boolean mustRelease = gil.acquire();
         try {
-            Object memberObj;
-            try {
-                Object attrGetattribute = lookupGetattributeNode.execute(inliningTarget, this, T___GETATTRIBUTE__);
-                if (profileGetattribute.profile(inliningTarget, attrGetattribute == PNone.NO_VALUE)) {
-                    throw UnknownIdentifierException.create(member);
-                }
-                memberObj = callGetattributeNode.executeObject(attrGetattribute, this, fromJavaStringNode.execute(member, TS_ENCODING));
-                if (profileMember.profile(inliningTarget, memberObj == PNone.NO_VALUE)) {
-                    throw UnknownIdentifierException.create(member);
-                }
-            } catch (PException e) {
-                e.expect(inliningTarget, AttributeError, attributeErrorProfile);
+            Object memberObj = lookup.execute(null, inliningTarget, this, fromJavaStringNode.execute(member, TS_ENCODING));
+            if (profileMember.profile(inliningTarget, memberObj == PNone.NO_VALUE)) {
                 throw UnknownIdentifierException.create(member);
             }
             return executeNode.execute(memberObj, arguments);
@@ -659,57 +625,63 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isExecutable(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Cached PyCallableCheckNode callableCheck) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_executable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return callableCheck.execute(inliningTarget, this);
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Cached PyCallableCheckNode callableCheck,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_executable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return callableCheck.execute(inliningTarget, this);
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object execute(Object[] arguments,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     @Exclusive @Cached PExecuteNode executeNode,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.execute;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.execute(inliningTarget, behavior, method, this, arguments);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.execute;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.execute(inliningTarget, behavior, method, this, arguments);
+            } else {
                 return executeNode.execute(this, arguments);
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @TruffleBoundary
     public Object getMembers(boolean includeInternal,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached CastToListInteropNode castToList,
                     @Shared("getClass") @Cached(inline = false) GetClassNode getClass,
                     @Cached PyMappingCheckNode checkMapping,
                     // GR-44020: make shared:
                     @Exclusive @Cached PyObjectLookupAttr lookupKeys,
                     @Cached CallNode callKeys,
-                    @Shared("getItemNode") @Cached PInteropSubscriptNode getItemNode,
-                    @Cached SequenceNodes.LenNode lenNode,
+                    @Cached SequenceStorageNodes.GetItemScalarNode getItemScalarNode,
                     @Cached TypeNodes.GetMroNode getMroNode,
                     @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                     @Cached TruffleString.RegionEqualNode regionEqualNode,
@@ -734,10 +706,11 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
                 if (checkMapping.execute(inliningTarget, this)) {
                     Object keysMethod = lookupKeys.execute(null, inliningTarget, this, T_KEYS);
                     if (keysMethod != PNone.NO_VALUE) {
-                        PList mapKeys = castToList.executeWithGlobalState(callKeys.execute(keysMethod));
-                        int len = lenNode.execute(inliningTarget, mapKeys);
+                        PList mapKeys = castToList.executeWithGlobalState(callKeys.executeWithoutFrame(keysMethod));
+                        SequenceStorage storage = mapKeys.getSequenceStorage();
+                        int len = storage.length();
                         for (int i = 0; i < len; i++) {
-                            Object key = getItemNode.execute(mapKeys, i);
+                            Object key = getItemScalarNode.execute(inliningTarget, storage, i);
                             TruffleString tsKey = null;
                             if (key instanceof TruffleString) {
                                 tsKey = (TruffleString) key;
@@ -762,14 +735,15 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
     @ExportMessage
     public void removeMember(String member,
-                    @Bind("$node") Node inliningTarget,
-                    @Cached PInteropDeleteAttributeNode deleteAttributeNode,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached PyObjectSetAttr deleteAttributeNode,
+                    @Exclusive @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
                     // GR-44020: make shared:
                     @Exclusive @Cached IsBuiltinObjectProfile attrErrorProfile,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException, UnknownIdentifierException {
         boolean mustRelease = gil.acquire();
         try {
-            deleteAttributeNode.execute(this, member);
+            deleteAttributeNode.delete(null, inliningTarget, this, fromJavaStringNode.execute(member, TS_ENCODING));
         } catch (PException e) {
             e.expectAttributeError(inliningTarget, attrErrorProfile);
             // TODO(fa) not accurate; distinguish between read-only and non-existing
@@ -781,9 +755,9 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
     @ExportMessage
     public boolean isInstantiable(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
+                    @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
                     @Exclusive @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
         try {
@@ -799,10 +773,10 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
                     @Exclusive @Cached PExecuteNode executeNode,
                     @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
         boolean mustRelease = gil.acquire();
-        if (!interopLib.isInstantiable(this)) {
-            throw UnsupportedMessageException.create();
-        }
         try {
+            if (!interopLib.isInstantiable(this)) {
+                throw UnsupportedMessageException.create();
+            }
             return executeNode.execute(this, arguments);
         } finally {
             gil.release(mustRelease);
@@ -841,451 +815,220 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
         return strLen >= PRIVATE_PREFIX_LENGTH && regionEqualNode.execute(strKey, 0, T_PRIVATE_PREFIX, 0, PRIVATE_PREFIX_LENGTH, TS_ENCODING);
     }
 
-    private static final TruffleString T_DATETIME_MODULE_NAME = T_DATETIME;
-    private static final TruffleString T_TIME_MODULE_NAME = T_TIME;
-    private static final TruffleString T_DATE_TYPE = T_DATE;
-    private static final TruffleString T_DATETIME_TYPE = T_DATETIME;
-    private static final TruffleString T_TIME_TYPE = T_TIME;
-    private static final TruffleString T_STRUCT_TIME_TYPE = T_STRUCT_TIME;
-
-    private static Object readType(Node inliningTarget, ReadAttributeFromObjectNode readTypeNode, Object module, TruffleString typename, TypeNodes.IsTypeNode isTypeNode) {
-        Object type = readTypeNode.execute(module, typename);
-        if (isTypeNode.execute(inliningTarget, type)) {
-            return type;
-        } else {
-            CompilerDirectives.transferToInterpreter();
-            throw PRaiseNode.getUncached().raise(PythonBuiltinClassType.TypeError, ErrorMessages.PATCHED_DATETIME_CLASS, type);
-        }
-    }
-
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isDate(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
-                    // GR-44020: use inlined:
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Shared("readTypeNode") @Cached ReadAttributeFromObjectNode readTypeNode,
-                    @Shared("isSubtypeNode") @Cached IsSubtypeNode isSubtypeNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile dateTimeModuleLoaded,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile timeModuleLoaded,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_date;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                Object objType = getClassNode.executeCached(this);
-                PDict importedModules = PythonContext.get(getClassNode).getSysModules();
-                Object module = importedModules.getItem(T_DATETIME_MODULE_NAME);
-                if (dateTimeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATETIME_TYPE, isTypeNode)) ||
-                                    isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATE_TYPE, isTypeNode))) {
-                        return true;
-                    }
-                }
-                module = importedModules.getItem(T_TIME_MODULE_NAME);
-                if (timeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_STRUCT_TIME_TYPE, isTypeNode))) {
-                        return true;
-                    }
-                }
-                return false;
-            } finally {
-                gil.release(mustRelease);
-            }
-        }
-    }
-
-    static LocalDate constructDate(CastToJavaIntExactNode castToIntNode, Node inliningTarget, InteropLibrary lib, Object receiver, PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        return constructDate(castToIntNode, inliningTarget, lib, receiver, raiseNode, "year", "month", "day");
-    }
-
-    static LocalDate constructDateStruct(CastToJavaIntExactNode castToIntNode, Node inliningTarget, InteropLibrary lib, Object receiver, PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        return constructDate(castToIntNode, inliningTarget, lib, receiver, raiseNode, "tm_year", "tm_mon", "tm_mday");
-    }
-
-    static LocalDate constructDate(CastToJavaIntExactNode castToIntNode, Node inliningTarget, InteropLibrary lib, Object receiver, PRaiseNode.Lazy rasiseNode,
-                    String yearMemberName, String monthMemberName, String dayMemberName) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
         try {
-            int year = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, yearMemberName), rasiseNode);
-            int month = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, monthMemberName), rasiseNode);
-            int day = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, dayMemberName), rasiseNode);
-            return createLocalDate(year, month, day);
-        } catch (UnsupportedMessageException | UnknownIdentifierException ex) {
-            throw UnsupportedMessageException.create();
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_date;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public LocalDate asDate(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Shared("readTypeNode") @Cached ReadAttributeFromObjectNode readTypeNode,
-                    @Shared("isSubtypeNode") @Cached IsSubtypeNode isSubtypeNode,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaIntExactNode castToIntNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile dateTimeModuleLoaded,
+                    @Exclusive @Cached PyTupleCheckNode tupleCheckNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile timeModuleLoaded,
-                    @Exclusive @Cached GilNode gil,
-                    @Shared("lib") @CachedLibrary(limit = "2") InteropLibrary lib) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_date;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            Object value = getValue.execute(inliningTarget, behavior, method, this);
-            return constructDate(castToIntNode, inliningTarget, lib, value, raiseNode);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                Object objType = getClassNode.executeCached(this);
-                PDict importedModules = PythonContext.get(getClassNode).getSysModules();
-                Object module = importedModules.getItem(T_DATETIME_MODULE_NAME);
-                if (dateTimeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATETIME_TYPE, isTypeNode)) ||
-                                    isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATE_TYPE, isTypeNode))) {
-                        return constructDate(castToIntNode, inliningTarget, lib, this, raiseNode);
+                    @Exclusive @Cached PyTupleSizeNode pyTupleSizeNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PyTupleGetItem tupleGetItem,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_date;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                Object value = getValue.execute(inliningTarget, behavior, method, this);
+                if (tupleCheckNode.execute(inliningTarget, value)) {
+                    if (pyTupleSizeNode.execute(inliningTarget, value) != 3) {
+                        throw raiseNode.raise(inliningTarget, ValueError, S_MUST_BE_A_S_TUPLE, "return value", "3");
                     }
-                }
-                module = importedModules.getItem(T_TIME_MODULE_NAME);
-                if (timeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_STRUCT_TIME_TYPE, isTypeNode))) {
-                        return constructDateStruct(castToIntNode, inliningTarget, lib, this, raiseNode);
+                    int year = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 0), raiseNode);
+                    int month = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 1), raiseNode);
+                    int day = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 2), raiseNode);
+                    try {
+                        return createLocalDate(year, month, day);
+                    } catch (Exception e) {
+                        throw raiseNode.raise(inliningTarget, SystemError, e);
                     }
+                } else {
+                    throw raiseNode.raise(inliningTarget, TypeError, MUST_BE_TYPE_A_NOT_TYPE_B, "return value", "tuple", value);
                 }
+
+            } else {
                 throw UnsupportedMessageException.create();
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isTime(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
-                    // GR-44020: use inlined:
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Shared("readTypeNode") @Cached ReadAttributeFromObjectNode readTypeNode,
-                    @Shared("isSubtypeNode") @Cached IsSubtypeNode isSubtype,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile dateTimeModuleLoaded,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile timeModuleLoaded,
                     @Exclusive @Cached GilNode gil) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_time;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                Object objType = getClassNode.executeCached(this);
-                PDict importedModules = PythonContext.get(getClassNode).getSysModules();
-                Object module = importedModules.getItem(T_DATETIME_MODULE_NAME);
-                if (dateTimeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtype.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATETIME_TYPE, isTypeNode)) ||
-                                    isSubtype.execute(objType, readType(inliningTarget, readTypeNode, module, T_TIME_TYPE, isTypeNode))) {
-                        return true;
-                    }
-                }
-                module = importedModules.getItem(T_TIME_MODULE_NAME);
-                if (timeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtype.execute(objType, readType(inliningTarget, readTypeNode, module, T_STRUCT_TIME_TYPE, isTypeNode))) {
-                        return true;
-                    }
-                }
-                return false;
-            } finally {
-                gil.release(mustRelease);
-            }
-        }
-    }
-
-    static LocalTime constructTime(Object receiver, CastToJavaIntExactNode castToIntNode, Node inliningTarget, InteropLibrary lib, PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        return constructTime(receiver, castToIntNode, inliningTarget, lib, raiseNode,
-                        "hour", "minute", "second", "microsecond");
-    }
-
-    static LocalTime constructTimeStruct(Object receiver, CastToJavaIntExactNode castToIntNode, Node inliningTarget, InteropLibrary lib, PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        return constructTime(receiver, castToIntNode, inliningTarget, lib, raiseNode,
-                        "tm_hour", "tm_min", "tm_sec", null);
-    }
-
-    static LocalTime constructTime(Object receiver, CastToJavaIntExactNode castToIntNode, Node inliningTarget, InteropLibrary lib, PRaiseNode.Lazy raiseNode,
-                    String hourMemberName, String minuteMemberName, String secondMemberName, String microSecondMemberName) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
         try {
-            int hour = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, hourMemberName), raiseNode);
-            int min = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, minuteMemberName), raiseNode);
-            int sec = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, secondMemberName), raiseNode);
-            int micro = 0;
-            if (microSecondMemberName != null) {
-                micro = castToIntNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, microSecondMemberName), raiseNode);
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_time;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
             }
-            return createLocalTime(hour, min, sec, micro);
-        } catch (UnsupportedMessageException | UnknownIdentifierException ex) {
-            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public LocalTime asTime(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
-                    // GR-44020: use inlined:
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Shared("readTypeNode") @Cached ReadAttributeFromObjectNode readTypeNode,
-                    @Shared("isSubtypeNode") @Cached IsSubtypeNode isSubtypeNode,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaIntExactNode castToIntNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile dateTimeModuleLoaded,
+                    @Exclusive @Cached PyTupleCheckNode tupleCheckNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile timeModuleLoaded,
-                    @Exclusive @Cached GilNode gil,
-                    @Shared("lib") @CachedLibrary(limit = "2") InteropLibrary lib) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_time;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            Object value = getValue.execute(inliningTarget, behavior, method, this);
-            return constructTime(value, castToIntNode, inliningTarget, lib, raiseNode);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                Object objType = getClassNode.executeCached(this);
-                PDict importedModules = PythonContext.get(getClassNode).getSysModules();
-                Object module = importedModules.getItem(T_DATETIME_MODULE_NAME);
-                if (dateTimeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATETIME_TYPE, isTypeNode)) ||
-                                    isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_TIME_TYPE, isTypeNode))) {
-                        return constructTime(this, castToIntNode, inliningTarget, lib, raiseNode);
+                    @Exclusive @Cached PyTupleSizeNode pyTupleSizeNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PyTupleGetItem tupleGetItem,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_time;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                Object value = getValue.execute(inliningTarget, behavior, method, this);
+                if (tupleCheckNode.execute(inliningTarget, value)) {
+                    if (pyTupleSizeNode.execute(inliningTarget, value) != 4) {
+                        throw raiseNode.raise(inliningTarget, ValueError, S_MUST_BE_A_S_TUPLE, "return value", "4");
                     }
-                }
-                module = importedModules.getItem(T_TIME_MODULE_NAME);
-                if (timeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_STRUCT_TIME_TYPE, isTypeNode))) {
-                        return constructTimeStruct(this, castToIntNode, inliningTarget, lib, raiseNode);
+                    int hour = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 0), raiseNode);
+                    int min = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 1), raiseNode);
+                    int sec = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 2), raiseNode);
+                    int micro = castToIntNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 3), raiseNode);
+                    try {
+                        return createLocalTime(hour, min, sec, micro);
+                    } catch (Exception e) {
+                        throw raiseNode.raise(inliningTarget, SystemError, e);
                     }
+                } else {
+                    throw raiseNode.raise(inliningTarget, TypeError, MUST_BE_TYPE_A_NOT_TYPE_B, "return value", "tuple", value);
                 }
+            } else {
                 throw UnsupportedMessageException.create();
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
+
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isTimeZone(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Shared("readTypeNode") @Cached ReadAttributeFromObjectNode readTypeNode,
-                    @Shared("isSubtypeNode") @Cached IsSubtypeNode isSubtype,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile dateTimeModuleLoaded,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile timeModuleLoaded,
-                    @Exclusive @Cached GilNode gil,
-                    @Shared("lib") @CachedLibrary(limit = "2") InteropLibrary lib) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_time_zone;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                Object objType = getClassNode.executeCached(this);
-                PDict importedModules = PythonContext.get(getClassNode).getSysModules();
-                Object module = importedModules.getItem(T_DATETIME_MODULE_NAME);
-                if (dateTimeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtype.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATETIME_TYPE, isTypeNode))) {
-                        try {
-                            Object tzinfo = lib.readMember(this, "tzinfo");
-                            if (tzinfo != PNone.NONE) {
-                                Object delta = lib.invokeMember(tzinfo, "utcoffset", new Object[]{this});
-                                if (delta != PNone.NONE) {
-                                    return true;
-                                }
-                            }
-                        } catch (UnsupportedMessageException | UnknownIdentifierException | ArityException | UnsupportedTypeException ex) {
-                            return false;
-                        }
-                    } else if (isSubtype.execute(objType, readType(inliningTarget, readTypeNode, module, T_TIME_TYPE, isTypeNode))) {
-                        try {
-                            Object tzinfo = lib.readMember(this, "tzinfo");
-                            if (tzinfo != PNone.NONE) {
-                                Object delta = lib.invokeMember(tzinfo, "utcoffset", new Object[]{PNone.NONE});
-                                if (delta != PNone.NONE) {
-                                    return true;
-                                }
-                            }
-                        } catch (UnsupportedMessageException | UnknownIdentifierException | ArityException | UnsupportedTypeException ex) {
-                            return false;
-                        }
-                    }
-                }
-                module = importedModules.getItem(T_TIME_MODULE_NAME);
-                if (timeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtype.execute(objType, readType(inliningTarget, readTypeNode, module, T_STRUCT_TIME_TYPE, isTypeNode))) {
-                        try {
-                            Object tm_zone = lib.readMember(this, "tm_zone");
-                            if (tm_zone != PNone.NONE) {
-                                return true;
-                            }
-                        } catch (UnsupportedMessageException | UnknownIdentifierException ex) {
-                            return false;
-                        }
-                    }
-                }
-                return false;
-            } finally {
-                gil.release(mustRelease);
-            }
-        }
-    }
-
-    static ZoneId constructZoneId(Object receiver, CastToJavaIntExactNode castToIntNode, TruffleString.ToJavaStringNode toJavaStringNode, Node inliningTarget, InteropLibrary lib,
-                    PRaiseNode.Lazy raiseNode)
-                    throws UnsupportedMessageException {
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
         try {
-            Object tm_zone = lib.readMember(receiver, "tm_zone");
-            if (tm_zone != PNone.NONE) {
-                Object tm_gmtoffset = lib.readMember(receiver, "tm_gmtoff");
-                if (tm_gmtoffset != PNone.NONE) {
-                    int seconds = castToIntNode.executeWithThrowSystemError(inliningTarget, tm_gmtoffset, raiseNode);
-                    return createZoneId(seconds);
-                }
-                if (tm_zone instanceof TruffleString) {
-                    return createZoneId(toJavaStringNode.execute((TruffleString) tm_zone));
-                }
-                if (isJavaString(tm_zone)) {
-                    return createZoneId((String) tm_zone);
-                }
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_time_zone;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
             }
-        } catch (UnsupportedMessageException | UnknownIdentifierException ex) {
-            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
         }
-        throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public ZoneId asTimeZone(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    // GR-44020: use inlined:
-                    @Shared("isTypeNode") @Cached(inline = false) TypeNodes.IsTypeNode isTypeNode,
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Shared("readTypeNode") @Cached ReadAttributeFromObjectNode readTypeNode,
-                    @Shared("isSubtypeNode") @Cached IsSubtypeNode isSubtypeNode,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaIntExactNode castToIntNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile dateTimeModuleLoaded,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached InlinedConditionProfile timeModuleLoaded,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     @Cached TruffleString.ToJavaStringNode toJavaStringNode,
-                    @Exclusive @Cached GilNode gil,
-                    @Exclusive @CachedLibrary(limit = "3") InteropLibrary lib) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_time_zone;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            Object value = getValue.execute(inliningTarget, behavior, method, this);
-            return constructZoneId(value, castToIntNode, toJavaStringNode, inliningTarget, lib, raiseNode);
-        } else {
-            boolean mustRelease = gil.acquire();
-            try {
-                if (!lib.isTimeZone(this)) {
-                    throw UnsupportedMessageException.create();
-                }
-                Object objType = getClassNode.executeCached(this);
-                PDict importedModules = PythonContext.get(getClassNode).getSysModules();
-                Object module = importedModules.getItem(T_DATETIME_MODULE_NAME);
-                if (dateTimeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_DATETIME_TYPE, isTypeNode))) {
-                        try {
-                            Object tzinfo = lib.readMember(this, "tzinfo");
-                            if (tzinfo != PNone.NONE) {
-                                Object delta = lib.invokeMember(tzinfo, "utcoffset", new Object[]{this});
-                                if (delta != PNone.NONE) {
-                                    int seconds = castToIntNode.execute(inliningTarget, lib.readMember(delta, "seconds"));
-                                    int days = castToIntNode.execute(inliningTarget, lib.readMember(delta, "days"));
-                                    int offset = days * 3600 * 24 + seconds;
-                                    return createZoneId(offset);
-                                }
-                            }
-                        } catch (UnsupportedMessageException | UnknownIdentifierException | ArityException | UnsupportedTypeException ex) {
-                            throw UnsupportedMessageException.create();
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_time_zone;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                Object value = getValue.execute(inliningTarget, behavior, method, this);
+                try {
+                    try {
+                        if (value instanceof TruffleString tsValue) {
+                            String tmZone = toJavaStringNode.execute(tsValue);
+                            return createZoneId(tmZone);
+                        } else {
+                            int utcDeltaInSeconds = castToIntNode.execute(inliningTarget, value);
+                            return createZoneId(utcDeltaInSeconds);
                         }
-                    } else if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_TIME_TYPE, isTypeNode))) {
-                        try {
-                            Object tzinfo = lib.readMember(this, "tzinfo");
-                            if (tzinfo != PNone.NONE) {
-                                Object delta = lib.invokeMember(tzinfo, "utcoffset", new Object[]{PNone.NONE});
-                                if (delta != PNone.NONE) {
-                                    int seconds = castToIntNode.execute(inliningTarget, lib.readMember(delta, "seconds"));
-                                    return createZoneId(seconds);
-                                }
-                            }
-                        } catch (UnsupportedMessageException | UnknownIdentifierException | ArityException | UnsupportedTypeException ex) {
-                            throw UnsupportedMessageException.create();
-                        }
+                    } catch (Exception e) {
+                        throw raiseNode.raise(inliningTarget, SystemError, e);
                     }
+                } catch (CannotCastException cce) {
+                    throw raiseNode.raise(inliningTarget, TypeError, MUST_BE_TYPE_A_NOT_TYPE_B, "return value", "str or int", value);
                 }
-                module = importedModules.getItem(T_TIME_MODULE_NAME);
-                if (timeModuleLoaded.profile(inliningTarget, module != null)) {
-                    if (isSubtypeNode.execute(objType, readType(inliningTarget, readTypeNode, module, T_STRUCT_TIME_TYPE, isTypeNode))) {
-                        return constructZoneId(this, castToIntNode, toJavaStringNode, inliningTarget, lib, raiseNode);
-                    }
-                }
+            } else {
                 throw UnsupportedMessageException.create();
-            } finally {
-                gil.release(mustRelease);
             }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
@@ -1312,51 +1055,72 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isDuration(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_duration;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_duration;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Duration asDuration(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
-                    @Exclusive @Cached CastToJavaLongExactNode toLongNode,
+                    @Exclusive @Cached CastToJavaLongExactNode castToLongNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @CachedLibrary(limit = "1") InteropLibrary lib) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_duration;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            Object value = getValue.execute(inliningTarget, behavior, method, this);
-            return constructDuration(value, toLongNode, inliningTarget, lib, raiseNode);
-        } else {
-            throw UnsupportedMessageException.create();
-        }
-    }
-
-    private static Duration constructDuration(Object receiver, CastToJavaLongExactNode castToLongNode, Node inliningTarget, InteropLibrary lib, PRaiseNode.Lazy raiseNode)
-                    throws UnsupportedMessageException {
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PyTupleCheckNode tupleCheckNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PyTupleSizeNode pyTupleSizeNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PyTupleGetItem tupleGetItem,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
         try {
-            long sec = castToLongNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, "seconds"), raiseNode);
-            long nano = castToLongNode.executeWithThrowSystemError(inliningTarget, lib.readMember(receiver, "nano_adjustment"), raiseNode);
-            return createDuration(sec, nano);
-        } catch (UnsupportedMessageException | UnknownIdentifierException ex) {
-            throw UnsupportedMessageException.create();
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_duration;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                Object value = getValue.execute(inliningTarget, behavior, method, this);
+                if (tupleCheckNode.execute(inliningTarget, value)) {
+                    if (pyTupleSizeNode.execute(inliningTarget, value) != 2) {
+                        throw raiseNode.raise(inliningTarget, ValueError, S_MUST_BE_A_S_TUPLE, "return value", "2");
+                    }
+                    long sec = castToLongNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 0), raiseNode);
+                    long nano = castToLongNode.executeWithThrowSystemError(inliningTarget, tupleGetItem.execute(inliningTarget, value, 1), raiseNode);
+                    try {
+                        return createDuration(sec, nano);
+                    } catch (Exception e) {
+                        throw raiseNode.raise(inliningTarget, SystemError, e);
+                    }
+                } else {
+                    throw raiseNode.raise(inliningTarget, TypeError, MUST_BE_TYPE_A_NOT_TYPE_B, "return value", "tuple", value);
+                }
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
@@ -1366,7 +1130,7 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
     }
 
     @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 80 -> 62
+    @GenerateInline(false)       // footprint reduction 80 -> 62
     public abstract static class PKeyInfoNode extends Node {
         private static final int READABLE = 0x1;
         private static final int READ_SIDE_EFFECTS = 0x2;
@@ -1380,8 +1144,8 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
         @Specialization
         static boolean access(Object object, TruffleString attrKeyName, int type,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createForceType()") ReadAttributeFromObjectNode readTypeAttrNode,
+                        @Bind Node inliningTarget,
+                        @Cached ReadAttributeFromObjectNode readTypeAttrNode,
                         @Cached ReadAttributeFromObjectNode readObjectAttrNode,
                         @Cached PyCallableCheckNode callableCheck,
                         @Cached LookupInheritedAttributeNode.Dynamic getGetNode,
@@ -1390,6 +1154,7 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
                         @Cached GetClassNode getClassNode,
                         @Cached IsImmutable isImmutable,
                         @Cached GetMroNode getMroNode,
+                        @Cached PyObjectLookupAttr lookupAttr,
                         @Cached GilNode gil) {
             boolean mustRelease = gil.acquire();
             try {
@@ -1409,10 +1174,14 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
                 if (attr == PNone.NO_VALUE) {
                     attr = readObjectAttrNode.execute(owner, attrKeyName);
                 }
+                Object dynamicAttr = PNone.NO_VALUE;
+                if (attr == PNone.NO_VALUE && (type == READABLE || type == INVOCABLE)) {
+                    dynamicAttr = lookupAttr.execute(null, inliningTarget, object, attrKeyName);
+                }
 
                 switch (type) {
                     case READABLE:
-                        return attr != PNone.NO_VALUE;
+                        return attr != PNone.NO_VALUE || dynamicAttr != PNone.NO_VALUE;
                     case INSERTABLE:
                         return attr == PNone.NO_VALUE && !isImmutable.execute(inliningTarget, object);
                     case REMOVABLE:
@@ -1445,6 +1214,9 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
                                 }
                             }
                             return callableCheck.execute(inliningTarget, attr);
+                        }
+                        if (dynamicAttr != PNone.NO_VALUE) {
+                            return callableCheck.execute(inliningTarget, dynamicAttr);
                         }
                         return false;
                     case READ_SIDE_EFFECTS:
@@ -1479,12 +1251,15 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
         @Specialization
         public static boolean isImmutable(Node inliningTarget, Object object,
+                        @Cached GetObjectSlotsNode getSlotsNode,
                         @Cached GetClassNode getClassNode) {
             // TODO(fa) The first condition is too general; we should check if the object's type is
             // 'type'
             if (object instanceof PythonBuiltinClass || object instanceof PythonBuiltinObject || PGuards.isNativeClass(object) || PGuards.isNativeObject(object)) {
                 return true;
             } else if (object instanceof PythonClass || object instanceof PythonModule) {
+                return false;
+            } else if (getSlotsNode.execute(inliningTarget, object).combined_tp_setattro_setattr() != null) {
                 return false;
             } else {
                 Object klass = getClassNode.execute(inliningTarget, object);
@@ -1493,64 +1268,90 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
         }
     }
 
-    /*
-     * Basically the same as 'com.oracle.graal.python.nodes.subscript.GetItemNode' but with an
-     * uncached version.
-     */
     @GenerateUncached
-    @ImportStatic(SpecialMethodSlot.class)
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 19
-    public abstract static class PInteropSubscriptNode extends Node {
-
-        public abstract Object execute(Object primary, Object index);
-
-        @Specialization
-        static Object doSpecialObject(Object primary, Object index,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClassNode,
-                        @Cached(parameters = "GetItem") LookupCallableSlotInMRONode lookupInMRONode,
-                        @Cached CallBinaryMethodNode callGetItemNode,
-                        @Cached PRaiseNode raiseNode,
-                        @Cached InlinedConditionProfile profile) {
-            Object attrGetItem = lookupInMRONode.execute(getClassNode.execute(inliningTarget, primary));
-            if (profile.profile(inliningTarget, attrGetItem == PNone.NO_VALUE)) {
-                throw raiseNode.raise(PythonBuiltinClassType.TypeError, ErrorMessages.OBJ_NOT_SUBSCRIPTABLE, primary);
-            }
-            return callGetItemNode.executeObject(attrGetItem, primary, index);
-        }
-
-        public static PInteropSubscriptNode getUncached() {
-            return PythonAbstractObjectFactory.PInteropSubscriptNodeGen.getUncached();
-        }
-    }
-
-    @GenerateUncached
-    @ReportPolymorphism
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 17
+    @GenerateInline(false)       // footprint reduction 36 -> 17
     public abstract static class PExecuteNode extends Node {
 
         public abstract Object execute(Object receiver, Object[] arguments) throws UnsupportedMessageException;
 
-        @Specialization(guards = {"isBuiltinFunctionOrMethod(receiver)"})
-        Object doVarargsBuiltinMethod(Object receiver, Object[] arguments,
-                        @Bind("this") Node inliningTarget,
-                        @Cached CallVarargsMethodNode callVarargsMethodNode,
-                        @Exclusive @Cached ArgumentsFromForeignNode convertArgsNode) {
-            Object[] convertedArgs = convertArgsNode.execute(inliningTarget, arguments);
-            return callVarargsMethodNode.execute(null, receiver, convertedArgs, PKeyword.EMPTY_KEYWORDS);
-        }
+        private static String POSARGS_MEMBER = "org.graalvm.python.embedding.PositionalArguments.is_positional_arguments";
+        private static String KWARGS_MEMBER = "org.graalvm.python.embedding.KeywordArguments.is_keyword_arguments";
 
-        @Specialization(replaces = "doVarargsBuiltinMethod")
+        @Specialization
         static Object doExecute(Object receiver, Object[] arguments,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyCallableCheckNode callableCheck,
                         @Exclusive @Cached CallNode callNode,
-                        @Exclusive @Cached ArgumentsFromForeignNode convertArgsNode) throws UnsupportedMessageException {
+                        @Exclusive @Cached ArgumentsFromForeignNode convertArgsNode,
+                        @Cached MappingToKeywordsNode toKeywordsNode,
+                        @CachedLibrary(limit = "1") InteropLibrary iLibKwArgs,
+                        @CachedLibrary(limit = "1") InteropLibrary iLibPosArgs,
+                        @CachedLibrary(limit = "1") InteropLibrary iLibIterator,
+                        @Cached InlinedConditionProfile argsLenProfile,
+                        @Cached InlinedConditionProfile isKwargsProfile,
+                        @Cached InlinedConditionProfile isIndexZeroProfile,
+                        @Cached InlinedConditionProfile isStarargsProfile1,
+                        @Cached InlinedConditionProfile isStarargsProfile2,
+                        @Cached InlinedConditionProfile isStarargsDefinedProfile,
+                        @Cached InlinedConditionProfile hasMembersProfile,
+                        @Cached InlinedConditionProfile isIndexNotZeroProfile,
+                        @Cached InlinedLoopConditionProfile loopProfile) throws UnsupportedMessageException {
             if (!callableCheck.execute(inliningTarget, receiver)) {
                 throw UnsupportedMessageException.create();
             }
-            Object[] convertedArgs = convertArgsNode.execute(inliningTarget, arguments);
-            return callNode.execute(null, receiver, convertedArgs, PKeyword.EMPTY_KEYWORDS);
+
+            PKeyword[] kwArgs = PKeyword.EMPTY_KEYWORDS;
+            Object[] newArgs = arguments;
+            int index = arguments.length - 1;
+            if (argsLenProfile.profile(inliningTarget, index >= 0)) {
+                Object last = arguments[index];
+                Object posArgs = null;
+                try {
+                    boolean lastHasMembers = hasMembersProfile.profile(inliningTarget, iLibKwArgs.hasMembers(last));
+                    if (lastHasMembers && isKwargsProfile.profile(inliningTarget, iLibKwArgs.isMemberReadable(last, KWARGS_MEMBER) && iLibKwArgs.readMember(last, KWARGS_MEMBER) == Boolean.TRUE)) {
+                        kwArgs = toKeywordsNode.execute(null, inliningTarget, last);
+                        --index;
+                        if (isIndexZeroProfile.profile(inliningTarget, index >= 0)) {
+                            last = arguments[index];
+                            if (isStarargsProfile1.profile(inliningTarget,
+                                            iLibPosArgs.hasMembers(last) && iLibPosArgs.isMemberReadable(last, POSARGS_MEMBER) && iLibPosArgs.readMember(last, POSARGS_MEMBER) == Boolean.TRUE)) {
+                                posArgs = last;
+                            } else {
+                                // no starargs are in arguments
+                                newArgs = PythonUtils.arrayCopyOf(arguments, arguments.length - 1);
+                            }
+                        } else {
+                            // only kwargs are in arguments
+                            newArgs = new Object[0];
+                        }
+                    } else if (lastHasMembers &&
+                                    isStarargsProfile2.profile(inliningTarget, iLibPosArgs.isMemberReadable(last, POSARGS_MEMBER) && iLibPosArgs.readMember(last, POSARGS_MEMBER) == Boolean.TRUE)) {
+                        posArgs = last;
+                    }
+
+                    if (isStarargsDefinedProfile.profile(inliningTarget, posArgs != null)) {
+                        long length = iLibPosArgs.getArraySize(posArgs);
+                        Object iterator = iLibPosArgs.getIterator(posArgs);
+                        loopProfile.profileCounted(inliningTarget, length);
+                        Object[] starArgs = new Object[(int) length];
+                        for (int i = 0; loopProfile.inject(inliningTarget, i < length); i++) {
+                            starArgs[i] = iLibIterator.getIteratorNextElement(iterator);
+                        }
+                        if (isIndexNotZeroProfile.profile(inliningTarget, index > 0)) {
+                            newArgs = new Object[index + starArgs.length];
+                            PythonUtils.arraycopy(arguments, 0, newArgs, 0, index);
+                            PythonUtils.arraycopy(starArgs, 0, newArgs, index, starArgs.length);
+                        } else {
+                            // only starargs and kwargs are in arguments
+                            newArgs = starArgs;
+                        }
+                    }
+                } catch (UnknownIdentifierException | SameDictKeyException | NonMappingException | StopIterationException e) {
+                    throw CompilerDirectives.shouldNotReachHere(e);
+                }
+            }
+            Object[] convertedArgs = convertArgsNode.execute(inliningTarget, newArgs);
+            return callNode.execute(null, receiver, convertedArgs, kwArgs);
         }
 
         static boolean isBuiltinFunctionOrMethod(Object object) {
@@ -1612,11 +1413,13 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
         }
 
         @ExportMessage
-        Object readArrayElement(long index) throws InvalidArrayIndexException {
-            try {
+        Object readArrayElement(long index,
+                        @Cached InlinedBranchProfile outOfBoundsProfile,
+                        @Bind Node inliningTarget) throws InvalidArrayIndexException {
+            if (Long.compareUnsigned(index, keys.length) < 0) {
                 return keys[(int) index];
-            } catch (IndexOutOfBoundsException e) {
-                CompilerDirectives.transferToInterpreter();
+            } else {
+                outOfBoundsProfile.enter(inliningTarget);
                 throw InvalidArrayIndexException.create(index);
             }
         }
@@ -1643,195 +1446,6 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
         }
     }
 
-    /*
-     * Basically the same as 'com.oracle.graal.python.nodes.attributes.GetAttributeNode' but with an
-     * uncached version.
-     */
-    @GenerateUncached
-    @GenerateInline
-    @GenerateCached(false)
-    public abstract static class PInteropGetAttributeNode extends Node {
-
-        public abstract Object execute(Node inliningTarget, Object object, Object attrName);
-
-        public static Object executeUncached(Object object, Object attrName) {
-            return PInteropGetAttributeNodeGen.getUncached().execute(null, object, attrName);
-        }
-
-        @Specialization(limit = "2")
-        static Object doIt(Node inliningTarget, Object object, Object attrName,
-                        @CachedLibrary("attrName") InteropLibrary libAttrName,
-                        // GR-44020: make shared:
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                        @Cached LookupInheritedAttributeNode.Dynamic lookupGetattributeNode,
-                        @Cached(inline = false) CallBinaryMethodNode callGetattributeNode,
-                        @Cached LookupInheritedAttributeNode.Dynamic lookupGetattrNode,
-                        @Cached(inline = false) CallBinaryMethodNode callGetattrNode,
-                        @Cached(inline = false) TruffleString.SwitchEncodingNode switchEncodingNode,
-                        @Cached IsBuiltinObjectProfile isBuiltinClassProfile,
-                        @Cached InlinedConditionProfile hasGetattrProfile) {
-            if (!libAttrName.isString(attrName)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.ATTR_NAME_MUST_BE_STRING, attrName);
-            }
-
-            TruffleString attrNameStr;
-            try {
-                attrNameStr = switchEncodingNode.execute(libAttrName.asTruffleString(attrName), TS_ENCODING);
-            } catch (UnsupportedMessageException e) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                throw new IllegalStateException("should not be reached");
-            }
-
-            try {
-                Object attrGetattribute = lookupGetattributeNode.execute(inliningTarget, object, T___GETATTRIBUTE__);
-                return callGetattributeNode.executeObject(attrGetattribute, object, attrNameStr);
-            } catch (PException pe) {
-                pe.expect(inliningTarget, AttributeError, isBuiltinClassProfile);
-                Object attrGetattr = lookupGetattrNode.execute(inliningTarget, object, T___GETATTR__);
-                if (hasGetattrProfile.profile(inliningTarget, attrGetattr != PNone.NO_VALUE)) {
-                    return callGetattrNode.executeObject(attrGetattr, object, attrNameStr);
-                }
-                throw pe;
-            }
-        }
-    }
-
-    /*
-     * Basically the same as 'com.oracle.graal.python.nodes.subscript.SetItemNode' but with an
-     * uncached version.
-     */
-    @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 17
-    public abstract static class PInteropSubscriptAssignNode extends Node {
-
-        public abstract void execute(PythonAbstractObject primary, Object key, Object value) throws UnsupportedMessageException;
-
-        @Specialization
-        static void doSpecialObject(PythonAbstractObject primary, Object key, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PForeignToPTypeNode convert,
-                        @Cached PInteropGetAttributeNode getAttributeNode,
-                        @Cached CallBinaryMethodNode callSetItemNode,
-                        @Cached InlinedConditionProfile profile) throws UnsupportedMessageException {
-
-            Object attrSetitem = getAttributeNode.execute(inliningTarget, primary, T___SETITEM__);
-            if (profile.profile(inliningTarget, attrSetitem != PNone.NO_VALUE)) {
-                callSetItemNode.executeObject(attrSetitem, key, convert.executeConvert(value));
-            } else {
-                throw UnsupportedMessageException.create();
-            }
-        }
-    }
-
-    /*
-     * Basically the same as 'com.oracle.graal.python.nodes.attributes.SetAttributeNode' but with an
-     * uncached version.
-     */
-    @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 19
-    public abstract static class PInteropSetAttributeNode extends Node {
-
-        public abstract void execute(Object primary, TruffleString attrName, Object value) throws UnsupportedMessageException, UnknownIdentifierException;
-
-        @Specialization
-        public static void doSpecialObject(PythonAbstractObject primary, TruffleString attrName, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PForeignToPTypeNode convert,
-                        @Cached LookupInheritedAttributeNode.Dynamic lookupSetAttrNode,
-                        @Cached CallTernaryMethodNode callSetAttrNode,
-                        @Cached InlinedConditionProfile profile,
-                        @Cached IsBuiltinObjectProfile attrErrorProfile) throws UnsupportedMessageException, UnknownIdentifierException {
-            Object attrSetattr = lookupSetAttrNode.execute(inliningTarget, primary, SpecialMethodNames.T___SETATTR__);
-            if (profile.profile(inliningTarget, attrSetattr != PNone.NO_VALUE)) {
-                try {
-                    callSetAttrNode.execute(null, attrSetattr, primary, attrName, convert.executeConvert(value));
-                } catch (PException e) {
-                    e.expectAttributeError(inliningTarget, attrErrorProfile);
-                    // TODO(fa) not accurate; distinguish between read-only and non-existing
-                    throw UnknownIdentifierException.create(attrName.toJavaStringUncached());
-                }
-            } else {
-                throw UnsupportedMessageException.create();
-            }
-        }
-
-        public static PInteropSetAttributeNode getUncached() {
-            return PythonAbstractObjectFactory.PInteropSetAttributeNodeGen.getUncached();
-        }
-    }
-
-    /*
-     * Basically the same as 'com.oracle.graal.python.nodes.subscript.DelItemNode' but with an
-     * uncached version.
-     */
-    @GenerateUncached
-    @GenerateInline
-    @GenerateCached(false)
-    public abstract static class PInteropDeleteItemNode extends Node {
-
-        public abstract void execute(Node inliningTarget, Object primary, Object key) throws UnsupportedMessageException;
-
-        @Specialization
-        public static void doSpecialObject(Node inliningTarget, PythonAbstractObject primary, Object key,
-                        @Cached LookupInheritedAttributeNode.Dynamic lookupSetAttrNode,
-                        @Cached(inline = false) CallBinaryMethodNode callSetAttrNode,
-                        @Cached InlinedConditionProfile profile) throws UnsupportedMessageException {
-            Object attrDelattr = lookupSetAttrNode.execute(inliningTarget, primary, T___DELITEM__);
-            if (profile.profile(inliningTarget, attrDelattr != PNone.NO_VALUE)) {
-                callSetAttrNode.executeObject(attrDelattr, primary, key);
-            } else {
-                throw UnsupportedMessageException.create();
-            }
-        }
-    }
-
-    /*
-     * Basically the same as 'com.oracle.graal.python.nodes.attributes.DeleteAttributeNode' but with
-     * an uncached version.
-     */
-    @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 19
-    public abstract static class PInteropDeleteAttributeNode extends Node {
-
-        public abstract void execute(Object primary, String attrName) throws UnsupportedMessageException, UnknownIdentifierException;
-
-        @Specialization
-        public void doSpecialObject(PythonAbstractObject primary, String attrName,
-                        @Bind("this") Node inliningTarget,
-                        @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
-                        @Cached LookupInheritedAttributeNode.Dynamic lookupSetAttrNode,
-                        @Cached CallBinaryMethodNode callSetAttrNode,
-                        @Cached InlinedConditionProfile profile,
-                        @Cached IsBuiltinObjectProfile attrErrorProfile) throws UnsupportedMessageException, UnknownIdentifierException {
-            Object attrDelattr = lookupSetAttrNode.execute(inliningTarget, primary, SpecialMethodNames.T___DELATTR__);
-            if (profile.profile(inliningTarget, attrDelattr != PNone.NO_VALUE)) {
-                try {
-                    callSetAttrNode.executeObject(attrDelattr, primary, fromJavaStringNode.execute(attrName, TS_ENCODING));
-                } catch (PException e) {
-                    e.expectAttributeError(inliningTarget, attrErrorProfile);
-                    // TODO(fa) not accurate; distinguish between read-only and non-existing
-                    throw UnknownIdentifierException.create(attrName);
-                }
-            } else {
-                throw UnsupportedMessageException.create();
-            }
-        }
-
-        public static PInteropDeleteAttributeNode getUncached() {
-            return PythonAbstractObjectFactory.PInteropDeleteAttributeNodeGen.getUncached();
-        }
-    }
-
-    @ExportMessage
-    public boolean hasLanguage() {
-        return true;
-    }
-
-    @ExportMessage
-    public Class<? extends TruffleLanguage<?>> getLanguage() {
-        return PythonLanguage.class;
-    }
-
     @GenerateUncached
     @GenerateInline
     @GenerateCached(false)
@@ -1841,7 +1455,7 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
         @Specialization
         public static TruffleString doDefault(Node inliningTarget, PythonAbstractObject receiver,
-                        @Cached(inline = false) ReadAttributeFromObjectNode readStr,
+                        @Cached ReadAttributeFromModuleNode readStr,
                         @Cached(inline = false) CallNode callNode,
                         @Cached CastToTruffleStringNode castStr,
                         @Cached InlinedConditionProfile toStringUsed) {
@@ -1859,7 +1473,7 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
             if (toStringUsed.profile(inliningTarget, builtins != null)) {
                 toStrAttr = readStr.execute(builtins, names);
                 try {
-                    result = castStr.execute(inliningTarget, callNode.execute(toStrAttr, receiver));
+                    result = castStr.execute(inliningTarget, callNode.executeWithoutFrame(toStrAttr, receiver));
                 } catch (CannotCastException e) {
                     // do nothing
                 }
@@ -1879,7 +1493,7 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
         @Specialization(guards = "allowSideEffects")
         public static TruffleString doSideEffecting(PythonAbstractObject receiver, boolean allowSideEffects,
-                        @Bind("$node") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ToDisplaySideEffectingNode toDisplayCallNode,
                         @Exclusive @Cached GilNode gil) {
             boolean mustRelease = gil.acquire();
@@ -1927,8 +1541,42 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
     }
 
     @ExportMessage
+    public boolean hasMetaParents(
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached TypeNodes.IsTypeNode isTypeNode,
+                    @Exclusive @Cached TypeNodes.GetBaseClassesNode getBaseClassNode,
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            return isTypeNode.execute(inliningTarget, this) && getBaseClassNode.execute(inliningTarget, this).length > 0;
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public Object getMetaParents(
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached TypeNodes.IsTypeNode isTypeNode,
+                    @Exclusive @Cached TypeNodes.GetBaseClassesNode getBaseClassNode,
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            if (isTypeNode.execute(inliningTarget, this)) {
+                var bases = getBaseClassNode.execute(inliningTarget, this);
+                if (bases.length > 0) {
+                    return PFactory.createTuple(PythonLanguage.get(inliningTarget), bases);
+                }
+            }
+            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
     public int identityHashCode(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached ObjectNodes.GetIdentityHashNode getIdentityHashNode,
                     @Exclusive @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
@@ -1961,7 +1609,7 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
     @ExportMessage
     public TriState isIdenticalOrUndefined(Object otherInterop,
-                    @Cached PForeignToPTypeNode convert,
+                    @Shared @Cached PForeignToPTypeNode convert,
                     @Exclusive @CachedLibrary(limit = "3") InteropLibrary otherLib,
                     @Cached IsNode isNode,
                     @Exclusive @Cached GilNode gil) {
@@ -1983,622 +1631,937 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean hasIterator(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Cached(parameters = "Iter") LookupCallableSlotInMRONode lookupIter) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.has_iterator;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return !(lookupIter.execute(getClassNode.executeCached(this)) instanceof PNone);
+                    @Cached GetCachedTpSlotsNode getSlots,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.has_iterator;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                TpSlots slots = getSlots.execute(inliningTarget, getClassNode.executeCached(this));
+                return slots.tp_iter() != null;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object getIterator(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     @Cached PyObjectGetIter getIter,
                     @Exclusive @Cached GilNode gil,
                     @CachedLibrary("this") InteropLibrary lib) throws UnsupportedMessageException {
-        if (lib.hasIterator(this)) {
-            InteropBehaviorMethod method = InteropBehaviorMethod.get_iterator;
-            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-            if (behavior != null) {
-                return getValue.execute(inliningTarget, behavior, method, this);
-            } else {
-                boolean mustRelease = gil.acquire();
-                try {
+        boolean mustRelease = gil.acquire();
+        try {
+            if (lib.hasIterator(this)) {
+                InteropBehaviorMethod method = InteropBehaviorMethod.get_iterator;
+                InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+                if (behavior != null) {
+                    return getValue.execute(inliningTarget, behavior, method, this);
+                } else {
                     return getIter.execute(null, inliningTarget, this);
-                } finally {
-                    gil.release(mustRelease);
                 }
+            } else {
+                throw UnsupportedMessageException.create();
             }
-        } else {
-            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isIterator(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Shared("getClass") @Cached(inline = false) GetClassNode getClassNode,
-                    @Cached(parameters = "Next") LookupCallableSlotInMRONode lookupNext) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_iterator;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return lookupNext.execute(getClassNode.executeCached(this)) != PNone.NO_VALUE;
-        }
-    }
-
-    private static final HiddenKey NEXT_ELEMENT = new HiddenKey("next_element");
-
-    @ExportMessage
-    @SuppressWarnings("truffle-inlining")
-    public boolean hasIteratorNextElement(
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Cached PyIterCheckNode checkNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Cached GetNextNode getNextNode,
-                    @Exclusive @Cached IsBuiltinObjectProfile exceptionProfile,
-                    @Exclusive @Cached GilNode gil,
-                    @CachedLibrary("this") InteropLibrary ilib,
-                    @Shared("dylib") @CachedLibrary(limit = "2") DynamicObjectLibrary dylib) throws UnsupportedMessageException {
-        if (ilib.isIterator(this)) {
-            InteropBehaviorMethod method = InteropBehaviorMethod.has_iterator_next_element;
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_iterator;
             InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
             if (behavior != null) {
                 return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
             } else {
-                Object nextElement = dylib.getOrDefault(this, NEXT_ELEMENT, null);
-                if (nextElement != null) {
+                return checkNode.execute(inliningTarget, this);
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public boolean hasIteratorNextElement(
+                    @Bind Node inliningTarget,
+                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Cached PyIterNextNode nextNode,
+                    @Exclusive @Cached GilNode gil,
+                    @CachedLibrary("this") InteropLibrary ilib,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached HiddenAttr.ReadNode readHiddenAttrNode,
+                    @Exclusive @Cached HiddenAttr.WriteNode writeHiddenAttrNode) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            if (ilib.isIterator(this)) {
+                InteropBehaviorMethod method = InteropBehaviorMethod.has_iterator_next_element;
+                InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+                if (behavior != null) {
+                    return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+                } else {
+                    Object nextElement = readHiddenAttrNode.execute(inliningTarget, this, HiddenAttr.NEXT_ELEMENT, null);
+                    if (nextElement != null) {
+                        return true;
+                    }
+                    try {
+                        nextElement = nextNode.execute(null, inliningTarget, this);
+                    } catch (IteratorExhausted e) {
+                        return false;
+                    }
+                    writeHiddenAttrNode.execute(inliningTarget, this, HiddenAttr.NEXT_ELEMENT, nextElement);
                     return true;
-                }
-                boolean mustRelease = gil.acquire();
-                try {
-                    nextElement = getNextNode.execute(null, this);
-                    dylib.put(this, NEXT_ELEMENT, nextElement);
-                    return true;
-                } catch (PException e) {
-                    e.expect(inliningTarget, PythonBuiltinClassType.StopIteration, exceptionProfile);
-                    return false;
-                } finally {
-                    gil.release(mustRelease);
                 }
             }
+            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
         }
-        throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object getIteratorNextElement(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     @CachedLibrary("this") InteropLibrary ilib,
-                    @Shared("dylib") @CachedLibrary(limit = "2") DynamicObjectLibrary dylib) throws StopIterationException, UnsupportedMessageException {
-        if (ilib.hasIteratorNextElement(this)) {
-            InteropBehaviorMethod method = InteropBehaviorMethod.get_iterator_next_element;
+                    // GR-44020: make shared:
+                    @Exclusive @Cached HiddenAttr.ReadNode readHiddenAttrNode,
+                    @Exclusive @Cached HiddenAttr.WriteNode writeHiddenAttrNode,
+                    @Exclusive @Cached GilNode gil) throws StopIterationException, UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            if (ilib.hasIteratorNextElement(this)) {
+                InteropBehaviorMethod method = InteropBehaviorMethod.get_iterator_next_element;
+                InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+                if (behavior != null) {
+                    return getValue.execute(inliningTarget, behavior, method, this);
+                } else {
+                    Object nextElement = readHiddenAttrNode.execute(inliningTarget, this, HiddenAttr.NEXT_ELEMENT, null);
+                    writeHiddenAttrNode.execute(inliningTarget, this, HiddenAttr.NEXT_ELEMENT, null);
+                    return nextElement;
+                }
+            } else {
+                throw StopIterationException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public boolean isBoolean(@Bind Node inliningTarget,
+                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_boolean;
             InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
             if (behavior != null) {
-                return getValue.execute(inliningTarget, behavior, method, this);
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
             } else {
-                Object nextElement = dylib.getOrDefault(this, NEXT_ELEMENT, null);
-                dylib.put(this, NEXT_ELEMENT, null);
-                return nextElement;
+                return false;
             }
-        } else {
-            throw StopIterationException.create();
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean isBoolean(@Bind("$node") Node inliningTarget,
+    public boolean isNumber(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_boolean;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_number;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean isNumber(@Bind("$node") Node inliningTarget,
+    public boolean isString(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_number;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_string;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean isString(@Bind("$node") Node inliningTarget,
+    public boolean fitsInByte(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_string;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_byte;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInByte(@Bind("$node") Node inliningTarget,
+    public boolean fitsInShort(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_byte;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_short;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInShort(@Bind("$node") Node inliningTarget,
+    public boolean fitsInInt(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_short;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_int;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInInt(@Bind("$node") Node inliningTarget,
+    public boolean fitsInLong(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_int;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_long;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInLong(@Bind("$node") Node inliningTarget,
+    public boolean fitsInFloat(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_long;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_float;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInFloat(@Bind("$node") Node inliningTarget,
+    public boolean fitsInDouble(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_float;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_double;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInDouble(@Bind("$node") Node inliningTarget,
+    public boolean fitsInBigInteger(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_double;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_big_integer;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean fitsInBigInteger(@Bind("$node") Node inliningTarget,
+    public boolean asBoolean(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.fits_in_big_integer;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_boolean;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean asBoolean(@Bind("$node") Node inliningTarget,
-                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
-                    // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_boolean;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
-        }
-    }
-
-    @ExportMessage
-    @SuppressWarnings("truffle-inlining")
-    public byte asByte(@Bind("$node") Node inliningTarget,
+    public byte asByte(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaByteNode toByteNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_byte;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeByte(inliningTarget, behavior, method, toByteNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_byte;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeByte(inliningTarget, behavior, method, toByteNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public short asShort(@Bind("$node") Node inliningTarget,
+    public short asShort(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaShortNode toShortNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_short;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeShort(inliningTarget, behavior, method, toShortNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_short;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeShort(inliningTarget, behavior, method, toShortNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public int asInt(@Bind("$node") Node inliningTarget,
+    public int asInt(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaIntExactNode toIntNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_int;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeInt(inliningTarget, behavior, method, toIntNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_int;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeInt(inliningTarget, behavior, method, toIntNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public long asLong(@Bind("$node") Node inliningTarget,
+    public long asLong(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaLongExactNode toLongNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_long;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeLong(inliningTarget, behavior, method, toLongNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_long;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeLong(inliningTarget, behavior, method, toLongNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public float asFloat(@Bind("$node") Node inliningTarget,
+    public float asFloat(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaDoubleNode toDoubleNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_float;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return (float) getValue.executeDouble(inliningTarget, behavior, method, toDoubleNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_float;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return (float) getValue.executeDouble(inliningTarget, behavior, method, toDoubleNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public double asDouble(@Bind("$node") Node inliningTarget,
+    public double asDouble(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaDoubleNode toDoubleNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_double;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeDouble(inliningTarget, behavior, method, toDoubleNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_double;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeDouble(inliningTarget, behavior, method, toDoubleNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public BigInteger asBigInteger(@Bind("$node") Node inliningTarget,
+    public BigInteger asBigInteger(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
-                    @Cached CastToJavaBigIntegerNode toBigIntegerNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_big_integer;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            Object value = getValue.execute(inliningTarget, behavior, method, this);
-            return toBigIntegerNode.execute(inliningTarget, value);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Cached CastToJavaBigIntegerNode toBigIntegerNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_big_integer;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                Object value = getValue.execute(inliningTarget, behavior, method, this);
+                return toBigIntegerNode.execute(inliningTarget, value);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public String asString(@Bind("$node") Node inliningTarget,
+    public String asString(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     @Cached CastToJavaStringNode toStringNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.as_string;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeString(inliningTarget, behavior, method, toStringNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.as_string;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeString(inliningTarget, behavior, method, toStringNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean hasHashEntries(@Bind("$node") Node inliningTarget,
+    public boolean hasHashEntries(@Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.has_hash_entries;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.has_hash_entries;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public long getHashSize(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaLongExactNode toLongNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_size;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeLong(inliningTarget, behavior, method, toLongNode, raiseNode, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_size;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeLong(inliningTarget, behavior, method, toLongNode, raiseNode, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object getHashEntriesIterator(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_entries_iterator;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.execute(inliningTarget, behavior, method, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_entries_iterator;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.execute(inliningTarget, behavior, method, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object getHashKeysIterator(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_entries_iterator;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.execute(inliningTarget, behavior, method, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_entries_iterator;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.execute(inliningTarget, behavior, method, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object getHashValuesIterator(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_values_iterator;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.execute(inliningTarget, behavior, method, this);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.get_hash_values_iterator;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.execute(inliningTarget, behavior, method, this);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public Object readHashValue(Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.read_hash_value;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.execute(inliningTarget, behavior, method, this, key);
-        } else {
-            throw UnsupportedMessageException.create();
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.read_hash_value;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.execute(inliningTarget, behavior, method, this, key);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isHashEntryReadable(Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_readable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_readable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public boolean isHashEntryRemovable(Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
                     @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
                     // GR-44020: make shared:
                     @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_removable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
-        } else {
-            return false;
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_removable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
     public void removeHashEntry(Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.remove_hash_entry;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            getValue.execute(inliningTarget, behavior, method, this, key);
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.remove_hash_entry;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                getValue.execute(inliningTarget, behavior, method, this, key);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public boolean isHashEntryModifiable(Object key,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_modifiable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public boolean isHashEntryInsertable(Object key,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_insertable;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
+            } else {
+                return false;
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void writeHashEntry(Object key, Object value,
+                    @Bind Node inliningTarget,
+                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
+                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            InteropBehaviorMethod method = InteropBehaviorMethod.write_hash_entry;
+            InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
+            if (behavior != null) {
+                getValue.execute(inliningTarget, behavior, method, this, key, value);
+            } else {
+                throw UnsupportedMessageException.create();
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public boolean hasBufferElements(@Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) {
+        return bufferLib.isBuffer(this);
+    }
+
+    @ExportMessage
+    public boolean isBufferWritable(@Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException {
+        if (bufferLib.isBuffer(this)) {
+            return !bufferLib.isReadonly(this);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    public long getBufferSize(@Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException {
+        if (bufferLib.isBuffer(this)) {
+            return bufferLib.getBufferLength(this);
         } else {
             throw UnsupportedMessageException.create();
         }
@@ -2606,52 +2569,219 @@ public abstract class PythonAbstractObject extends DynamicObject implements Truf
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean isHashEntryModifiable(Object key,
-                    @Bind("$node") Node inliningTarget,
+    public byte readBufferByte(long byteOffset,
+                    @Bind Node inliningTarget,
                     // GR-44020: make shared:
-                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_modifiable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            return bufferLib.readByte(this, offset);
         } else {
-            return false;
+            throw UnsupportedMessageException.create();
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public boolean isHashEntryInsertable(Object key,
-                    @Bind("$node") Node inliningTarget,
+    public void writeBufferByte(long byteOffset, byte value, @Bind Node inliningTarget,
                     // GR-44020: make shared:
-                    @Exclusive @Cached CastToJavaBooleanNode toBooleanNode,
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
                     // GR-44020: make shared:
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) {
-        InteropBehaviorMethod method = InteropBehaviorMethod.is_hash_entry_insertable;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            return getValue.executeBoolean(inliningTarget, behavior, method, toBooleanNode, raiseNode, this, key);
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.writeByte(this, offset, value);
         } else {
-            return false;
+            throw UnsupportedMessageException.create();
         }
     }
 
     @ExportMessage
     @SuppressWarnings("truffle-inlining")
-    public void writeHashEntry(Object key, Object value,
-                    @Bind("$node") Node inliningTarget,
-                    @Shared("getBehavior") @Cached GetInteropBehaviorNode getBehavior,
-                    @Shared("getValue") @Cached GetInteropBehaviorValueNode getValue) throws UnsupportedMessageException {
-        InteropBehaviorMethod method = InteropBehaviorMethod.write_hash_entry;
-        InteropBehavior behavior = getBehavior.execute(inliningTarget, this, method);
-        if (behavior != null) {
-            getValue.execute(inliningTarget, behavior, method, this, key, value);
+    public short readBufferShort(ByteOrder order, long byteOffset,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            return bufferLib.readShortByteOrder(this, offset, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void writeBufferShort(ByteOrder order, long byteOffset, short value, @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.writeShortByteOrder(this, offset, value, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public int readBufferInt(ByteOrder order, long byteOffset,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            return bufferLib.readIntByteOrder(this, offset, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void writeBufferInt(ByteOrder order, long byteOffset, int value, @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.writeIntByteOrder(this, offset, value, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public long readBufferLong(ByteOrder order, long byteOffset,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            return bufferLib.readLongByteOrder(this, offset, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void writeBufferLong(ByteOrder order, long byteOffset, long value, @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.writeLongByteOrder(this, offset, value, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public float readBufferFloat(ByteOrder order, long byteOffset,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            return bufferLib.readFloatByteOrder(this, offset, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void writeBufferFloat(ByteOrder order, long byteOffset, float value,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.writeFloatByteOrder(this, offset, value, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public double readBufferDouble(ByteOrder order, long byteOffset,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            return bufferLib.readDoubleByteOrder(this, offset, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void writeBufferDouble(ByteOrder order, long byteOffset, double value,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.writeDoubleByteOrder(this, offset, value, order);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @SuppressWarnings("truffle-inlining")
+    public void readBuffer(long byteOffset, byte[] destination, int destinationOffset, int length,
+                    @Bind Node inliningTarget,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached CastToJavaIntExactNode toIntNode,
+                    // GR-44020: make shared:
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @Shared("bufferLib") @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) throws UnsupportedMessageException, InvalidBufferOffsetException {
+        if (bufferLib.isBuffer(this)) {
+            if (length < 0 || (destination.length - destinationOffset > length)) {
+                throw InvalidBufferOffsetException.create(byteOffset, length);
+            }
+            int offset = toIntNode.executeWithThrow(inliningTarget, byteOffset, raiseNode, PythonBuiltinClassType.OverflowError);
+            bufferLib.readIntoByteArray(this, offset, destination, destinationOffset, length);
         } else {
             throw UnsupportedMessageException.create();
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,124 @@
  */
 #include "capi.h"
 
+#include "pycore_pyerrors.h"      // _PyErr_GetRaisedException()
+#include "pycore_pystate.h"       // _PyThreadState_GET()
+
 int PySys_Audit(const char *event, const char *argFormat, ...) {
-	// ignore for now
-    return 0;
+    PyObject *args;
+    if (argFormat == NULL) {
+        args = PyTuple_New(0);
+        if (args == NULL) {
+            return -1;
+        }
+    } else {
+        va_list va;
+        va_start(va, argFormat);
+        args = Py_VaBuildValue(argFormat, va);
+        va_end(va);
+        if (args == NULL) {
+            return -1;
+        }
+        if (!PyTuple_Check(args)) {
+            PyObject *tmp = PyTuple_Pack(1, args);
+            Py_DECREF(args);
+            if (tmp == NULL) {
+                return -1;
+            }
+            args = tmp;
+        }
+    }
+    int result = GraalPyPrivate_Sys_Audit(event, args);
+    Py_DECREF(args);
+    return result;
+}
+
+static void
+sys_write(int key, FILE *fp, const char *format, va_list va)
+{
+    char buffer[1001];
+    int written;
+
+    written = PyOS_vsnprintf(buffer, sizeof(buffer), format, va);
+    if (GraalPyPrivate_Sys_WriteStd(key, buffer) != 0) {
+        fputs(buffer, fp);
+    }
+    if (written < 0 || (size_t)written >= sizeof(buffer)) {
+        const char *truncated = "... truncated";
+        if (GraalPyPrivate_Sys_WriteStd(key, truncated) != 0)
+            fputs(truncated, fp);
+    }
+}
+
+void
+PySys_WriteStdout(const char *format, ...)
+{
+    va_list va;
+
+    va_start(va, format);
+    // GraalPy change: different implementation
+    sys_write(0, stdout, format, va);
+    va_end(va);
+}
+
+void
+PySys_WriteStderr(const char *format, ...)
+{
+    va_list va;
+
+    va_start(va, format);
+    // GraalPy change: different implementation
+    sys_write(1, stdout, format, va);
+    va_end(va);
+}
+
+static void
+sys_format(int key, FILE *fp, const char *format, va_list va)
+{
+    PyObject *message; // GraalPy change
+    const char *utf8;
+    PyThreadState *tstate = _PyThreadState_GET();
+
+    PyObject *exc = _PyErr_GetRaisedException(tstate);
+    message = PyUnicode_FromFormatV(format, va);
+    if (message != NULL) {
+#if 0 // GraalPy change
+        file = _PySys_GetRequiredAttr(key);
+        if (sys_pyfile_write_unicode(message, file) != 0) {
+#endif // GraalPy change
+        // GraalPy change: different implementation
+        if (GraalPyPrivate_Sys_PyFileWriteUnicode(key, message) != 0) {
+            _PyErr_Clear(tstate);
+            utf8 = PyUnicode_AsUTF8(message);
+            if (utf8 != NULL)
+                fputs(utf8, fp);
+        }
+#if 0 // GraalPy change
+        Py_XDECREF(file);
+#endif // GraalPy change
+        Py_DECREF(message);
+    }
+    _PyErr_SetRaisedException(tstate, exc);
+}
+
+void
+PySys_FormatStdout(const char *format, ...)
+{
+    va_list va;
+
+    va_start(va, format);
+    // GraalPy change: different implementation
+    sys_format(0, stdout, format, va);
+    va_end(va);
+}
+
+void
+PySys_FormatStderr(const char *format, ...)
+{
+    va_list va;
+
+    va_start(va, format);
+    // GraalPy change: different implementation
+    sys_format(1, stderr, format, va);
+    va_end(va);
 }

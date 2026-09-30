@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -35,7 +35,7 @@ public abstract class SequenceStorageFactory {
         assert values != null;
         assert values.getClass() == Object[].class : "cannot use non-Object array for modifiable list";
 
-        /**
+        /*
          * Try to use unboxed SequenceStorage.
          */
         if (values.length == 0) {
@@ -50,30 +50,9 @@ public abstract class SequenceStorageFactory {
             return new LongSequenceStorage(specializeToLong(values));
         } else if (canSpecializeToBool(values)) {
             return new BoolSequenceStorage(specializeToBool(values));
-        } else if (canSpecializeToByte(values)) {
-            return new ByteSequenceStorage(specializeToByte(values));
         } else {
             return new ObjectSequenceStorage(values);
         }
-    }
-
-    public static BasicSequenceStorage createStorage(Object baseValue, int len) {
-        assert baseValue != null;
-
-        if (baseValue instanceof Integer) {
-            return new IntSequenceStorage(len);
-        } else if (baseValue instanceof Byte) {
-            return new ByteSequenceStorage(len);
-        } else if (baseValue instanceof Long) {
-            return new LongSequenceStorage(len);
-        } else if (baseValue instanceof Double) {
-            return new DoubleSequenceStorage(len);
-        } else if (baseValue instanceof Boolean) {
-            return new BoolSequenceStorage(len);
-        } else {
-            return new ObjectSequenceStorage(len);
-        }
-
     }
 
     private static boolean canSpecializeToInt(Object[] values) {

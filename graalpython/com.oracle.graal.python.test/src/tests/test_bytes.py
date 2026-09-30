@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,8 +37,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import unittest
+import base64
 import sys
+import unittest
+
+from tests.util import skip_if_sandboxed, storage_to_native
+
 
 def assert_raises(err, fn, *args, **kwargs):
     raised = False
@@ -69,6 +73,22 @@ def test_from_list():
     assert list(b) == ints
 
 
+def test_bytearray_from_none():
+    assert_raises(TypeError, bytes, None)
+    assert_raises(TypeError, bytearray, None)
+
+
+def test_bytes_with_encoding_does_not_call_dunder_bytes():
+    class BytesLike:
+        def __bytes__(self):
+            return b"bytes"
+
+    assert bytes(BytesLike()) == b"bytes"
+    assert_raises(TypeError, bytes, BytesLike(), None)
+    assert_raises(TypeError, bytes, encoding="utf-8")
+    assert_raises(TypeError, bytes, errors="strict")
+
+
 def test_from_ssize():
     assert bytes(0) == b''
     assert bytes(1) == b'\x00'
@@ -96,6 +116,7 @@ def test_constructor_value_errors():
     # assert_raises(ValueError, bytes, [10**100])
 
 
+@skip_if_sandboxed("Needs native storage support in sandboxed runs")
 def test_reverse():
     b = bytearray(b'hello')
     assert b.reverse() is None
@@ -107,6 +128,10 @@ def test_reverse():
     assert not b
     b.reverse()
     assert not b
+    b = bytearray(b'hello')
+    storage_to_native(b)
+    b.reverse()
+    assert b == b'olleh'
 
 
 def test_clear():
@@ -429,6 +454,12 @@ def test_count():
     assert b"hellohello".count(b"ll", 5) == 1, "5"
 
 
+def test_hex_keyword_arguments():
+    for type2test in (bytes, bytearray):
+        value = type2test(b'\xb9\x01\xef')
+        assert value.hex(sep=':', bytes_per_sep=2) == 'b9:01ef'
+
+
 def test_rfind():
     assert b"".rfind(b"") == 0, "1"
     assert b"hello".rfind(b"") == 5, "2"
@@ -465,6 +496,20 @@ def test_extend():
     a = bytearray(b'')
     assert_raises(ValueError, a.extend, [0, 1, 2, 256])
     assert_raises(ValueError, a.extend, [0, 1, 2, -1])
+    assert len(a) == 0
+
+    class StrSubclass(str):
+        pass
+
+    for value in ('def', StrSubclass('def')):
+        try:
+            a.extend(value)
+        except TypeError as e:
+            assert str(e) == "expected iterable of integers; got: 'str'"
+        else:
+            assert False, "bytearray.extend() did not raise TypeError"
+
+    a.extend('')
     assert len(a) == 0
 
 
@@ -605,6 +650,22 @@ def test_strip_bytes():
     assert b'abc'.lstrip(b'ac') == b'bc'
     assert b'abc'.rstrip(b'ac') == b'ab'
 
+
+def test_strip_default_whitespace():
+    whitespace = b'\x09\x0a\x0b\x0c\x0d '
+    non_whitespace = b'\x1c\x1d\x1e\x1f'
+    for type2test in (bytes, bytearray):
+        value = type2test(whitespace + non_whitespace + whitespace)
+        assert value.strip() == non_whitespace
+        assert value.lstrip() == non_whitespace + whitespace
+        assert value.rstrip() == whitespace + non_whitespace
+
+
+def test_strip_base32_result_with_control_bytes():
+    value = base64.b32decode(b'INFAO2ZW7APB2===')
+    assert value == b'CJ\x07k6\xf8\x1e\x1d'
+    assert value.strip() == value
+
 class BaseTestSplit:
 
     def test_string_error(self):
@@ -730,6 +791,21 @@ def test_bytes_mod():
     except TypeError:
         raised = True
     assert raised
+
+    for format_bytes in (b'%i', bytearray(b'%i')):
+        try:
+            format_bytes % 2j
+        except TypeError as e:
+            assert str(e) == '%d format: a real number is required, not complex'
+        else:
+            assert False, "bytes formatting did not raise TypeError"
+
+    try:
+        '%i' % 2j
+    except TypeError as e:
+        assert str(e) == '%i format: a real number is required, not complex'
+    else:
+        assert False, "string formatting did not raise TypeError"
 
 def test__bytes__():
     class C: pass

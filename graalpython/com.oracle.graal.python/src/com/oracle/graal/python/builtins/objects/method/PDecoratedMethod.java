@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,19 +40,18 @@
  */
 package com.oracle.graal.python.builtins.objects.method;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.BoundBuiltinCallable;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.object.Shape;
 
 /**
  * Storage for classmethods, staticmethods and instancemethods
  */
-public class PDecoratedMethod extends PythonBuiltinObject implements BoundBuiltinCallable<Object> {
+public final class PDecoratedMethod extends PythonBuiltinObject implements BoundBuiltinCallable<Object> {
     private Object callable;
 
     public PDecoratedMethod(Object cls, Shape instanceShape) {
@@ -74,26 +73,16 @@ public class PDecoratedMethod extends PythonBuiltinObject implements BoundBuilti
     }
 
     @SuppressWarnings("unchecked")
-    public Object boundToObject(PythonBuiltinClassType binding, PythonObjectFactory factory) {
+    public Object boundToObject(PythonBuiltinClassType binding, PythonLanguage language) {
         if (GetPythonObjectClassNode.executeUncached(this) != PythonBuiltinClassType.PStaticmethod) {
             if (callable instanceof BoundBuiltinCallable) {
-                return factory.createBuiltinClassmethodFromCallableObj(((BoundBuiltinCallable<Object>) callable).boundToObject(binding, factory));
+                return PFactory.createBuiltinClassmethodFromCallableObj(language, ((BoundBuiltinCallable<Object>) callable).boundToObject(binding, language));
             }
         } else {
             if (callable instanceof PBuiltinMethod) {
-                return factory.createStaticmethodFromCallableObj(((PBuiltinMethod) callable).getBuiltinFunction().boundToObject(binding, factory));
+                return PFactory.createStaticmethodFromCallableObj(language, ((PBuiltinMethod) callable).getBuiltinFunction().boundToObject(binding, language));
             }
         }
         return this;
-    }
-
-    public String getName() {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new UnsupportedOperationException();
-    }
-
-    public Signature getSignature() {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new UnsupportedOperationException();
     }
 }

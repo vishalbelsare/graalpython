@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,49 +40,36 @@
  */
 package com.oracle.graal.python.builtins.modules.cext;
 
+import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltinNode.checkNonNullArgUncached;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
 
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
 import com.oracle.graal.python.builtins.objects.method.PDecoratedMethod;
-import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 
 public final class PythonCextClassBuiltins {
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject}, call = Direct)
-    abstract static class PyInstanceMethod_New extends CApiUnaryBuiltinNode {
-        @Specialization
-        static Object staticmethod(Object func,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            checkNonNullArg(inliningTarget, func, raiseNode);
-            PDecoratedMethod res = factory.createInstancemethod(PythonBuiltinClassType.PInstancemethod);
-            res.setCallable(func);
-            return res;
-        }
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyObjectRawPointer}, call = Direct)
+    static long PyInstanceMethod_New(long funcPtr) {
+        Object func = NativeToPythonInternalNode.executeUncached(funcPtr, false);
+        checkNonNullArgUncached(func);
+        PDecoratedMethod res = PFactory.createInstancemethod(PythonLanguage.get(null));
+        res.setCallable(func);
+        return PythonToNativeInternalNode.executeNewRefUncached(res);
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject}, call = Direct)
-    abstract static class PyMethod_New extends CApiBinaryBuiltinNode {
-        @Specialization
-        static Object methodNew(Object func, Object self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            checkNonNullArg(inliningTarget, func, self, raiseNode);
-            // Note: CPython also constructs the object directly, without running the constructor or
-            // checking the inputs
-            return factory.createMethod(self, func);
-        }
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyObjectRawPointer, PyObjectRawPointer}, call = Direct)
+    static long PyMethod_New(long funcPtr, long selfPtr) {
+        Object func = NativeToPythonInternalNode.executeUncached(funcPtr, false);
+        Object self = NativeToPythonInternalNode.executeUncached(selfPtr, false);
+        checkNonNullArgUncached(func);
+        checkNonNullArgUncached(self);
+        // Note: CPython also constructs the object directly, without running the constructor or
+        // checking the inputs.
+        return PythonToNativeInternalNode.executeNewRefUncached(PFactory.createMethod(PythonLanguage.get(null), self, func));
     }
 }

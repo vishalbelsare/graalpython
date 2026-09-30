@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,6 +38,7 @@
 # SOFTWARE.
 
 import sys
+import typing
 
 
 def test_small_int_id_is_constant():
@@ -51,6 +52,13 @@ def test_object_id_is_constant():
     x = object()
     xid = id(x)
     assert id(x) == xid
+
+
+def test_abstract_object_constants_have_id():
+    for constant in (None, Ellipsis, NotImplemented, typing.NoDefault):
+        constant_id = id(constant)
+        assert isinstance(constant_id, int)
+        assert id(constant) == constant_id
 
 
 def test_double_id_is_constant():
@@ -68,14 +76,18 @@ def test_id_is_constant_even_when_object_changes():
     assert id(l) == lid
 
 def test_identity():
-    assert True is True
+    val = True
+    assert val is True
     assert memoryview(b"").readonly is True # compare a PInt bool (from C) to a boolean
 
-    assert 12 is 12
+    val = 12
+    assert val is 12
     assert memoryview(b"123").nbytes == 3 # compare PInt (from C) to an int
     class I(int): pass
-    assert I(12) is not 12
-    assert 12.0 is 12.0
+    val = I(12)
+    assert val is not 12
+    val = 12.0
+    assert val is 12.0
 
     nan = float('nan')
     assert nan is nan
@@ -91,4 +103,3 @@ def test_string_interned():
 #     y = x * 2
 #     z = x * 2
 #     assert id(y) != id(z)
-

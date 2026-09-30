@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
@@ -58,8 +59,9 @@ import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
 import com.oracle.graal.python.nodes.util.CastToJavaUnsignedLongNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.BufferFormat;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -125,15 +127,21 @@ public abstract class BufferStorageNodes {
 
         @Specialization(guards = "format == UINT_64")
         static Object unpackUnsignedLong(Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object buffer, int offset,
+                        @Bind PythonLanguage language,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Cached InlinedConditionProfile needsPIntProfile,
-                        @Shared("factory") @Cached(inline = false) PythonObjectFactory factory) {
+                        @Cached InlinedConditionProfile needsPIntProfile) {
             long signedLong = bufferLib.readLong(buffer, offset);
             if (needsPIntProfile.profile(inliningTarget, signedLong < 0)) {
-                return factory.createInt(PInt.longToUnsignedBigInteger(signedLong));
+                return PFactory.createInt(language, PInt.longToUnsignedBigInteger(signedLong));
             } else {
                 return signedLong;
             }
+        }
+
+        @Specialization(guards = "format == HALF_FLOAT")
+        static double unpackFloat16(@SuppressWarnings("unused") BufferFormat format, Object buffer, int offset,
+                        @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib) {
+            return bufferLib.readFloat16(buffer, offset);
         }
 
         @Specialization(guards = "format == FLOAT")
@@ -156,19 +164,19 @@ public abstract class BufferStorageNodes {
 
         @Specialization(guards = "format == CHAR")
         static PBytes unpackChar(@SuppressWarnings("unused") BufferFormat format, Object buffer, int offset,
-                        @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Shared("factory") @Cached(inline = false) PythonObjectFactory factory) {
-            return factory.createBytes(new byte[]{bufferLib.readByte(buffer, offset)});
+                        @Bind PythonLanguage language,
+                        @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib) {
+            return PFactory.createBytes(language, new byte[]{bufferLib.readByte(buffer, offset)});
         }
 
-        @Specialization(guards = "format == UNICODE")
+        @Specialization(guards = "isUnicode(format)")
         static TruffleString unpackUnicode(Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Cached PRaiseNode.Lazy raiseNode,
-                        @Cached(inline = false) TruffleString.FromCodePointNode fromCodePointNode) {
+                        @Cached PRaiseNode raiseNode,
+                        @Cached TruffleString.FromCodePointNode fromCodePointNode) {
             int codePoint = bufferLib.readInt(buffer, offset);
             if (!Character.isValidCodePoint(codePoint)) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.UNMAPPABLE_CHARACTER);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.UNMAPPABLE_CHARACTER);
             }
             return fromCodePointNode.execute(codePoint, TS_ENCODING, true);
         }
@@ -184,9 +192,9 @@ public abstract class BufferStorageNodes {
         @Specialization(guards = "format == UINT_8")
         static void packUnsignedByteInt(Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, int value, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             if (value < 0 || value > 0xFF) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             bufferLib.writeByte(buffer, offset, (byte) value);
         }
@@ -195,10 +203,10 @@ public abstract class BufferStorageNodes {
         static void packUnsignedByteGeneric(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
                         @Shared @Cached PyNumberAsSizeNode asSizeNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             int value = asSizeNode.executeExact(frame, inliningTarget, object);
             if (value < 0 || value > 0xFF) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             bufferLib.writeByte(buffer, offset, (byte) value);
         }
@@ -207,10 +215,10 @@ public abstract class BufferStorageNodes {
         static void packSignedByteGeneric(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
                         @Shared @Cached PyNumberAsSizeNode asSizeNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             int value = asSizeNode.executeExact(frame, inliningTarget, object);
             if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             bufferLib.writeByte(buffer, offset, (byte) value);
         }
@@ -219,10 +227,10 @@ public abstract class BufferStorageNodes {
         static void packSignedShortGeneric(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
                         @Shared @Cached PyNumberAsSizeNode asSizeNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             int value = asSizeNode.executeExact(frame, inliningTarget, object);
             if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             bufferLib.writeShort(buffer, offset, (short) value);
         }
@@ -231,10 +239,10 @@ public abstract class BufferStorageNodes {
         static void packUnsignedShortGeneric(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
                         @Shared @Cached PyNumberAsSizeNode asSizeNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             int value = asSizeNode.executeExact(frame, inliningTarget, object);
             if (value < 0 || value > (Short.MAX_VALUE << 1) + 1) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             bufferLib.writeShort(buffer, offset, (short) value);
         }
@@ -258,10 +266,10 @@ public abstract class BufferStorageNodes {
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
                         @Shared @Cached PyNumberIndexNode indexNode,
                         @Shared @Cached CastToJavaLongExactNode castToLong,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             long value = castToLong.execute(inliningTarget, indexNode.execute(frame, inliningTarget, object));
             if (value < 0 || value > ((long) (Integer.MAX_VALUE) << 1L) + 1L) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             bufferLib.writeInt(buffer, offset, (int) value);
         }
@@ -284,6 +292,14 @@ public abstract class BufferStorageNodes {
             bufferLib.writeLong(buffer, offset, value);
         }
 
+        @Specialization(guards = "format == HALF_FLOAT")
+        static void packFloat16(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
+                        @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
+                        @Shared @Cached PyFloatAsDoubleNode asDoubleNode) {
+            float value = (float) asDoubleNode.execute(frame, inliningTarget, object);
+            bufferLib.writeFloat16(buffer, offset, value);
+        }
+
         @Specialization(guards = "format == FLOAT")
         static void packFloat(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
@@ -301,19 +317,19 @@ public abstract class BufferStorageNodes {
         }
 
         @Specialization(guards = "format == BOOLEAN")
-        static void packBoolean(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
+        static void packBoolean(VirtualFrame frame, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
                         @Cached PyObjectIsTrueNode isTrue) {
-            byte value = isTrue.execute(frame, inliningTarget, object) ? (byte) 1 : (byte) 0;
+            byte value = isTrue.execute(frame, object) ? (byte) 1 : (byte) 0;
             bufferLib.writeByte(buffer, offset, value);
         }
 
         @Specialization(guards = "format == CHAR")
         static void packChar(Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, PBytes object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             if (bufferLib.getBufferLength(object) != 1) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             byte value = bufferLib.readByte(object, 0);
             bufferLib.writeByte(buffer, offset, value);
@@ -321,24 +337,23 @@ public abstract class BufferStorageNodes {
 
         @Specialization(guards = {"format == CHAR", "!isPBytes(object)"})
         @SuppressWarnings("unused")
-        static void packChar(Node inliningTarget, BufferFormat format, Object object, Object buffer, int offset,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            throw raiseNode.get(inliningTarget).raise(TypeError);
+        static void packChar(Node inliningTarget, BufferFormat format, Object object, Object buffer, int offset) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError);
         }
 
-        @Specialization(guards = "format == UNICODE")
+        @Specialization(guards = "isUnicode(format)")
         static void packDouble(Node inliningTarget, @SuppressWarnings("unused") BufferFormat format, Object object, Object buffer, int offset,
                         @Shared @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Cached StringNodes.CastToTruffleStringCheckedNode cast,
-                        @Cached(inline = false) TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Cached(inline = false) TruffleString.CodePointAtIndexNode codePointAtIndexNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached StringNodes.CastToTruffleStringChecked0Node cast,
+                        @Cached TruffleString.CodePointLengthNode codePointLengthNode,
+                        @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             TruffleString str = cast.cast(inliningTarget, object, ErrorMessages.ARRAY_ITEM_MUST_BE_UNICODE);
             if (codePointLengthNode.execute(str, TS_ENCODING) == 1) {
-                int codePoint = codePointAtIndexNode.execute(str, 0, TS_ENCODING);
+                int codePoint = codePointAtIndexNode.execute(str, 0);
                 bufferLib.writeInt(buffer, offset, codePoint);
             } else {
-                throw raiseNode.get(inliningTarget).raise(TypeError);
+                throw raiseNode.raise(inliningTarget, TypeError);
             }
         }
     }

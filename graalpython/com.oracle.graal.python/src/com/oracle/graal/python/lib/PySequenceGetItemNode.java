@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,68 +42,127 @@ package com.oracle.graal.python.lib;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes;
-import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
-import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodes;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotLen.CallSlotLenNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSizeArgFun.CallSlotSizeArgFun;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
+import com.oracle.truffle.api.strings.TruffleString;
 
 /**
  * Equivalent of CPython's {@code PySequence_GetItem}. For native object it would only call
- * {@code sq_item} and never {@code mp_item}.
+ * {@code sq_item} and never {@code mp_subscript}.
  */
-@ImportStatic({PGuards.class, SpecialMethodSlot.class, ExternalFunctionNodes.PExternalFunctionWrapper.class})
+@ImportStatic({PGuards.class, ExternalFunctionNodes.PExternalFunctionWrapper.class})
 @GenerateInline(false) // One lazy usage, one eager usage => not worth it
+@GenerateUncached
 public abstract class PySequenceGetItemNode extends Node {
     public abstract Object execute(Frame frame, Object object, int index);
 
-    @Specialization(guards = "!isNativeObject(object)")
-    static Object doGenericManaged(VirtualFrame frame, Object object, int index,
-                    @Bind("this") Node inliningTarget,
-                    @Cached GetClassNode getClassNode,
-                    @Cached PySequenceCheckNode sequenceCheckNode,
-                    @Cached PyMappingCheckNode mappingCheckNode,
-                    @Cached(parameters = "GetItem") LookupSpecialMethodSlotNode lookupGetItem,
-                    @Cached CallBinaryMethodNode callGetItem,
-                    @Cached PRaiseNode.Lazy raise) {
-        if (sequenceCheckNode.execute(inliningTarget, object)) {
-            Object type = getClassNode.execute(inliningTarget, object);
-            Object getItem = lookupGetItem.execute(frame, type, object);
-            assert getItem != PNone.NO_VALUE;
-            return callGetItem.executeObject(frame, getItem, object, index);
-        }
-        if (mappingCheckNode.execute(inliningTarget, object)) {
-            throw raise.get(inliningTarget).raise(TypeError, ErrorMessages.IS_NOT_A_SEQUENCE, object);
-        } else {
-            throw raise.get(inliningTarget).raise(TypeError, ErrorMessages.OBJ_DOES_NOT_SUPPORT_INDEXING, object);
-        }
+    public final Object execute(Object object, int index) {
+        return execute(null, object, index);
+    }
+
+    @TruffleBoundary
+    public static Object executeUncached(Object object, int index) {
+        return PySequenceGetItemNodeGen.getUncached().execute(null, object, index);
     }
 
     @Specialization
-    static Object doNative(VirtualFrame frame, PythonAbstractNativeObject object, int index,
-                    @Bind("this") Node inliningTarget,
-                    @Cached CApiTransitions.PythonToNativeNode toNativeNode,
-                    @Cached CExtCommonNodes.ImportCExtSymbolNode importCExtSymbolNode,
-                    @Cached(parameters = "GETITEM") ExternalFunctionNodes.ExternalFunctionInvokeNode invokeNode) {
-        NativeCAPISymbol symbol = NativeCAPISymbol.FUN_PY_TRUFFLE_PY_SEQUENCE_GET_ITEM;
-        Object executable = importCExtSymbolNode.execute(inliningTarget, PythonContext.get(inliningTarget).getCApiContext(), symbol);
-        return invokeNode.execute(frame, symbol.getTsName(), executable, new Object[]{toNativeNode.execute(object), index});
+    static Object doGeneric(VirtualFrame frame, Object object, int index,
+                    @Bind Node inliningTarget,
+                    @Cached GetObjectSlotsNode getSlotsNode,
+                    @Cached IndexForSqSlotInt indexForSqSlot,
+                    @Cached CallSlotSizeArgFun callSqItem,
+                    @Cached PRaiseNode raiseNode) {
+        TpSlots slots = getSlotsNode.execute(inliningTarget, object);
+        index = indexForSqSlot.execute(frame, inliningTarget, object, slots, index);
+        if (slots.sq_item() != null) {
+            return callSqItem.execute(frame, inliningTarget, slots.sq_item(), object, index);
+        } else {
+            throw raiseNotSupported(object, inliningTarget, raiseNode, slots);
+        }
+    }
+
+    @InliningCutoff
+    private static PException raiseNotSupported(Object object, Node inliningTarget, PRaiseNode raiseNode, TpSlots slots) {
+        TruffleString message = ErrorMessages.OBJ_DOES_NOT_SUPPORT_INDEXING;
+        if (slots.mp_subscript() != null) {
+            message = ErrorMessages.IS_NOT_A_SEQUENCE;
+        }
+        throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, message, object);
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    abstract static class IndexForSqSlotInt extends Node {
+        public abstract int execute(VirtualFrame frame, Node inliningTarget, Object object, TpSlots slots, int index);
+
+        @Specialization(guards = "index >= 0")
+        static int doInt(@SuppressWarnings("unused") Object object, @SuppressWarnings("unused") TpSlots slots, int index) {
+            return index;
+        }
+
+        @Fallback
+        @InliningCutoff
+        static int doNegativeInt(VirtualFrame frame, Node inliningTarget, Object object, TpSlots slots, int index,
+                        @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Cached CallSlotLenNode callLenSlot) {
+            if (negativeIndexProfile.profile(inliningTarget, index < 0)) {
+                if (slots.sq_length() != null) {
+                    int len = callLenSlot.execute(frame, inliningTarget, slots.sq_length(), object);
+                    index += len;
+                }
+            }
+            return index;
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    abstract static class IndexForSqSlot extends Node {
+        public abstract int execute(VirtualFrame frame, Node inliningTarget, Object object, TpSlots slots, Object index);
+
+        @Specialization
+        static int doInt(VirtualFrame frame, Node inliningTarget, Object object, TpSlots slots, int index,
+                        @Exclusive @Cached IndexForSqSlotInt indexForSqSlotInt) {
+            return indexForSqSlotInt.execute(frame, inliningTarget, object, slots, index);
+        }
+
+        @Specialization(replaces = "doInt")
+        @InliningCutoff
+        static int doGeneric(VirtualFrame frame, Node inliningTarget, Object object, TpSlots slots, Object indexObj,
+                        @Cached PyIndexCheckNode checkNode,
+                        @Cached PyNumberAsSizeNode asSizeNode,
+                        @Exclusive @Cached IndexForSqSlotInt indexForSqSlotInt,
+                        @Cached PRaiseNode raiseNode) {
+            if (!checkNode.execute(inliningTarget, indexObj)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.SEQUENCE_INDEX_MUST_BE_INT_NOT_P, indexObj);
+            }
+            int index = asSizeNode.executeExact(frame, inliningTarget, indexObj, PythonBuiltinClassType.IndexError);
+            return indexForSqSlotInt.execute(frame, inliningTarget, object, slots, index);
+        }
     }
 }

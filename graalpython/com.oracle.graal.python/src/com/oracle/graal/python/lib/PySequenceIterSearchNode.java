@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,33 +41,28 @@
 package com.oracle.graal.python.lib;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
-import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedIntValueProfile;
+import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 
 /**
  * Equivalent of CPython's {@code _PySequence_IterSearch}.
  */
 @GenerateUncached
-@ImportStatic(SpecialMethodSlot.class)
 @GenerateInline(inlineByDefault = true)
 public abstract class PySequenceIterSearchNode extends PNodeWithContext {
     // return # of times obj appears in seq.
@@ -87,41 +82,37 @@ public abstract class PySequenceIterSearchNode extends PNodeWithContext {
 
     public abstract int execute(Frame frame, Node inliningTarget, Object container, Object key, int operation);
 
+    @TruffleBoundary
+    public static int executeUncached(Object container, Object key, int operation) {
+        return PySequenceIterSearchNodeGen.getUncached().execute(null, null, container, key, operation);
+    }
+
     @Specialization
     static int search(Frame frame, Node inliningTarget, Object container, Object key, int operation,
                     @Cached PyObjectGetIter getIter,
                     @Cached IsBuiltinObjectProfile noIterProfile,
-                    @Cached PRaiseNode.Lazy raiseNode,
-                    @Cached GetClassNode getIterClass,
-                    @Cached(parameters = "Next", inline = false) LookupSpecialMethodSlotNode lookupIternext,
-                    @Cached IsBuiltinObjectProfile noNextProfile,
-                    @Cached(inline = false) CallUnaryMethodNode callNext,
-                    @Cached(inline = false) PyObjectRichCompareBool.EqNode eqNode,
-                    @Cached IsBuiltinObjectProfile stopIterationProfile,
+                    @Cached PRaiseNode raiseNode,
+                    @Cached PyIterNextNode nextNode,
+                    @Cached InlinedLoopConditionProfile loopProfile,
+                    @Cached PyObjectRichCompareBool eqNode,
                     @Cached InlinedIntValueProfile opProfile) {
         Object iterator;
         try {
             iterator = getIter.execute(frame, inliningTarget, container);
         } catch (PException e) {
             e.expectTypeError(inliningTarget, noIterProfile);
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.IS_NOT_A_CONTAINER, container);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.ARGUMENT_OF_TYPE_P_IS_NOT_ITERABLE, container);
         }
-        Object next = PNone.NO_VALUE;
-        try {
-            next = lookupIternext.execute(frame, getIterClass.execute(inliningTarget, iterator), iterator);
-        } catch (PException e) {
-            e.expect(inliningTarget, PythonBuiltinClassType.AttributeError, noNextProfile);
-        }
-        if (next instanceof PNone) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.OBJ_NOT_ITERABLE, iterator);
-        }
+        operation = opProfile.profile(inliningTarget, operation);
         int i = 0;
         int n = 0;
         boolean wrapped = false;
-        while (true) {
+        boolean exhausted = false;
+        do {
             try {
-                if (eqNode.compare(frame, inliningTarget, callNext.executeObject(frame, next, iterator), key)) {
-                    switch (opProfile.profile(inliningTarget, operation)) {
+                Object next = nextNode.execute(frame, inliningTarget, iterator);
+                if (eqNode.executeEq(frame, inliningTarget, next, key)) {
+                    switch (operation) {
                         case PY_ITERSEARCH_COUNT:
                             n++;
                             break;
@@ -130,7 +121,7 @@ public abstract class PySequenceIterSearchNode extends PNodeWithContext {
                                 LoopNode.reportLoopCount(inliningTarget, wrapped ? Integer.MAX_VALUE : i + 1);
                             }
                             if (wrapped) {
-                                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.OverflowError, ErrorMessages.INDEX_EXCEEDS_INT);
+                                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.OverflowError, ErrorMessages.INDEX_EXCEEDS_INT);
                             } else {
                                 return i;
                             }
@@ -141,21 +132,21 @@ public abstract class PySequenceIterSearchNode extends PNodeWithContext {
                             return 1;
                     }
                 }
-            } catch (PException e) {
-                e.expectStopIteration(inliningTarget, stopIterationProfile);
-                if (CompilerDirectives.hasNextTier()) {
-                    LoopNode.reportLoopCount(inliningTarget, wrapped ? Integer.MAX_VALUE : i + 1);
+                if (operation == PY_ITERSEARCH_INDEX && i == Integer.MAX_VALUE) {
+                    wrapped = true;
                 }
-                if (opProfile.profile(inliningTarget, operation) == PY_ITERSEARCH_INDEX) {
-                    throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.ValueError, ErrorMessages.X_NOT_IN_SEQUENCE);
-                }
-                return n;
+                i++;
+            } catch (IteratorExhausted e) {
+                exhausted = true;
             }
-            if (opProfile.profile(inliningTarget, operation) == PY_ITERSEARCH_INDEX && i == Integer.MAX_VALUE) {
-                wrapped = true;
-            }
-            i++;
+        } while (loopProfile.profile(inliningTarget, !exhausted));
+        if (CompilerDirectives.hasNextTier()) {
+            LoopNode.reportLoopCount(inliningTarget, wrapped ? Integer.MAX_VALUE : i + 1);
         }
+        if (operation == PY_ITERSEARCH_INDEX) {
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.X_NOT_IN_SEQUENCE);
+        }
+        return n;
     }
 
     @GenerateInline

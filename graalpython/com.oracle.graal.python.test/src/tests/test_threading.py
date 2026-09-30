@@ -1,0 +1,175 @@
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# The Universal Permissive License (UPL), Version 1.0
+#
+# Subject to the condition set forth below, permission is hereby granted to any
+# person obtaining a copy of this software, associated documentation and/or
+# data (collectively the "Software"), free of charge and under any and all
+# copyright rights in the Software, and any and all patent rights owned or
+# freely licensable by each licensor hereunder covering either (i) the
+# unmodified Software as contributed to or provided by such licensor, or (ii)
+# the Larger Works (as defined below), to deal in both
+#
+# (a) the Software, and
+#
+# (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+# one is included with the Software each a "Larger Work" to which the Software
+# is contributed by such licensors),
+#
+# without restriction, including without limitation the rights to copy, create
+# derivative works of, display, perform, and distribute the Software and make,
+# use, sell, offer for sale, import, export, have made, and have sold the
+# Software and the Larger Work(s), and to sublicense the foregoing rights on
+# either these or other terms.
+#
+# This license is subject to the following condition:
+#
+# The above copyright notice and either this complete permission notice or at a
+# minimum a reference to the UPL must be included in all copies or substantial
+# portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+import sys
+import unittest
+from textwrap import dedent
+
+
+def test_stuck_thread():
+    import subprocess
+
+    if sys.implementation.name == 'graalpy' and __graalpython__.posix_module_backend() == 'java':
+        return
+    if sys.platform == 'win32':
+        return
+
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            '-c',
+            """
+import threading
+import select
+threading.Thread(target=lambda: select.select([2], [], [])).start()
+del threading._shutdown
+        """
+        ]
+    )
+    assert not output, "No output expected"
+
+
+def test_threads_joining_main_thread_at_shutdown():
+    import subprocess
+
+    script = r"""
+import threading
+import time
+
+def f():
+    threading.main_thread().join()
+
+for _ in range(100):
+    threading.Thread(target=f).start()
+
+time.sleep(0.05)
+"""
+    result = subprocess.run([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+
+
+def test_python_finalization_error():
+    assert PythonFinalizationError.__base__ is RuntimeError
+    assert PythonFinalizationError.__module__ == "builtins"
+    assert PythonFinalizationError.__doc__ == "Operation blocked during Python finalization."
+
+
+def test_start_new_thread_at_finalization():
+    import subprocess
+
+    script = dedent(r"""
+        import _thread
+        import os
+        import sys
+
+        original_flush = sys.stderr.flush
+
+        def flush_at_finalization():
+            original_flush()
+            if not sys.is_finalizing():
+                return
+            sys.stderr.flush = original_flush
+            try:
+                _thread.start_new_thread(lambda: None, ())
+            except PythonFinalizationError as exc:
+                if str(exc) == "can't create new thread at interpreter shutdown":
+                    os.write(1, b"OK")
+
+        sys.stderr.flush = flush_at_finalization
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert result.stdout == b"OK"
+
+
+def test_thread_handle_join_and_reuse():
+    import _thread
+
+    handle = _thread.start_joinable_thread(lambda: None)
+    handle.join(5)
+    assert handle.is_done()
+    handle.join()
+
+    handle = _thread._ThreadHandle()
+    assert _thread.start_joinable_thread(lambda: None, handle=handle) is handle
+    try:
+        _thread.start_joinable_thread(lambda: None, handle=handle)
+    except RuntimeError as e:
+        assert "thread already started" in str(e)
+    else:
+        raise AssertionError("reusing a _ThreadHandle should fail")
+    handle.join(5)
+
+
+@unittest.skipIf(sys.implementation.name == "graalpy", "Blocked on Truffle API support for blocking native reads during thread-local handshakes")
+# see GR-75767 for details
+def test_blocking_os_read_thread_does_not_deadlock_import_re():
+    import subprocess
+
+    if sys.platform == "win32":
+        return
+
+    script = r"""
+import os
+import threading
+import sys
+
+read_fd, write_fd = os.pipe()
+threading.Thread(target=lambda: os.read(read_fd, 1), daemon=True).start()
+
+import re
+
+print("ok", flush=True)
+os._exit(0)
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.rstrip().endswith("ok"), result.stdout

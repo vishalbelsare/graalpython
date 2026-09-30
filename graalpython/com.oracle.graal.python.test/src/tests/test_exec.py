@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,6 +36,8 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import unittest
+
 
 # The basis for this file before inclusion and extension here is
 # Copyright (c) 2017, The PyPy Project
@@ -70,7 +72,7 @@ def raises(exc, func, *args):
         assert False
 
 
-class ExecTests:
+class ExecTests(unittest.TestCase):
     def test_string(self):
         g = {}
         l = {}
@@ -141,14 +143,6 @@ class ExecTests:
                 exec('a=3')
                 return a
             raises(NameError, f)\n""")
-
-    def test_specialcase_free_load2(self):
-        exec("""if 1:
-            def f(a):
-                exec('a=3')
-                return a
-            x = f(4)\n""")
-        assert eval("x") == 4
 
     def test_nested_names_are_not_confused(self):
         def get_nested_class():
@@ -270,13 +264,13 @@ class ExecTests:
     def test_locals_call(self):
         l = locals()
         exec("""if 1:
-            assert locals() is l
+            assert locals() is not l
             def f(a):
                 exec('a=3')
                 return a
             x = f(4)\n""")
-        assert eval("locals() is l")
-        assert l["x"] == 4
+        assert eval("locals() is not l")
+        assert "x" not in l
 
     def test_custom_locals(self):
         class M(object):

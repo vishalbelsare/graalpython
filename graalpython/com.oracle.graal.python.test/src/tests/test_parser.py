@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,7 +38,31 @@
 # SOFTWARE.
 
 
+import ast
 import types
+
+
+def test_incomplete_input_error():
+    flags = 0x4000 | 0x200  # PyCF_ALLOW_INCOMPLETE_INPUT | PyCF_DONT_IMPLY_DEDENT
+
+    assert issubclass(_IncompleteInputError, SyntaxError)
+    assert _IncompleteInputError.__module__ == "builtins"
+    for source in ("if True:", "(", "x ="):
+        try:
+            compile(source, "<input>", "single", flags)
+        except _IncompleteInputError as e:
+            assert e.msg == "incomplete input"
+        else:
+            assert False, "_IncompleteInputError was not raised"
+
+    for source in ("$ invalid", "(]"):
+        try:
+            compile(source, "<input>", "single", flags)
+        except SyntaxError as e:
+            assert type(e) is SyntaxError
+        else:
+            assert False, "SyntaxError was not raised"
+
 
 def test_lambdas_as_function_default_argument_values():
     globs = {}
@@ -153,7 +177,7 @@ def assert_raise_syntax_error(source, msg):
 
 def test_cannot_assign():
     if sys.implementation.version.minor >= 8:
-        def check(s, label1, label2=None):
+        def check(s, label1, label2=None, comprehension_msg=None):
             if label1:
                 msg1 = f'cannot assign to {label1}'
                 msg2 = f"'{label2 or label1}' is an illegal expression for augmented assignment"
@@ -169,7 +193,7 @@ def test_cannot_assign():
             # test for statement
             assert_raise_syntax_error("for %s in range(1,10):\n pass" % s, msg1)
             # test for comprehension statement
-            assert_raise_syntax_error("[1 for %s in range(1,10)]" % s, msg1)
+            assert_raise_syntax_error("[1 for %s in range(1,10)]" % s, comprehension_msg or msg1)
         check("1", "literal")
         check("1.1", "literal")
         check("{1}", "set display")
@@ -193,7 +217,7 @@ def test_cannot_assign():
         check("{letter for letter in 'ahoj'}", "set comprehension")
         check("[letter for letter in 'ahoj']", "list comprehension")
         check("(letter for letter in 'ahoj')", "generator expression")
-        check("obj.True", None)
+        check("obj.True", None, comprehension_msg="'in' expected after for-loop variables")
         check("(a, *True, b)", "True", "tuple")
         check("(a, *False, b)", "False", "tuple")
         check("(a, *None, b)", "None", "tuple")
@@ -236,6 +260,9 @@ def test_cannot_assign_other():
         assert_raise_syntax_error("def f(**kwargs:(lambda __debug__:0)): pass\n", "cannot assign to __debug__")
         assert_raise_syntax_error("def f(**__debug__): pass\n", "cannot assign to __debug__")
         assert_raise_syntax_error("def f(*xx, __debug__): pass\n", "cannot assign to __debug__")
+        assert_raise_syntax_error("def f[__debug__](): pass\n", "cannot assign to __debug__")
+        assert_raise_syntax_error("def f[*__debug__](): pass\n", "cannot assign to __debug__")
+        assert_raise_syntax_error("def f[**__debug__](): pass\n", "cannot assign to __debug__")
 
 def test_invalid_assignmetn_to_yield_expression():
     if sys.implementation.version.minor >= 8:
@@ -267,6 +294,19 @@ def test_invalid_star_import():
 def test_invalid_return_statement():
     assert_raise_syntax_error("return 10", "'return' outside function")
     assert_raise_syntax_error("class A: return 10\n", "'return' outside function")
+
+
+def test_top_level_async_with():
+    assert_raise_syntax_error("async with _:\n    pass", "'async with' outside async function")
+
+
+def test_outside_of_loop_errors():
+    assert_raise_syntax_error("break", "'break' outside loop")
+    # TODO: parser gives invalid syntax for this one, but should be: "'break' outside loop"
+    assert_raise_syntax_error("def bar(): break", "")
+    assert_raise_syntax_error("continue", "'continue' not properly in loop")
+    # TODO: parser gives invalid syntax for this one, but should be: "'continue' not properly in loop"
+    assert_raise_syntax_error("def foo(): continue", "")
 
 
 def test_mangled_class_property():
@@ -616,22 +656,22 @@ def test_optimize():
     codestr = '''
 """There is module doc"""
 
-assert "assert in module"
+assert x > 0, "assert in module"
 
 class MyClass():
   """There is class doc"""
-  assert "assert in class"
+  assert x > 0, "assert in class"
   def method1(self):
     """There is method doc"""
-    assert "assert in method"
+    assert x > 0, "assert in method"
 
 def fn():
   """There is function doc"""
-  assert "assert in function"
+  assert x > 0, "assert in function"
 
 def gen():
   """There is generator doc"""
-  assert "assert in generator"""
+  assert x > 0, "assert in generator"""
   yield 10
   yield 20
 '''
@@ -683,6 +723,52 @@ def gen():
     codestr2 = codestr + ' ';
     code2 = compile(codestr2, "<test2>", "exec", optimize=2)
     check(code2, 2)
+
+
+def test_optimized_ast():
+    raw = compile("a * (1 + 2)", "<test>", "exec", flags=ast.PyCF_ONLY_AST)
+    optimized = compile("a * (1 + 2)", "<test>", "exec", flags=ast.PyCF_OPTIMIZED_AST)
+    optimized_from_ast = compile(raw, "<test>", "exec", flags=ast.PyCF_OPTIMIZED_AST)
+
+    assert isinstance(raw.body[0].value.right, ast.BinOp)
+    for tree in (optimized, optimized_from_ast):
+        assert isinstance(tree.body[0].value.right, ast.Constant)
+        assert tree.body[0].value.right.value == 3
+
+    assert compile(raw, "<test>", "exec", flags=ast.PyCF_ONLY_AST) is raw
+    assert isinstance(ast.parse("__debug__", optimize=0).body[0].value, ast.Name)
+    assert ast.parse("__debug__", optimize=1).body[0].value.value is False
+    nested = ast.parse("lambda x=1 + 2: f(3 + 4)", optimize=1).body[0].value
+    assert nested.args.defaults[0].value == 3
+    assert nested.body.args[0].value == 7
+    future_tree = compile(
+        "from __future__ import annotations\nx: 1 + 2",
+        "<test>",
+        "exec",
+        flags=ast.PyCF_OPTIMIZED_AST,
+        optimize=1,
+    )
+    assert isinstance(future_tree.body[1].annotation, ast.BinOp)
+
+
+def test_ast_optimizer_code_generation():
+    code = compile("result = '%s' % (value,)", "<test>", "exec")
+    assert "%s" not in code.co_consts
+    namespace = {"value": "optimized"}
+    exec(code, namespace)
+    assert namespace["result"] == "optimized"
+    assert eval(compile("__debug__", "<test>", "eval", optimize=1)) is False
+
+
+def test_ast_optimizer_preserves_future_annotations():
+    namespace = {}
+    exec("""from __future__ import annotations
+x: 1 + 2
+def f(a: 1 + 2) -> 1 + 2: pass
+""", namespace)
+    assert namespace["__annotations__"] == {"x": "1 + 2"}
+    assert namespace["f"].__annotations__ == {"a": "1 + 2", "return": "1 + 2"}
+
 
 def test_optimize_doc():
 
@@ -771,7 +857,6 @@ def test_annotations_in_function():
     exec(code,test_globals)
     assert len(test_globals['__annotations__']) == 0
     assert len(test_globals['fn'].__annotations__) == 0
-    assert 1 not in test_globals['fn'].__code__.co_consts   # the annotation is ignored in function
 
     source = '''def fn():
         a:int =1
@@ -781,7 +866,6 @@ def test_annotations_in_function():
     assert len(test_globals['__annotations__']) == 0
     assert hasattr(test_globals['fn'], '__annotations__')
     assert len(test_globals['fn'].__annotations__) == 0
-    assert 1 in test_globals['fn'].__code__.co_consts
 
 def test_annotations_in_class():
 
@@ -841,58 +925,6 @@ def test_annotations_in_class():
     assert test_globals['Style'].__annotations__['_path'] == str
     assert '_path' in dir(test_globals['Style'])
 
-def test_negative_float():
-
-    def check_const(fn, expected):
-        for const in fn.__code__.co_consts:
-            if repr(const) == repr(expected):
-                return True
-        else:
-            return False
-
-    def fn1():
-        return -0.0
-
-    assert check_const(fn1, -0.0)
-
-
-def find_count_in(collection, what):
-    count = 0;
-    for item in collection:
-        if item == what:
-            count +=1
-    return count
-
-def test_same_consts():
-    def fn1(): a = 1; b = 1; return a + b
-    assert find_count_in(fn1.__code__.co_consts, 1) == 1
-
-    def fn2(): a = 'a'; b = 'a'; return a + b
-    assert find_count_in(fn2.__code__.co_consts, 'a') == 1
-
-def test_tuple_in_const():
-    def fn1() : return (0,)
-    assert (0,) in fn1.__code__.co_consts
-    assert 0 not in fn1.__code__.co_consts
-
-    def fn2() : return (1, 2, 3, 1, 2, 3)
-    assert (1, 2, 3, 1, 2, 3) in fn2.__code__.co_consts
-    assert 1 not in fn2.__code__.co_consts
-    assert 2 not in fn2.__code__.co_consts
-    assert 3 not in fn2.__code__.co_consts
-    assert find_count_in(fn2.__code__.co_consts, (1, 2, 3, 1, 2, 3)) == 1
-
-    def fn3() : a = 1; return (1, 2, 1)
-    assert (1, 2, 1) in fn3.__code__.co_consts
-    assert find_count_in(fn3.__code__.co_consts, 1) == 1
-    assert 2 not in fn3.__code__.co_consts
-
-    def fn4() : a = 1; b = (1,2,3); c = 4; return (1, 2, 3, 1, 2, 3)
-    assert (1, 2, 3) in fn4.__code__.co_consts
-    assert (1, 2, 3, 1, 2, 3) in fn4.__code__.co_consts
-    assert 2 not in fn4.__code__.co_consts
-    assert find_count_in(fn4.__code__.co_consts, 1) == 1
-    assert find_count_in(fn4.__code__.co_consts, 4) == 1
 
 def test_ComprehensionGeneratorExpr():
     def create_list(gen):
@@ -918,4 +950,3 @@ def test_ComprehensionListExpr():
 
 def test_BYTE_ORDER_MARK():
     assert eval('u"\N{BYTE ORDER MARK}"') == '\ufeff'
-

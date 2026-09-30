@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -30,11 +30,16 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
-import java.io.IOError;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.nio.charset.CodingErrorAction;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.NoSuchFileException;
@@ -44,11 +49,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
+import java.util.function.Predicate;
 
 import org.graalvm.launcher.AbstractLanguageLauncher;
 import org.graalvm.nativeimage.ImageInfo;
@@ -58,21 +62,21 @@ import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Context.Builder;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.PolyglotException;
-import org.graalvm.polyglot.PolyglotException.StackFrame;
 import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.SourceSection;
 import org.graalvm.polyglot.Value;
 import org.graalvm.shadowed.org.jline.reader.UserInterruptException;
 
-public class GraalPythonMain extends AbstractLanguageLauncher {
+public final class GraalPythonMain extends AbstractLanguageLauncher {
 
-    public static final String SHORT_HELP = "usage: python [option] ... [-c cmd | -m mod | file | -] [arg] ...\n" +
+    private static final boolean IS_WINDOWS = System.getProperty("os.name") != null && System.getProperty("os.name").toLowerCase().contains("windows");
+
+    private static final String SHORT_HELP = "usage: python [option] ... [-c cmd | -m mod | file | -] [arg] ...\n" +
                     "Try `python -h' for more information.";
 
-    public static final String STRING_LIST_DELIMITER = "🏆";
+    private static final String STRING_LIST_DELIMITER = "🏆";
 
     // Duplicate of SysModuleBuiltins.INT_MAX_STR_DIGITS_THRESHOLD
-    public static final int INT_MAX_STR_DIGITS_THRESHOLD = 640;
+    private static final int INT_MAX_STR_DIGITS_THRESHOLD = 640;
 
     /**
      * The first method called with the arguments by the thin launcher is
@@ -82,6 +86,56 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         new GraalPythonMain().launch(args);
     }
 
+    @Override
+    protected String decodeArgument(byte[] argument) {
+        Charset charset = Charset.defaultCharset();
+        String decoded = new String(argument, charset);
+        if (decoded.indexOf('\uFFFD') < 0) {
+            return decoded;
+        }
+        return decodeArgument(argument, charset);
+    }
+
+    /*
+     * Match documented Unix sys.argv behavior:
+     * https://docs.python.org/3.12/library/sys.html#sys.argv
+     * "When you need original bytes, you can get it by `[os.fsencode(arg) for arg in sys.argv]`."
+     */
+    private static String decodeArgument(byte[] argument, Charset charset) {
+        CharsetDecoder decoder = charset.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT);
+        StringBuilder builder = new StringBuilder(argument.length);
+        ByteBuffer in = ByteBuffer.wrap(argument);
+        CharBuffer out = CharBuffer.allocate(Math.max(1, (int) Math.ceil(argument.length * decoder.maxCharsPerByte())));
+        while (true) {
+            CoderResult result = decoder.decode(in, out, true);
+            appendDecodedChars(builder, out);
+            if (result.isUnderflow()) {
+                break;
+            } else if (result.isOverflow()) {
+                continue;
+            } else if (result.isError()) {
+                int errorLength = result.length();
+                for (int i = 0; i < errorLength && in.hasRemaining(); i++) {
+                    builder.append((char) (0xDC00 + (in.get() & 0xff)));
+                }
+            }
+        }
+        while (true) {
+            CoderResult result = decoder.flush(out);
+            appendDecodedChars(builder, out);
+            if (result.isUnderflow()) {
+                break;
+            }
+        }
+        return builder.toString();
+    }
+
+    private static void appendDecodedChars(StringBuilder builder, CharBuffer out) {
+        out.flip();
+        builder.append(out);
+        out.clear();
+    }
+
     private static final String LANGUAGE_ID = "python";
 
     private static final String J_PYENVCFG = "pyvenv.cfg";
@@ -89,12 +143,14 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
     private static long startupWallClockTime = -1;
     private static long startupNanoTime = -1;
 
+    private boolean verboseLauncher = false;
     private ArrayList<String> programArgs = null;
     private ArrayList<String> origArgs = null;
     private String commandString = null;
     private String inputFile = null;
     private boolean isolateFlag = false;
     private boolean ignoreEnv = false;
+    private boolean safePath = false;
     private boolean inspectFlag = false;
     private boolean verboseFlag = false;
     private boolean quietFlag = false;
@@ -102,9 +158,13 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
     private boolean noSite = false;
     private boolean unbufferedIO = false;
     private boolean multiContext = false;
+    private int repeatedRuns = 1;
     private boolean snaptshotStartup = false;
     private boolean warnDefaultEncoding = false;
     private int intMaxStrDigits = -1;
+    private int cpuCount = -1;
+    private boolean cpuCountXOptionSet = false;
+    private boolean cpuCountSet = false;
     private VersionAction versionAction = VersionAction.None;
     private List<String> givenArguments;
     private List<String> relaunchArgs;
@@ -114,6 +174,10 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
     private String warnOptions = null;
     private String checkHashPycsMode = "default";
     private String execName;
+
+    public GraalPythonMain() {
+        verboseLauncher = Boolean.parseBoolean(System.getenv("VERBOSE_GRAALVM_LAUNCHERS"));
+    }
 
     protected static void setStartupTime() {
         if (GraalPythonMain.startupNanoTime == -1) {
@@ -161,17 +225,27 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         if (launcherName != null && (launcherName.endsWith("graalpy-polyglot-get") || launcherName.endsWith("graalpy-polyglot-get.exe"))) {
             polyglotGet(launcherName, givenArgs);
         }
+        if (launcherName != null && (launcherName.endsWith("graalpy-config") || launcherName.endsWith("graalpy-config.exe"))) {
+            givenArgs.addAll(0, List.of("-m", "graalpy-config"));
+        }
         ArrayList<String> unrecognized = new ArrayList<>();
-        List<String> defaultEnvironmentArgs = getDefaultEnvironmentArgs();
-        ArrayList<String> inputArgs = new ArrayList<>(defaultEnvironmentArgs);
+        List<String> envVmArgs = getDefaultEnvironmentArgs("GRAAL_PYTHON_VM_ARGS");
+        List<String> envArgs = getDefaultEnvironmentArgs("GRAAL_PYTHON_ARGS");
+        ArrayList<String> inputArgs = new ArrayList<>(envVmArgs);
         inputArgs.addAll(givenArgs);
+        inputArgs.addAll(envArgs);
         givenArguments = new ArrayList<>(inputArgs);
         List<String> arguments = new ArrayList<>(inputArgs);
         List<String> subprocessArgs = new ArrayList<>();
         programArgs = new ArrayList<>();
         origArgs = new ArrayList<>();
         boolean posixBackendSpecified = false;
+        boolean sha3BackendSpecified = false;
+        boolean compressionBackendSpecified = false;
+        boolean pyExpatBackendSpecified = false;
         boolean installSignalHandlersSpecified = false;
+        boolean isolateNativeModulesSpecified = false;
+        boolean jitModePresetSpecified = false;
         for (Iterator<String> argumentIterator = arguments.iterator(); argumentIterator.hasNext();) {
             String arg = argumentIterator.next();
             origArgs.add(arg);
@@ -192,6 +266,16 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                                 inputArgs.remove("-debug-java");
                             }
                             continue;
+                        case "-debug-subprocess-java-port":
+                        case "-debug-subprocess-java":
+                            int subprocessDebuggerPort = 8000;
+                            if (arg.equals("-debug-subprocess-java-port")) {
+                                subprocessDebuggerPort = Integer.parseInt(argumentIterator.next());
+                            }
+                            addRelaunchArg("-debug-subprocess-java-port");
+                            addRelaunchArg(Integer.toString(subprocessDebuggerPort + 1));
+                            addRelaunchArg("--vm.agentlib:jdwp=transport=dt_socket,server=y,address=" + subprocessDebuggerPort + ",suspend=y");
+                            continue;
                         case "-debug-perf":
                             unrecognized.add("--engine.TraceCompilation");
                             unrecognized.add("--engine.TraceCompilationDetails");
@@ -206,6 +290,9 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                             continue;
                         case "-multi-context":
                             multiContext = true;
+                            continue;
+                        case "-repeated-run":
+                            repeatedRuns = 2;
                             continue;
                         case "-dump":
                             subprocessArgs.add("Dgraal.Dump=");
@@ -248,14 +335,30 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                                             matchesPythonOption(arg, "CoreHome") ||
                                             matchesPythonOption(arg, "StdLibHome") ||
                                             matchesPythonOption(arg, "CAPI") ||
-                                            matchesPythonOption(arg, "PosixModuleBackend")) {
+                                            matchesPythonOption(arg, "PosixModuleBackend") ||
+                                            matchesPythonOption(arg, "Sha3ModuleBackend") ||
+                                            matchesPythonOption(arg, "CompressionModulesBackend") ||
+                                            matchesPythonOption(arg, "PyExpatModuleBackend") ||
+                                            matchesPythonOption(arg, "UnicodeCharacterDatabaseNativeFallback")) {
                                 addRelaunchArg(arg);
                             }
                             if (matchesPythonOption(arg, "PosixModuleBackend")) {
                                 posixBackendSpecified = true;
                             }
+                            if (matchesPythonOption(arg, "Sha3ModuleBackend")) {
+                                sha3BackendSpecified = true;
+                            }
+                            if (matchesPythonOption(arg, "CompressionModulesBackend")) {
+                                compressionBackendSpecified = true;
+                            }
+                            if (matchesPythonOption(arg, "PyExpatModuleBackend")) {
+                                pyExpatBackendSpecified = true;
+                            }
                             if (matchesPythonOption(arg, "InstallSignalHandlers")) {
                                 installSignalHandlersSpecified = true;
+                            }
+                            if (matchesPythonOption(arg, "IsolateNativeModules")) {
+                                isolateNativeModulesSpecified = true;
                             }
                             // possibly a polyglot argument
                             unrecognized.add(arg);
@@ -305,6 +408,10 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                             noUserSite = true;
                             ignoreEnv = true;
                             isolateFlag = true;
+                            safePath = true;
+                            break;
+                        case 'P':
+                            safePath = true;
                             break;
                         case 'm':
                             programArgs.add("-m");
@@ -361,6 +468,13 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                                 if (eq > 0) {
                                     intMaxStrDigits = validateIntMaxStrDigits(xOption.substring(eq), "-X int_max_str_digits");
                                 }
+                            } else if (xOption.equals("cpu_count") || xOption.startsWith("cpu_count=")) {
+                                cpuCount = validateCpuCount(xOption, true);
+                                cpuCountXOptionSet = true;
+                                cpuCountSet = true;
+                            } else if ("jit".equals(xOption) || xOption.startsWith("jit=")) {
+                                applyJitModePreset(polyglotOptions, xOption);
+                                jitModePresetSpecified = true;
                             }
                             break shortOptionLoop;
                         default:
@@ -383,7 +497,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
             }
         }
 
-        if (!ImageInfo.inImageCode()) {
+        if (!isAOT()) {
             for (String arg : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
                 if (arg.equals("-ea")) {
                     addRelaunchArg("--vm.ea");
@@ -403,8 +517,23 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         if (!posixBackendSpecified) {
             polyglotOptions.put("python.PosixModuleBackend", "native");
         }
+        if (!sha3BackendSpecified) {
+            polyglotOptions.put("python.Sha3ModuleBackend", "native");
+        }
+        if (!compressionBackendSpecified) {
+            polyglotOptions.put("python.CompressionModulesBackend", "native");
+        }
+        if (!pyExpatBackendSpecified) {
+            polyglotOptions.put("python.PyExpatModuleBackend", "native");
+        }
         if (!installSignalHandlersSpecified) {
             polyglotOptions.put("python.InstallSignalHandlers", "true");
+        }
+        if (!isolateNativeModulesSpecified) {
+            polyglotOptions.put("python.IsolateNativeModules", "false");
+        }
+        if (!jitModePresetSpecified) {
+            applyJitModePreset(polyglotOptions, "jit=1");
         }
         // Never emit warnings that mess up the output
         unrecognized.add("--engine.WarnInterpreterOnly=false");
@@ -462,15 +591,17 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         System.err.println(string);
     }
 
-    protected String getLauncherExecName() {
+    private String getLauncherExecName() {
         if (execName != null) {
             return execName;
         }
         execName = getProgramName();
+        log("initial executable name: ", execName);
         if (execName == null) {
             return null;
         }
-        execName = calculateProgramFullPath(execName);
+        execName = calculateProgramFullPath(execName, Files::isExecutable, null);
+        log("resolved executable name: ", execName);
         return execName;
     }
 
@@ -490,13 +621,27 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
      * </dl>
      *
      * @param program The program name as passed in the process' argument vector (position 0).
+     * @param isExecutable Check whether given {@link Path} exists and is executable (for testing).
+     * @param envPath If non-null: value to be used as $PATH (for testing), otherwise
+     *            {@link #getEnv(String)} is used to retrieve $PATH.
      * @return The absolute path to the program or {@code null}.
      */
-    private static String calculateProgramFullPath(String program) {
-        Path programPath = Paths.get(program);
+    private String calculateProgramFullPath(String program, Predicate<Path> isExecutable, String envPath) {
+        Path programPath;
+        try {
+            programPath = Paths.get(program);
+        } catch (InvalidPathException e) {
+            return null;
+        }
 
         // If this is an absolute path, we are already fine.
         if (programPath.isAbsolute()) {
+            if (IS_WINDOWS) {
+                String resolvedProgramNameWithExtension = getProgramNameWithExtension(isExecutable, program);
+                if (resolvedProgramNameWithExtension != null) {
+                    return resolvedProgramNameWithExtension;
+                }
+            }
             return program;
         }
 
@@ -507,19 +652,32 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
          */
         if (programPath.getNameCount() < 2) {
             // Resolve the program name with respect to the PATH variable.
-            String path = System.getenv("PATH");
+            String path = envPath != null ? envPath : getEnv("PATH");
             if (path != null) {
-                int last = 0;
-                for (int i = path.indexOf(File.pathSeparatorChar); i != -1; i = path.indexOf(File.pathSeparatorChar, last)) {
-                    Path resolvedProgramName = Paths.get(path.substring(last, i)).resolve(programPath);
-                    if (Files.isExecutable(resolvedProgramName)) {
+                log("resolving the executable name in $PATH = ", path);
+                int i, previous = 0;
+                do {
+                    i = path.indexOf(File.pathSeparatorChar, previous);
+                    int end = i == -1 ? path.length() : i;
+                    Path resolvedProgramName = Paths.get(path.substring(previous, end)).resolve(programPath);
+                    if (isExecutable.test(resolvedProgramName)) {
                         return resolvedProgramName.toString();
+                    }
+
+                    // On windows, the program name may be without the extension
+                    if (IS_WINDOWS) {
+                        String resolvedProgramNameWithExtension = getProgramNameWithExtension(isExecutable, resolvedProgramName.toString());
+                        if (resolvedProgramNameWithExtension != null) {
+                            return resolvedProgramNameWithExtension;
+                        }
                     }
 
                     // next start is the char after the separator because we have "path0:path1" and
                     // 'i' points to ':'
-                    last = i + 1;
-                }
+                    previous = i + 1;
+                } while (i != -1);
+            } else {
+                log("executable name looks like it is from $PATH, but $PATH is not available.");
             }
             return null;
         }
@@ -536,6 +694,28 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         return programPath.toAbsolutePath().toString();
     }
 
+    private static String getProgramNameWithExtension(Predicate<Path> isExecutable, String programStr) {
+        if (isExecutable.test(Path.of(programStr))) {
+            return programStr;
+        }
+        if (programStr.length() <= 3 || programStr.charAt(programStr.length() - 4) != '.') {
+            // program has no file extension
+            Path programNameWithExtension = null;
+            String pathExtEnvvar = getEnv("PATHEXT");
+            if (pathExtEnvvar != null) {
+                // default extensions are defined
+                String[] pathExts = pathExtEnvvar.toLowerCase().split(";");
+                for (String pathExt : pathExts) {
+                    programNameWithExtension = Path.of(programStr + pathExt);
+                    if (isExecutable.test(programNameWithExtension)) {
+                        return programNameWithExtension.toString();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     private String[] getExecutableList() {
         String launcherExecName = getLauncherExecName();
         if (launcherExecName != null) {
@@ -543,13 +723,13 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         }
 
         // This should only be reached if this main is directly executed via Java.
-        if (!ImageInfo.inImageCode()) {
+        if (!isAOT()) {
             StringBuilder sb = new StringBuilder();
             ArrayList<String> exec_list = new ArrayList<>();
             sb.append(System.getProperty("java.home")).append(File.separator).append("bin").append(File.separator).append("java");
             exec_list.add(sb.toString());
-            String javaOptions = System.getenv("_JAVA_OPTIONS");
-            String javaToolOptions = System.getenv("JAVA_TOOL_OPTIONS");
+            String javaOptions = getEnv("_JAVA_OPTIONS");
+            String javaToolOptions = getEnv("JAVA_TOOL_OPTIONS");
             for (String arg : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
                 if (arg.matches("(-Xrunjdwp:|-agentlib:jdwp=).*suspend=y.*")) {
                     arg = arg.replace("suspend=y", "suspend=n");
@@ -585,6 +765,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
             if (launcherExecName != null) {
                 return launcherExecName;
             }
+            log("cannot determine the executable path. Using java command invocation for executable.");
             String[] executableList = getExecutableList();
             for (int i = 0; i < executableList.length; i++) {
                 if (executableList[i].matches("\\s")) {
@@ -604,25 +785,32 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         contextBuilder.out(new FileOutputStream(FileDescriptor.out));
         contextBuilder.err(new FileOutputStream(FileDescriptor.err));
         if (!ignoreEnv) {
-            String pythonpath = System.getenv("PYTHONPATH");
+            String pythonpath = getEnv("PYTHONPATH");
             if (pythonpath != null) {
                 contextBuilder.option("python.PythonPath", pythonpath);
             }
-            inspectFlag = inspectFlag || System.getenv("PYTHONINSPECT") != null;
-            noUserSite = noUserSite || System.getenv("PYTHONNOUSERSITE") != null;
-            verboseFlag = verboseFlag || System.getenv("PYTHONVERBOSE") != null;
-            unbufferedIO = unbufferedIO || System.getenv("PYTHONUNBUFFERED") != null;
-            dontWriteBytecode = dontWriteBytecode || System.getenv("PYTHONDONTWRITEBYTECODE") != null;
-            if (intMaxStrDigits < 0 && System.getenv("PYTHONINTMAXSTRDIGITS") != null) {
-                intMaxStrDigits = validateIntMaxStrDigits(System.getenv("PYTHONINTMAXSTRDIGITS"), "PYTHONINTMAXSTRDIGITS");
+            inspectFlag = inspectFlag || getBoolEnv("PYTHONINSPECT");
+            noUserSite = noUserSite || getBoolEnv("PYTHONNOUSERSITE");
+            safePath = safePath || getBoolEnv("PYTHONSAFEPATH");
+            verboseFlag = verboseFlag || getBoolEnv("PYTHONVERBOSE");
+            unbufferedIO = unbufferedIO || getBoolEnv("PYTHONUNBUFFERED");
+            dontWriteBytecode = dontWriteBytecode || getBoolEnv("PYTHONDONTWRITEBYTECODE");
+            String maxStrDigitsEnv = getEnv("PYTHONINTMAXSTRDIGITS");
+            if (intMaxStrDigits < 0 && maxStrDigitsEnv != null) {
+                intMaxStrDigits = validateIntMaxStrDigits(maxStrDigitsEnv, "PYTHONINTMAXSTRDIGITS");
+            }
+            String cpuCountEnv = getEnv("PYTHON_CPU_COUNT");
+            if (!cpuCountXOptionSet && cpuCountEnv != null) {
+                cpuCount = validateCpuCount(cpuCountEnv, false);
+                cpuCountSet = true;
             }
 
-            String hashSeed = System.getenv("PYTHONHASHSEED");
+            String hashSeed = getEnv("PYTHONHASHSEED");
             if (hashSeed != null) {
                 contextBuilder.option("python.HashSeed", hashSeed);
             }
 
-            String envWarnOptions = System.getenv("PYTHONWARNINGS");
+            String envWarnOptions = getEnv("PYTHONWARNINGS");
             if (envWarnOptions != null && !envWarnOptions.isEmpty()) {
                 if (warnOptions == null) {
                     warnOptions = envWarnOptions;
@@ -630,9 +818,9 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                     warnOptions = envWarnOptions + "," + warnOptions;
                 }
             }
-            cachePrefix = System.getenv("PYTHONPYCACHEPREFIX");
+            cachePrefix = getEnv("PYTHONPYCACHEPREFIX");
 
-            String encoding = System.getenv("PYTHONIOENCODING");
+            String encoding = getEnv("PYTHONIOENCODING");
             if (encoding != null) {
                 contextBuilder.option("python.StandardStreamEncoding", encoding);
             }
@@ -655,31 +843,13 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
             // the user did not explicitly pass some options that would be otherwise loaded from
             // pyvenv.cfg. Notable usage of this feature is GraalPython venvs which generate a
             // launcher script that passes those options explicitly without relying on pyvenv.cfg
-            boolean tryVenvCfg = !hasContextOptionSetViaCommandLine("SysPrefix") &&
-                            !hasContextOptionSetViaCommandLine("PythonHome") &&
-                            System.getenv("GRAAL_PYTHONHOME") == null;
+            boolean tryVenvCfg = !hasContextOptionSetViaCommandLine("PythonHome") &&
+                            getEnv("GRAAL_PYTHONHOME") == null;
             if (tryVenvCfg) {
                 findAndApplyVenvCfg(contextBuilder, executable);
             }
         }
 
-        if (isLLVMToolchainLauncher()) {
-            if (!hasContextOptionSetViaCommandLine("UseSystemToolchain")) {
-                contextBuilder.option("python.UseSystemToolchain", "false");
-            }
-            if (!hasContextOptionSetViaCommandLine("NativeModules")) {
-                contextBuilder.option("python.NativeModules", "false");
-            }
-        }
-
-        if (relaunchArgs != null) {
-            Iterator<String> it = origArgs.iterator();
-            while (it.hasNext()) {
-                if (relaunchArgs.contains(it.next())) {
-                    it.remove();
-                }
-            }
-        }
         origArgs.add(0, toAbsolutePath(executable));
         contextBuilder.option("python.OrigArgv", String.join(STRING_LIST_DELIMITER, origArgs));
 
@@ -689,31 +859,30 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         contextBuilder.option("python.InspectFlag", Boolean.toString(inspectFlag));
         contextBuilder.option("python.VerboseFlag", Boolean.toString(verboseFlag));
         contextBuilder.option("python.IsolateFlag", Boolean.toString(isolateFlag));
+        contextBuilder.option("python.SafePathFlag", Boolean.toString(safePath));
         contextBuilder.option("python.WarnOptions", warnOptions);
         contextBuilder.option("python.WarnDefaultEncodingFlag", Boolean.toString(warnDefaultEncoding));
         if (intMaxStrDigits > 0) {
             contextBuilder.option("python.IntMaxStrDigits", Integer.toString(intMaxStrDigits));
         }
-        contextBuilder.option("python.DontWriteBytecodeFlag", Boolean.toString(dontWriteBytecode));
-        if (verboseFlag) {
-            contextBuilder.option("log.python.level", "FINE");
+        if (cpuCountSet) {
+            contextBuilder.option("python.CpuCount", Integer.toString(cpuCount));
         }
+        contextBuilder.option("python.DontWriteBytecodeFlag", Boolean.toString(dontWriteBytecode));
         contextBuilder.option("python.QuietFlag", Boolean.toString(quietFlag));
         contextBuilder.option("python.NoUserSiteFlag", Boolean.toString(noUserSite));
         contextBuilder.option("python.NoSiteFlag", Boolean.toString(noSite));
         if (!noSite) {
             contextBuilder.option("python.ForceImportSite", "true");
         }
-        contextBuilder.option("python.SetupLLVMLibraryPaths", "true");
         contextBuilder.option("python.IgnoreEnvironmentFlag", Boolean.toString(ignoreEnv));
         contextBuilder.option("python.UnbufferedIO", Boolean.toString(unbufferedIO));
 
         ConsoleHandler consoleHandler = createConsoleHandler(System.in, System.out);
         contextBuilder.arguments(getLanguageId(), programArgs.toArray(new String[programArgs.size()]));
         contextBuilder.in(consoleHandler.createInputStream());
-        contextBuilder.option("python.TerminalIsInteractive", Boolean.toString(isTTY()));
-        contextBuilder.option("python.TerminalWidth", Integer.toString(consoleHandler.getTerminalWidth()));
-        contextBuilder.option("python.TerminalHeight", Integer.toString(consoleHandler.getTerminalHeight()));
+        boolean tty = isTTY();
+        contextBuilder.option("python.TerminalIsInteractive", Boolean.toString(tty));
 
         contextBuilder.option("python.CheckHashPycsMode", checkHashPycsMode);
         contextBuilder.option("python.RunViaLauncher", "true");
@@ -726,56 +895,91 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
             contextBuilder.option("python.PyCachePrefix", cachePrefix);
         }
 
-        String osName = System.getProperty("os.name");
-        if (osName != null && osName.toLowerCase().contains("windows")) {
-            contextBuilder.option("python.PosixModuleBackend", "java");
-        }
+        setOptionIfNotSetViaCommandLine(contextBuilder, "AllowSignalHandlers", "true");
+
+        setOptionIfNotSetViaCommandLine(contextBuilder, "WarnExperimentalFeatures", "false");
+        setOptionIfNotSetViaCommandLine(contextBuilder, "UnicodeCharacterDatabaseNativeFallback", "true");
 
         if (multiContext) {
             contextBuilder.engine(Engine.newBuilder().allowExperimentalOptions(true).options(enginePolyglotOptions).build());
         }
 
         int rc = 1;
-        try (Context context = contextBuilder.build()) {
-            runVersionAction(versionAction, context.getEngine());
+        for (int i = 0; i < repeatedRuns; i++) {
+            try (Context context = contextBuilder.build()) {
+                runVersionAction(versionAction, context.getEngine());
 
-            if (snaptshotStartup) {
-                evalInternal(context, "__graalpython__.startup_wall_clock_ts = " + startupWallClockTime + "; __graalpython__.startup_nano = " + startupNanoTime);
-            }
-
-            if (!quietFlag && (verboseFlag || (commandString == null && inputFile == null && isTTY()))) {
-                print("Python " + evalInternal(context, "import sys; sys.version + ' on ' + sys.platform").asString());
-                if (!noSite) {
-                    print("Type \"help\", \"copyright\", \"credits\" or \"license\" for more information.");
+                if (snaptshotStartup) {
+                    evalInternal(context, "__graalpython__.startup_wall_clock_ts = " + startupWallClockTime + "; __graalpython__.startup_nano = " + startupNanoTime);
                 }
-            }
-            consoleHandler.setContext(context);
 
-            if (commandString != null || inputFile != null || !isTTY()) {
-                try {
-                    evalNonInteractive(context, consoleHandler);
-                    rc = 0;
-                } catch (PolyglotException e) {
-                    if (!e.isExit()) {
-                        printPythonLikeStackTrace(e);
-                    } else {
-                        rc = e.getExitStatus();
+                Value sysModule = evalInternal(context, "import sys; sys");
+                if (!quietFlag && (verboseFlag || (commandString == null && inputFile == null && tty))) {
+                    print("Python " + sysModule.getMember("version").asString() + " on " + sysModule.getMember("platform"));
+                    if (!noSite) {
+                        print("Type \"help\", \"copyright\", \"credits\" or \"license\" for more information.");
                     }
-                } catch (NoSuchFileException e) {
-                    printFileNotFoundException(e);
                 }
+
+                sysModule.putMember("_console_handler", consoleHandler);
+                if (tty && !isolateFlag && (inspectFlag || (commandString == null && inputFile == null))) {
+                    evalInternal(context, "import readline, rlcompleter");
+                }
+
+                if (commandString != null || inputFile != null || !tty) {
+                    try {
+                        evalNonInteractive(context, consoleHandler);
+                        rc = 0;
+                    } catch (PolyglotException e) {
+                        if (e.isExit()) {
+                            rc = e.getExitStatus();
+                        } else {
+                            throw e;
+                        }
+                    } catch (NoSuchFileException e) {
+                        printFileNotFoundException(e);
+                    }
+                }
+                if ((tty && commandString == null && inputFile == null) || inspectFlag) {
+                    inspectFlag = false;
+                    rc = readEvalPrint(context, consoleHandler, sysModule);
+                }
+            } catch (RuntimeException e) {
+                if (e.getMessage() != null && e.getMessage().contains("did not complete all polyglot threads")) {
+                    // Python may end up with stuck threads and code would legitimately expect those to
+                    // simply die with the process. In an embedding (or CPython subinterpreters) this
+                    // is a problem, so Truffle throws an IllegalStateException when closing the
+                    // context if that occurs. But here we have a launcher and usually we do not care
+                    // about this problem during exit. For an example and some discussion, see
+                    // https://discuss.python.org/t/getting-rid-of-daemon-threads/68836/14 where NJS
+                    // brings up getaddrinfo which may just block in native for an arbitrary amount of
+                    // time and prevent us from shutting down the thread.
+                    if (!verboseFlag) {
+                        System.exit(rc);
+                    }
+                } else {
+                    throw e;
+                }
+            } catch (IOException e) {
+                rc = 1;
+                e.printStackTrace();
             }
-            if ((commandString == null && inputFile == null) || inspectFlag) {
-                inspectFlag = false;
-                rc = readEvalPrint(context, consoleHandler);
+            if (rc != 0) {
+                System.exit(rc);
             }
-        } catch (IOException e) {
-            rc = 1;
-            e.printStackTrace();
-        } finally {
-            consoleHandler.setContext(null);
         }
-        System.exit(rc);
+    }
+
+    private static boolean getBoolEnv(String var) {
+        return getEnv(var) != null;
+    }
+
+    private static String getEnv(String var) {
+        String value = System.getenv(var);
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        return value;
     }
 
     private int validateIntMaxStrDigits(String input, String name) {
@@ -790,7 +994,77 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         throw abort(String.format("%s: invalid limit; must be >= %d  or 0 for unlimited.", name, INT_MAX_STR_DIGITS_THRESHOLD), 1);
     }
 
+    private int validateCpuCount(String input, boolean xOption) {
+        String value = input;
+        if (xOption) {
+            int eq = input.indexOf('=');
+            if (eq < 0) {
+                throw abort("-X cpu_count=n option: n is missing or an invalid number, n must be greater than 0", 1);
+            }
+            value = input.substring(eq + 1);
+        }
+        if (value.equals("default")) {
+            return -1;
+        }
+        try {
+            int count = Integer.parseInt(value.stripLeading());
+            if (count > 0) {
+                return count;
+            }
+        } catch (NumberFormatException e) {
+            // fallthrough
+        }
+        throw abort("-X cpu_count=n option: n is missing or an invalid number, n must be greater than 0", 1);
+    }
+
+    private void applyJitModePreset(Map<String, String> polyglotOptions, String xOption) {
+        boolean fallbackRuntime = usesFallbackRuntime();
+        switch (xOption) {
+            case "jit=0":
+                if (!fallbackRuntime) {
+                    polyglotOptions.put("engine.Compilation", "false");
+                }
+                break;
+            case "jit=1":
+                if (!fallbackRuntime) {
+                    applyLatencyJitPreset(polyglotOptions);
+                }
+                break;
+            case "jit=2":
+                if (!fallbackRuntime) {
+                    applyThroughputJitPreset(polyglotOptions);
+                }
+                break;
+            default:
+                throw abort("Invalid argument for the -X jit option: expected jit=0, jit=1, or jit=2\n" + SHORT_HELP, 2);
+        }
+    }
+
+    private boolean usesFallbackRuntime() {
+        return findOptionDescriptor("engine", "engine.Compilation") == null;
+    }
+
+    private static void applyLatencyJitPreset(Map<String, String> polyglotOptions) {
+        polyglotOptions.put("engine.CompilerThreads", "1");
+        applyRaisedJitThresholds(polyglotOptions);
+    }
+
+    private static void applyThroughputJitPreset(Map<String, String> polyglotOptions) {
+        polyglotOptions.put("engine.Mode", "throughput");
+        applyRaisedJitThresholds(polyglotOptions);
+    }
+
+    private static void applyRaisedJitThresholds(Map<String, String> polyglotOptions) {
+        polyglotOptions.put("engine.FirstTierCompilationThreshold", "2000");
+        polyglotOptions.put("engine.LastTierCompilationThreshold", "50000");
+        polyglotOptions.put("engine.OSRCompilationThreshold", "200704");
+        polyglotOptions.put("engine.SingleTierCompilationThreshold", "10000");
+    }
+
     private static String toAbsolutePath(String executable) {
+        if (executable.isEmpty()) {
+            return executable;
+        }
         if (executable.contains(":")) {
             // this is either already an absolute windows path, or not a single executable
             return executable;
@@ -798,27 +1072,34 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         return Paths.get(executable).toAbsolutePath().toString();
     }
 
+    // Rough equivalent of CPython's pyvenv.cfg logic in Modules/getpath.py
     private void findAndApplyVenvCfg(Builder contextBuilder, String executable) {
-        Path binDir;
+        Path executablePath;
         try {
-            binDir = Paths.get(executable).getParent();
+            executablePath = Paths.get(executable);
         } catch (InvalidPathException e) {
+            log("cannot determine path of the executable");
             return;
         }
+        Path binDir = executablePath.getParent();
         if (binDir == null) {
+            log("parent directory of the executable does not exist");
             return;
         }
         Path venvCfg = binDir.resolve(J_PYENVCFG);
+        log("checking: ", venvCfg);
         if (!Files.exists(venvCfg)) {
             Path binParent = binDir.getParent();
             if (binParent == null) {
                 return;
             }
             venvCfg = binParent.resolve(J_PYENVCFG);
+            log("checking: ", venvCfg);
             if (!Files.exists(venvCfg)) {
                 return;
             }
         }
+        log("found: ", venvCfg);
         try (BufferedReader reader = Files.newBufferedReader(venvCfg)) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -827,19 +1108,69 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                     continue;
                 }
                 String name = parts[0].trim();
-                if (name.equals("home")) {
-                    contextBuilder.option("python.PythonHome", parts[1].trim());
-                    String sysPrefix = null;
-                    try {
-                        sysPrefix = venvCfg.getParent().toAbsolutePath().toString();
-                    } catch (IOError | NullPointerException ex) {
-                        // NullPointerException covers the possible null result of getParent()
-                        warn("Could not set the sys.prefix according to the pyvenv.cfg file.");
-                    }
-                    if (sysPrefix != null) {
-                        contextBuilder.option("python.SysPrefix", sysPrefix);
-                    }
-                    break;
+                switch (name) {
+                    case "home":
+                        try {
+                            Path homeProperty = Paths.get(parts[1].trim());
+                            Path graalpyHome = homeProperty;
+                            /*
+                             * (tfel): According to PEP 405, the home key is the directory of the
+                             * Python executable from which this virtual environment was created,
+                             * that is, it usually ends with "/bin" on a Unix system. On Windows,
+                             * the base Python should be in the top-level directory or under
+                             * "\Scripts". To support running from Maven artifacts where we don't
+                             * have a working executable, we patched our shipped venv module to set
+                             * the home path without a "/bin" or "\\Scripts" suffix, so we
+                             * explicitly check for those two subfolder cases and otherwise assume
+                             * the home key is directly pointing to the Python home.
+                             */
+                            if (graalpyHome.endsWith("bin") || graalpyHome.endsWith("Scripts")) {
+                                graalpyHome = graalpyHome.getParent();
+                            }
+                            contextBuilder.option("python.PythonHome", graalpyHome.toString());
+                            /*
+                             * First try to resolve symlinked executables, since that may be more
+                             * accurate than assuming the executable in 'home'.
+                             */
+                            Path baseExecutable = null;
+                            try {
+                                Path realPath = executablePath.toRealPath();
+                                if (!realPath.equals(executablePath.toAbsolutePath())) {
+                                    baseExecutable = realPath;
+                                }
+                            } catch (IOException ex) {
+                                // Ignore
+                            }
+                            if (baseExecutable == null) {
+                                baseExecutable = homeProperty.resolve(executablePath.getFileName());
+                            }
+                            if (Files.exists(baseExecutable)) {
+                                contextBuilder.option("python.BaseExecutable", baseExecutable.toString());
+                                if ("/app".equals(baseExecutable.toString())) {
+                                    // GraalOS case
+                                    contextBuilder.option("python.PythonHome", "/");
+                                } else {
+                                    /*
+                                     * This is needed to support the legacy GraalVM layout where the
+                                     * executable is a symlink into the 'languages' directory.
+                                     */
+                                    contextBuilder.option("python.PythonHome", baseExecutable.getParent().getParent().toString());
+                                }
+                            }
+                        } catch (NullPointerException | InvalidPathException ex) {
+                            // NullPointerException covers the possible null result of getParent()
+                            warn("Could not set PYTHONHOME according to the pyvenv.cfg file.");
+                        }
+                        break;
+                    case "venvlauncher_command":
+                        setOptionIfNotSetViaCommandLine(contextBuilder, "VenvlauncherCommand", parts[1].trim());
+                        break;
+                    case "base-prefix":
+                        setOptionIfNotSetViaCommandLine(contextBuilder, "SysBasePrefix", parts[1].trim());
+                        break;
+                    case "base-executable":
+                        setOptionIfNotSetViaCommandLine(contextBuilder, "BaseExecutable", parts[1].trim());
+                        break;
                 }
             }
         } catch (IOException ex) {
@@ -869,6 +1200,12 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         return null;
     }
 
+    private void setOptionIfNotSetViaCommandLine(Context.Builder builder, String key, String value) {
+        if (!hasContextOptionSetViaCommandLine(key)) {
+            builder.option("python." + key, value);
+        }
+    }
+
     private boolean hasContextOptionSetViaCommandLine(String key) {
         if (System.getProperty("polyglot.python." + key) != null) {
             return System.getProperty("polyglot.python." + key) != null;
@@ -889,52 +1226,13 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         System.err.println(GraalPythonMain.class.getCanonicalName() + ": can't open file '" + e.getFile() + "': " + reason);
     }
 
-    private static void printPythonLikeStackTrace(PolyglotException e) {
-        // If we're running through the launcher and an exception escapes to here,
-        // we didn't go through the Python code to print it. That may be because
-        // it's an exception from another language. In this case, we still would
-        // like to print it like a Python exception.
-        ArrayList<String> stack = new ArrayList<>();
-        for (StackFrame frame : e.getPolyglotStackTrace()) {
-            if (frame.isGuestFrame()) {
-                StringBuilder sb = new StringBuilder();
-                SourceSection sourceSection = frame.getSourceLocation();
-                String rootName = frame.getRootName();
-                if (sourceSection != null) {
-                    sb.append("  ");
-                    String path = sourceSection.getSource().getPath();
-                    if (path != null) {
-                        sb.append("File ");
-                    }
-                    sb.append('"');
-                    sb.append(sourceSection.getSource().getName());
-                    sb.append("\", line ");
-                    sb.append(sourceSection.getStartLine());
-                    sb.append(", in ");
-                    sb.append(rootName);
-                    stack.add(sb.toString());
-                }
-            }
-        }
-        System.err.println("Traceback (most recent call last):");
-        ListIterator<String> listIterator = stack.listIterator(stack.size());
-        while (listIterator.hasPrevious()) {
-            System.err.println(listIterator.previous());
-        }
-        System.err.println(e.getMessage());
-    }
-
     private void evalNonInteractive(Context context, ConsoleHandler consoleHandler) throws IOException {
-        // We need to setup the terminal even when not running the REPL because code may request
-        // input from the terminal.
-        setupTerminal(consoleHandler);
-
         Source src;
         if (commandString != null) {
-            src = Source.newBuilder(getLanguageId(), commandString, "<string>").build();
+            src = Source.newBuilder(getLanguageId(), commandString, "<string>").option("python.RegisterSource", "true").build();
         } else {
             // the path is passed through a context option, may be empty when running from stdin
-            src = Source.newBuilder(getLanguageId(), "__graalpython__.run_path()", "<internal>").internal(true).build();
+            src = Source.newBuilder(getLanguageId(), "__graalpython__.run_path()", "<internal>").internal(true).option("python.NoPythonFrame", "true").build();
         }
         context.eval(src);
     }
@@ -946,9 +1244,6 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
 
     @Override
     protected void printHelp(OptionCategory maxCategory) {
-        if (isLLVMToolchainLauncher()) {
-            System.out.println("GraalPy launcher to use LLVM toolchain and Sulong execution of native extensions.\n");
-        }
         System.out.println("usage: python [option] ... (-c cmd | file) [arg] ...\n" +
                         "Options and arguments (and corresponding environment variables):\n" +
                         "-B     : this disables writing .py[co] files on import\n" +
@@ -959,34 +1254,27 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                         "-i     : inspect interactively after running script; forces a prompt even\n" +
                         "         if stdin does not appear to be a terminal; also PYTHONINSPECT=x\n" +
                         "-m mod : run library module as a script (terminates option list)\n" +
-                        "-O     : on CPython, this optimizes generated bytecode slightly;\n" +
-                        "         GraalPython does not use bytecode, and thus this flag has no effect\n" +
-                        "-OO    : remove doc-strings in addition to the -O optimizations;\n" +
-                        "         GraalPython does not use bytecode, and thus this flag has no effect\n" +
+                        "-O     : remove assert statements from generated bytecode\n" +
+                        "-OO    : remove doc-strings in addition to the -O optimizations\n" +
+                        "-P     : don't prepend a potentially unsafe path to sys.path; also PYTHONSAFEPATH" +
                         "-R     : on CPython, this enables the use of a pseudo-random salt to make\n" +
                         "         hash()values of various types be unpredictable between separate\n" +
                         "         invocations of the interpreter, as a defense against denial-of-service\n" +
                         "         attacks; GraalPython always enables this and the flag has no effect.\n" +
-                        // "-Q arg : division options: -Qold (default), -Qwarn, -Qwarnall, -Qnew\n"
-                        // +
                         "-q     : don't print version and copyright messages on interactive startup\n" +
                         "-I     : don't add user site and script directory to sys.path; also PYTHONNOUSERSITE\n" +
                         "-s     : don't add user site directory to sys.path; also PYTHONNOUSERSITE\n" +
                         "-S     : don't imply 'import site' on initialization\n" +
-                        // "-t : issue warnings about inconsistent tab usage (-tt: issue errors)\n"
-                        // +
                         "-u     : unbuffered binary stdout and stderr; also PYTHONUNBUFFERED=x\n" +
                         "-v     : verbose (trace import statements); also PYTHONVERBOSE=x\n" +
                         "         can be supplied multiple times to increase verbosity\n" +
                         "-V     : print the Python version number and exit (also --version)\n" +
                         "         when given twice, print more information about the build\n" +
-                        "-X opt : CPython implementation-specific options. warn_default_encoding and int_max_str_digits are supported on GraalPy\n" +
+                        "-X opt : set implementation-specific option\n" +
+                        "         CPython-compatible options supported by GraalPy: warn_default_encoding, int_max_str_digits, cpu_count\n" +
+                        "         GraalPy implementation-specific options: jit=0|1|2 (default: jit=1)\n" +
                         "-W arg : warning control; arg is action:message:category:module:lineno\n" +
                         "         also PYTHONWARNINGS=arg\n" +
-                        // "-x : skip first line of source, allowing use of non-Unix forms of
-                        // #!cmd\n" +
-                        // "-3 : warn about Python 3.x incompatibilities that 2to3 cannot trivially
-                        // fix\n" +
                         "file   : program read from script file\n" +
                         "-      : program read from stdin\n" +
                         "arg ...: arguments passed to program in sys.argv[1:]\n" +
@@ -997,6 +1285,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                         "               default module search path.  The result is sys.path.\n" +
                         "PYTHONHOME   : alternate <prefix> directory (or <prefix>:<exec_prefix>).\n" +
                         "               The default module search path uses <prefix>/pythonX.X.\n" +
+                        "PYTHON_CPU_COUNT: override the return value of os.cpu_count() (-X cpu_count).\n" +
                         "PYTHONCASEOK : ignore case in 'import' statements (Windows).\n" +
                         "PYTHONIOENCODING: Encoding[:errors] used for stdin/stdout/stderr.\n" +
                         "PYTHONHASHSEED: if this variable is set to 'random', the effect is the same\n" +
@@ -1005,7 +1294,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                         "   in the range [0,4294967295] to get hash values with a predictable seed.\n" +
                         "PYTHONPYCACHEPREFIX: if this is set, GraalPython will write .pyc files in a mirror\n" +
                         "   directory tree at this path, instead of in __pycache__ directories within the source tree.\n" +
-                        "GRAAL_PYTHON_ARGS: the value is added as arguments as if passed on the\n" +
+                        "GRAAL_PYTHON_ARGS: the value is added as arguments as if passed at the end of the\n" +
                         "   commandline. Arguments are split on whitespace - you can use \" and/or ' as required to\n" +
                         "   group them. Alternatively, if the value starts with a vertical tab character, the entire\n" +
                         "   value is split at vertical tabs and the elements are used as arguments without any further\n" +
@@ -1015,25 +1304,15 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                         "   with the current process id, and any $UUID$ is replaced with random unique string\n" +
                         "   that may contain letters, digits, and '-'. To pass a literal `$$', you must escape the\n" +
                         "   second `$' like so: `$\\$'\n" +
+                        "GRAAL_PYTHON_VM_ARGS: the value is prepended as arguments as if passed at the beginning\n" +
+                        "   of the commandline. See GRAAL_PYTHON_ARGS for details.\n" +
                         (wantsExperimental ? "\nArguments specific to the Graal Python launcher:\n" +
                                         "--show-version : print the Python version number and continue.\n" +
                                         "-CC            : run the C compiler used for generating GraalPython C extensions.\n" +
                                         "                 All following arguments are passed to the compiler.\n" +
                                         "-LD            : run the linker used for generating GraalPython C extensions.\n" +
                                         "                 All following arguments are passed to the linker.\n" +
-                                        "\nEnvironment variables specific to the Graal Python launcher:\n" +
-                                        "SULONG_LIBRARY_PATH: Specifies the library path for Sulong.\n" +
-                                        "   This is required when starting subprocesses of python.\n" : ""));
-    }
-
-    private boolean isLLVMToolchainLauncher() {
-        String exeName = getResolvedExecutableName();
-        return exeName != null && exeName.endsWith("-lt");
-    }
-
-    @Override
-    protected String[] getDefaultLanguages() {
-        return new String[]{getLanguageId(), "llvm", "regex"};
+                                        "\nEnvironment variables specific to the Graal Python launcher:\n" : ""));
     }
 
     @Override
@@ -1049,9 +1328,9 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
 
     private static ConsoleHandler createConsoleHandler(InputStream inStream, OutputStream outStream) {
         if (!isTTY()) {
-            return new DefaultConsoleHandler(inStream);
+            return new DefaultConsoleHandler(inStream, IS_WINDOWS);
         } else {
-            return new JLineConsoleHandler(inStream, outStream, false);
+            return new JLineConsoleHandler(inStream, outStream);
         }
     }
 
@@ -1065,18 +1344,23 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
      * In case 2, we must implicitly execute a {@code quit("default, 0L, TRUE} command before
      * exiting. So,in either case, we never return.
      */
-    public int readEvalPrint(Context context, ConsoleHandler consoleHandler) {
-        int lastStatus = 0;
+    private int readEvalPrint(Context context, ConsoleHandler consoleHandler, Value sysModule) {
         try {
-            setupREPL(context, consoleHandler);
-            Value sys = evalInternal(context, "import sys; sys");
-
+            Value hook = null;
+            try {
+                hook = sysModule.getMember("__interactivehook__");
+            } catch (PolyglotException e) {
+                // ignore
+            }
+            if (hook != null) {
+                hook.execute();
+            }
             while (true) { // processing inputs
                 boolean doEcho = doEcho(context);
-                consoleHandler.setPrompt(doEcho ? sys.getMember("ps1").asString() : null);
+                String ps1 = doEcho ? sysModule.getMember("ps1").asString() : null;
 
                 try {
-                    String input = consoleHandler.readLine();
+                    String input = consoleHandler.readLine(ps1);
                     if (input == null) {
                         throw new EOFException();
                     }
@@ -1085,33 +1369,32 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                         continue;
                     }
 
-                    String continuePrompt = null;
+                    String ps2 = null;
                     StringBuilder sb = new StringBuilder(input).append('\n');
                     while (true) { // processing subsequent lines while input is incomplete
-                        lastStatus = 0;
                         try {
-                            context.eval(Source.newBuilder(getLanguageId(), sb.toString(), "<stdin>").interactive(true).buildLiteral());
+                            context.eval(Source.newBuilder(getLanguageId(), sb.toString(), "<stdin>").interactive(true).option("python.RegisterSource", "true").buildLiteral());
+                            flushInteractiveOutput(sysModule);
                         } catch (PolyglotException e) {
-                            if (continuePrompt == null) {
-                                continuePrompt = doEcho ? sys.getMember("ps2").asString() : null;
+                            if (ps2 == null) {
+                                ps2 = doEcho ? sysModule.getMember("ps2").asString() : null;
                             }
                             if (e.isIncompleteSource()) {
                                 // read more input until we get an empty line
-                                consoleHandler.setPrompt(continuePrompt);
                                 String additionalInput;
                                 boolean isIncompleteCode = false; // this for cases like empty lines
                                                                   // in tripplecode, where the
                                                                   // additional input can be empty,
                                                                   // but we should still continue
                                 do {
-                                    additionalInput = consoleHandler.readLine();
+                                    additionalInput = consoleHandler.readLine(ps2);
                                     sb.append(additionalInput).append('\n');
                                     try {
                                         // We try to parse every time, when an additional input is
                                         // added to find out if there is continuation exception or
                                         // other error. If there is other error, we have to stop
                                         // to ask for additional input.
-                                        context.parse(Source.newBuilder(getLanguageId(), sb.toString(), "<stdin>").interactive(true).buildLiteral());
+                                        context.parse(Source.newBuilder(getLanguageId(), sb.toString(), "<stdin>").interactive(true).option("python.RegisterSource", "true").buildLiteral());
                                         e = null;   // the parsing was ok -> try to eval
                                                     // the code in outer while loop
                                         isIncompleteCode = false;
@@ -1137,24 +1420,19 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                                     continue;
                                 }
                             }
+                            flushInteractiveOutput(sysModule);
                             // process the exception from eval or from the last parsing of the input
                             // + additional source
                             if (e.isExit()) {
                                 // usually from quit
                                 throw new ExitException(e.getExitStatus());
-                            } else if (e.isHostException()) {
-                                // we continue the repl even though the system may be broken
-                                lastStatus = 1;
-                                System.out.println(e.getMessage());
                             } else if (e.isInternalError()) {
-                                System.err.println("An internal error occurred:");
-                                printPythonLikeStackTrace(e);
-
-                                // we continue the repl even though the system may be broken
-                                lastStatus = 1;
-                            } else if (e.isGuestException()) {
-                                // drop through to continue REPL and remember last eval was an error
-                                lastStatus = 1;
+                                /*
+                                 * The stacktrace should have been printed above by
+                                 * TopLevelExceptionHandler. We continue the repl even though the
+                                 * system may be broken
+                                 */
+                                System.err.println("An internal error occurred, continue at your own risk");
                             }
                         }
                         break;
@@ -1162,11 +1440,11 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                 } catch (EOFException e) {
                     if (!noSite) {
                         try {
-                            evalInternal(context, "import site; exit()\n");
+                            context.eval(Source.newBuilder(getLanguageId(), "import site; exit()\n", "<internal>").internal(true).interactive(true).buildLiteral());
                         } catch (PolyglotException e2) {
                             if (e2.isExit()) {
                                 // don't use the exit code from the PolyglotException
-                                return lastStatus;
+                                return 0;
                             } else if (e2.isCancelled()) {
                                 continue;
                             }
@@ -1174,13 +1452,29 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                         }
                     }
                     System.out.println();
-                    return lastStatus;
+                    return 0;
                 } catch (UserInterruptException e) {
                     // interrupted by ctrl-c
                 }
             }
         } catch (ExitException e) {
             return e.code;
+        }
+    }
+
+    private static void flushInteractiveOutput(Value sysModule) {
+        flushInteractiveStream(sysModule, "stderr");
+        flushInteractiveStream(sysModule, "stdout");
+    }
+
+    private static void flushInteractiveStream(Value sysModule, String name) {
+        try {
+            Value stream = sysModule.getMember(name);
+            if (stream != null && !stream.isNull() && stream.canInvokeMember("flush")) {
+                stream.invokeMember("flush");
+            }
+        } catch (PolyglotException | UnsupportedOperationException e) {
+            // Match CPython's interactive flush_io: stream flush failures are ignored.
         }
     }
 
@@ -1196,52 +1490,6 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
 
     private Value evalInternal(Context context, String code) {
         return context.eval(Source.newBuilder(getLanguageId(), code, "<internal>").internal(true).buildLiteral());
-    }
-
-    private void setupREPL(Context context, ConsoleHandler consoleHandler) {
-        // Then we can get the readline module and see if any completers were registered and use its
-        // history feature
-        evalInternal(context, "import sys\ngetattr(sys, '__interactivehook__', lambda: None)()\n");
-        final Value readline = evalInternal(context, "import readline; readline");
-        final Value getCompleter = readline.getMember("get_completer").execute();
-        final Value shouldRecord = readline.getMember("get_auto_history");
-        final Value addHistory = readline.getMember("add_history");
-        final Value getHistoryItem = readline.getMember("get_history_item");
-        final Value setHistoryItem = readline.getMember("replace_history_item");
-        final Value deleteHistoryItem = readline.getMember("remove_history_item");
-        final Value clearHistory = readline.getMember("clear_history");
-        final Value getHistorySize = readline.getMember("get_current_history_length");
-
-        Function<String, List<String>> completer = null;
-        if (getCompleter.canExecute()) {
-            completer = (buffer) -> {
-                List<String> candidates = new ArrayList<>();
-                Value candidate = getCompleter.execute(buffer, candidates.size());
-                while (candidate.isString()) {
-                    candidates.add(candidate.asString());
-                    candidate = getCompleter.execute(buffer, candidates.size());
-                }
-                return candidates;
-            };
-        }
-        consoleHandler.setupReader(
-                        () -> shouldRecord.execute().asBoolean(),
-                        () -> getHistorySize.execute().asInt(),
-                        (item) -> addHistory.execute(item),
-                        (pos) -> getHistoryItem.execute(pos).asString(),
-                        (pos, item) -> setHistoryItem.execute(pos, item),
-                        (pos) -> deleteHistoryItem.execute(pos),
-                        () -> clearHistory.execute(),
-                        completer);
-
-    }
-
-    private static void setupTerminal(ConsoleHandler consoleHandler) {
-        consoleHandler.setupReader(() -> false, () -> 0, (item) -> {
-        }, (pos) -> null, (pos, item) -> {
-        }, (pos) -> {
-        }, () -> {
-        }, null);
     }
 
     /**
@@ -1260,13 +1508,12 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
     }
 
     protected String getResolvedExecutableName() {
-        // Note that with thin launchers, both graalpy and graalpy-managed are actual executables
-        // that load and start GraalPy from a shared library
+        // Note that with thin launchers, graalpy is an actual executable
+        // that loads and starts GraalPy from a shared library
         if (ImageInfo.inImageRuntimeCode()) {
             // This is the fastest, most straightforward way to get the name of the actual
-            // executable, i.e., with symlinks resolved all the way down to either graalpy or
-            // graalpy-managed.
-            String executableName = ProcessProperties.getExecutableName();
+            // executable, i.e., with symlinks resolved all the way down to graalpy
+            String executableName = getNativeExecutableName();
             if (executableName != null) {
                 return executableName;
             }
@@ -1295,7 +1542,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
     private List<String> getCmdline(List<String> args, List<String> subProcessDefs) {
         List<String> cmd = new ArrayList<>();
         if (isAOT()) {
-            cmd.add(ProcessProperties.getExecutableName());
+            cmd.add(getNativeExecutableName());
             for (String subProcArg : subProcessDefs) {
                 assert subProcArg.startsWith("D");
                 cmd.add("--native." + subProcArg);
@@ -1326,6 +1573,20 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         return cmd;
     }
 
+    private static String getNativeExecutableName() {
+        String executableName = ProcessProperties.getExecutableName();
+        if (executableName != null) {
+            try {
+                if (Files.isExecutable(Path.of(executableName))) {
+                    return executableName;
+                }
+            } catch (InvalidPathException e) {
+                // Try the process handle below.
+            }
+        }
+        return ProcessHandle.current().info().command().orElse(executableName);
+    }
+
     private static final class ExitException extends RuntimeException {
         private static final long serialVersionUID = 1L;
         private final int code;
@@ -1344,7 +1605,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
         VTAB_DELIMITED,
     }
 
-    private static List<String> getDefaultEnvironmentArgs() {
+    private static List<String> getDefaultEnvironmentArgs(String envName) {
         String pid;
         if (isAOT()) {
             pid = String.valueOf(ProcessProperties.getProcessID());
@@ -1352,7 +1613,7 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
             pid = ManagementFactory.getRuntimeMXBean().getName().split("@")[0];
         }
         String uuid = UUID.randomUUID().toString();
-        String envArgsOpt = System.getenv("GRAAL_PYTHON_ARGS");
+        String envArgsOpt = getEnv(envName);
         ArrayList<String> envArgs = new ArrayList<>();
         if (envArgsOpt != null) {
             State s = State.NORMAL;
@@ -1363,7 +1624,11 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
                 if (i == 0 && x == '\013') {
                     s = State.VTAB_DELIMITED;
                 } else if (s == State.VTAB_DELIMITED && x == '\013') {
-                    addArgument(pid, uuid, envArgs, sb);
+                    if (sb.isEmpty()) {
+                        envArgs.add("");
+                    } else {
+                        addArgument(pid, uuid, envArgs, sb);
+                    }
                 } else if (s == State.VTAB_DELIMITED && x != '\013') {
                     sb.append(x);
                 } else if (s == State.NORMAL && Character.isWhitespace(x)) {
@@ -1417,5 +1682,15 @@ public class GraalPythonMain extends AbstractLanguageLauncher {
 
     private static boolean doEcho(@SuppressWarnings("unused") Context context) {
         return true;
+    }
+
+    private void log(String message) {
+        log(message, "");
+    }
+
+    private void log(String message1, Object message2) {
+        if (verboseLauncher) {
+            System.err.println("GraalPy launcher: " + message1 + message2);
+        }
     }
 }

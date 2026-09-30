@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.graal.python.builtins.modules;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.RuntimeError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_ARRAY;
@@ -48,7 +49,7 @@ import java.lang.reflect.Array;
 import java.util.List;
 
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
@@ -67,7 +68,6 @@ import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.sequence.PSequence;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -78,6 +78,7 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.interop.HeapIsolationException;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
@@ -150,8 +151,8 @@ public final class JArrayModuleBuiltins extends PythonBuiltins {
         @Fallback
         @SuppressWarnings("unused")
         static Object error(int length, String typeCode,
-                        @Cached(inline = false) PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.INVALID_TYPE_CODE, typeCode);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.INVALID_TYPE_CODE, typeCode);
         }
 
         protected static boolean eq(String a, String b) {
@@ -167,7 +168,7 @@ public final class JArrayModuleBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isString(typeCodeObj)")
         static Object fromTypeCode(int length, Object typeCodeObj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToJavaStringNode cast,
                         @Cached ArrayFromTypeCode fromTypeCodeNode) {
             String typeCode = cast.execute(typeCodeObj);
@@ -175,19 +176,25 @@ public final class JArrayModuleBuiltins extends PythonBuiltins {
             return PythonContext.get(inliningTarget).getEnv().asGuestValue(array);
         }
 
-        @Specialization(guards = "!isString(classObj)")
+        @Specialization(guards = "!isString(classObj)", limit = "1")
         static Object fromClass(int length, Object classObj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            TruffleLanguage.Env env = PythonContext.get(inliningTarget).getEnv();
-            if (env.isHostObject(classObj)) {
-                Object clazz = env.asHostObject(classObj);
-                if (clazz instanceof Class) {
-                    Object array = Array.newInstance((Class<?>) clazz, length);
-                    return env.asGuestValue(array);
+                        @Bind Node inliningTarget,
+                        @CachedLibrary("classObj") InteropLibrary lib,
+                        @Cached PRaiseNode raiseNode) {
+            if (lib.isHostObject(classObj)) {
+                try {
+                    Object clazz = lib.asHostObject(classObj);
+                    if (clazz instanceof Class) {
+                        Object array = Array.newInstance((Class<?>) clazz, length);
+                        return PythonContext.get(inliningTarget).getEnv().asGuestValue(array);
+                    }
+                } catch (HeapIsolationException e) {
+                    throw raiseNode.raise(inliningTarget, RuntimeError, ErrorMessages.CANNOT_ACCESS_JAVA_CLASS_FROM_DIFFERENT_HEAP);
+                } catch (UnsupportedMessageException e) {
+                    throw CompilerDirectives.shouldNotReachHere(e);
                 }
             }
-            throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.SECOND_ARG_MUST_BE_STR_OR_JAVA_CLS, classObj);
+            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.SECOND_ARG_MUST_BE_STR_OR_JAVA_CLS, classObj);
         }
 
         @Override
@@ -201,12 +208,12 @@ public final class JArrayModuleBuiltins extends PythonBuiltins {
     abstract static class ArrayNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object fromSequence(PSequence sequence, Object type,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @CachedLibrary(limit = "5") InteropLibrary lib,
                         @Shared @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
                         @Shared @Cached SequenceStorageNodes.GetItemScalarNode getItemScalarNode,
                         @Shared @Cached ZerosNode zerosNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             SequenceStorage storage = getSequenceStorageNode.execute(inliningTarget, sequence);
             int length = storage.length();
             Object array = zerosNode.execute(length, type);
@@ -215,7 +222,7 @@ public final class JArrayModuleBuiltins extends PythonBuiltins {
                 try {
                     lib.writeArrayElement(array, i, value);
                 } catch (UnsupportedTypeException e) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.TYPE_P_NOT_SUPPORTED_BY_FOREIGN_OBJ, value);
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.TYPE_P_NOT_SUPPORTED_BY_FOREIGN_OBJ, value);
                 } catch (UnsupportedMessageException | InvalidArrayIndexException e) {
                     throw CompilerDirectives.shouldNotReachHere("failed to set array item");
                 }
@@ -225,13 +232,13 @@ public final class JArrayModuleBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isPSequence(sequence)")
         static Object fromIterable(VirtualFrame frame, Object sequence, Object type,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ListNodes.ConstructListNode constructListNode,
                         @Shared @CachedLibrary(limit = "5") InteropLibrary lib,
                         @Shared @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
                         @Shared @Cached SequenceStorageNodes.GetItemScalarNode getItemScalarNode,
                         @Shared @Cached ZerosNode zerosNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             PList list = constructListNode.execute(frame, sequence);
             return fromSequence(list, type, inliningTarget, lib, getSequenceStorageNode, getItemScalarNode, zerosNode, raiseNode);
         }

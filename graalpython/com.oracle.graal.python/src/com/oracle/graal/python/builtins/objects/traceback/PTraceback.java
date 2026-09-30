@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,6 +47,8 @@ import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PTraceback extends PythonBuiltinObject {
@@ -55,7 +57,14 @@ public final class PTraceback extends PythonBuiltinObject {
     private PFrame frame;
     private PFrame.Reference frameInfo;
     private int lineno = UNKNOWN_LINE_NUMBER;
-    private int lasti;
+    private int bci = -1;
+    /**
+     * Only for Bytecode DSL. The traceback may represent the catch BCI, in which case we need the
+     * {@link BytecodeNode} that executed the catch BCI, which may not necessarily be the one
+     * accessible from in {@link PFrame#getBytecodeNode()}.
+     */
+    private BytecodeNode bytecodeNode = null;
+    private int lasti = -1;
     private PTraceback next;
     private LazyTraceback lazyTraceback;
 
@@ -82,6 +91,9 @@ public final class PTraceback extends PythonBuiltinObject {
         frame = other.frame;
         frameInfo = other.frameInfo;
         lineno = other.lineno;
+        bci = other.bci;
+        bytecodeNode = other.bytecodeNode;
+        lasti = other.lasti;
         next = other.next;
     }
 
@@ -104,8 +116,19 @@ public final class PTraceback extends PythonBuiltinObject {
         return lineno;
     }
 
-    public int getLasti() {
+    public int getLasti(PFrame pFrame) {
+        if (lasti == -1 && bci >= 0) {
+            Node location;
+            location = bytecodeNode;
+            lasti = PFrame.bciToLasti(bci, location);
+        }
         return lasti;
+    }
+
+    public void setLocation(int bci, BytecodeNode bytecodeNode) {
+        this.bci = bci;
+        this.bytecodeNode = bytecodeNode; // nullable
+        this.lasti = -1;
     }
 
     public LazyTraceback getLazyTraceback() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -59,7 +59,7 @@ import com.oracle.truffle.api.dsl.Specialization;
 public final class PythonCextWarnBuiltins {
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject, Py_ssize_t, PyObject}, call = Ignored)
-    abstract static class _PyTruffleErr_Warn extends CApiQuaternaryBuiltinNode {
+    abstract static class GraalPyPrivate_Err_Warn extends CApiQuaternaryBuiltinNode {
         @Specialization
         Object warn(Object message, Object category, long stackLevel, @SuppressWarnings("unused") Object source,
                         @Cached CallNode callNode) {
@@ -69,18 +69,18 @@ public final class PythonCextWarnBuiltins {
              * Note: we need to do a full call of '_warnings.warn' because it needs a frame in order
              * to create a proper traceback
              */
-            callNode.execute(attribute, message, category, (int) stackLevel, PNone.NONE);
+            callNode.executeWithoutFrame(attribute, message, category, (int) stackLevel, PNone.NONE);
             return PNone.NONE;
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject, PyObject, Int, PyObject, PyObject}, call = Ignored)
-    abstract static class PyTruffleErr_WarnExplicit extends CApi6BuiltinNode {
+    abstract static class GraalPyPrivate_Err_WarnExplicit extends CApi6BuiltinNode {
         @Specialization
         Object warn(Object category, Object message, Object filename, int lineno, Object module, Object registry,
                         @Cached CallNode callNode) {
             Object attribute = getCore().lookupBuiltinModule(T__WARNINGS).getAttribute(WarningsModuleBuiltins.T_WARN_EXPLICIT);
-            callNode.execute(attribute, message, category, filename, lineno, module, registry);
+            callNode.executeWithoutFrame(attribute, message, category, filename, lineno, module, registry);
             return PNone.NONE;
         }
     }

@@ -1,18 +1,16 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
 
-import seq_tests
 import sys
 import unittest
-# import pickle
 
-LONG_NUMBER = 6227020800;
+from tests import list_tests
+from tests.compare import CompareTest
+from tests.util import skip_if_sandboxed, storage_to_native
 
-import list_tests
-from compare import CompareTest
-
+LONG_NUMBER = 6227020800
 
 class ListTest(list_tests.CommonTest):
     type2test = list
@@ -80,6 +78,10 @@ class ListTest(list_tests.CommonTest):
         self.assertEqual(len([]), 0)
         self.assertEqual(len([0]), 1)
         self.assertEqual(len([0, 1, 2]), 3)
+
+    @skip_if_sandboxed("Needs native storage support in sandboxed runs")
+    def test_reverse(self):
+        super().test_reverse()
 
     def test_overflow(self):
         lst = [4, 5, 6, 7]
@@ -166,6 +168,25 @@ class ListTest(list_tests.CommonTest):
         cpy = [l[idxObj], l[idxObj], l[idxObj]]
         self.assertEqual(cpy, l)
 
+        l = [10, 20, 30, 40, 50]
+        self.assertEqual(l[-len(l)], 10)
+        self.assertEqual(l.__getitem__(-len(l)), 10)
+        for i in range(-len(l) - 1, -2 * len(l) - 1, -1):
+            with self.assertRaises(IndexError):
+                l[i]
+            self.assertRaises(IndexError, l.__getitem__, i)
+
+    def test_setitem_negative_index_boundary(self):
+        l = [10, 20, 30, 40, 50]
+        l[-len(l)] = 11
+        l.__setitem__(-1, 55)
+        self.assertEqual(l, [11, 20, 30, 40, 55])
+        for i in range(-len(l) - 1, -2 * len(l) - 1, -1):
+            with self.assertRaises(IndexError):
+                l[i] = 99
+            self.assertRaises(IndexError, l.__setitem__, i, 99)
+        self.assertEqual(l, [11, 20, 30, 40, 55])
+
     def pop_all_list(self, list):
         size = len(list)
         self.assertRaises(IndexError, list.pop, size)
@@ -245,6 +266,20 @@ class ListTest(list_tests.CommonTest):
         l = ["1", "2", "3", "4", "5", "6"]
         del l[4]
         self.assertEqual(["1", "2", "3", "4", "6"], l)
+
+        data = [10, 20, 30, 40, 50]
+        l = list(data)
+        del l[-len(l)]
+        self.assertEqual(l, [20, 30, 40, 50])
+        l = list(data)
+        l.__delitem__(-1)
+        self.assertEqual(l, [10, 20, 30, 40])
+        for i in range(-len(data) - 1, -2 * len(data) - 1, -1):
+            l = list(data)
+            with self.assertRaises(IndexError):
+                del l[i]
+            self.assertRaises(IndexError, l.__delitem__, i)
+            self.assertEqual(l, data)
 
     def test_del_border(self):
         l = [1, 2, 3]
@@ -551,11 +586,8 @@ class ListTest(list_tests.CommonTest):
         self.assertEqual([0, 1, 0, 0, 0, 0], a)
 
         a = [0]
-        a.insert(LONG_NUMBER, 1)
-        self.assertEqual([0, 1], a)
-
         a.insert(False, -1)
-        self.assertEqual([-1, 0, 1], a)
+        self.assertEqual([-1, 0], a)
 
     def test_StopIteration(self):
         l = [1.0]
@@ -728,7 +760,15 @@ class ListTest(list_tests.CommonTest):
         self.assertEqual([10,20,30,40,10,20,30,40], ll)
 
         l.extend(l)
-        self.assertEqual([1,2,3,4,10,20,30,40], l)
+        self.assertEqual([1,2,3,4,1,2,3,4], l)
+
+        l = LyingList([1,2,3,4])
+        l += l
+        self.assertEqual([1,2,3,4,1,2,3,4], l)
+
+        l = LyingList([1,2,3,4])
+        l.__init__(l)
+        self.assertEqual([], l)
 
 class ListCompareTest(CompareTest):
 
@@ -839,6 +879,195 @@ class ListCompareTest(CompareTest):
         l = [1]
         l += [0x100000000, 'a']
         self.assertEqual([1, 0x100000000, 'a'], l)
+
+    @skip_if_sandboxed("Needs native storage support in sandboxed runs")
+    def test_reverse(self):
+        l = [1, 2, 3]
+        self.assertEqual(None, l.reverse())
+        self.assertEqual([3, 2, 1], l)
+        storage_to_native(l)
+        l.reverse()
+        self.assertEqual([1, 2, 3], l)
+        l.append(4)
+        l.reverse()
+        self.assertEqual([4, 3, 2, 1], l)
+        del l[:-1]
+        l.reverse()
+        self.assertEqual([1], l)
+
+    def test_clear(self):
+        l = [1, 2]
+        l.clear()
+        self.assertEqual([], l)
+
+        with self.assertRaisesRegex(TypeError, "list"):
+            list.clear(42)
+
+
+class TestObject:
+    def __init__(self, name):
+        self.name = name
+
+    def __repr__(self):
+        return self.name
+
+
+@skip_if_sandboxed("Needs native storage support in sandboxed runs")
+class NativeStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.o1 = TestObject('o1')
+        self.o2 = TestObject('o2')
+        self.o3 = TestObject('o3')
+        self.o4 = TestObject('o4')
+        self.list = [self.o1, self.o2, self.o3]
+        storage_to_native(self.list)
+
+    def assert_refcount(self, o, expected_refcount):
+        expected_refcount += 10 if sys.implementation.name == 'graalpy' else 3
+        refcount = sys.getrefcount(o)
+        if refcount == -1 and sys.implementation.name == 'graalpy':
+            refcount = 10
+        self.assertEqual(refcount, expected_refcount,
+                         f"Expected {o} to have refcount {expected_refcount}, was {refcount}")
+
+    def check_refcounts(self, o1=1, o2=1, o3=1, o4=0):
+        self.assert_refcount(self.o1, o1)
+        self.assert_refcount(self.o2, o2)
+        self.assert_refcount(self.o3, o3)
+        self.assert_refcount(self.o4, o4)
+
+    def test_get(self):
+        self.assertEqual(self.list[1], self.o2)
+        self.assertEqual(self.list[-1], self.o3)
+        self.assertEqual(self.list[1:], [self.o2, self.o3])
+
+    def test_set_del(self):
+        # n.b. it's important to test the setting and deleting operations together to properly test interactions between
+        # shrinking and then growing the same storage
+        self.list[1] = self.o4
+        self.assertEqual(self.list, [self.o1, self.o4, self.o3])
+        self.check_refcounts(o1=1, o2=0, o3=1, o4=1)
+        self.list[1:] = [self.o2, self.o3, self.o4]
+        self.assertEqual(self.list, [self.o1, self.o2, self.o3, self.o4])
+        self.check_refcounts(o1=1, o2=1, o3=1, o4=1)
+        del self.list[1]
+        self.assertEqual(self.list, [self.o1, self.o3, self.o4])
+        self.check_refcounts(o1=1, o2=0, o3=1, o4=1)
+        self.list[1:1] = [self.o2]
+        self.assertEqual(self.list, [self.o1, self.o2, self.o3, self.o4])
+        self.check_refcounts(o1=1, o2=1, o3=1, o4=1)
+        del self.list[1:3]
+        self.assertEqual(self.list, [self.o1, self.o4])
+        self.check_refcounts(o1=1, o2=0, o3=0, o4=1)
+        self.list[1:] = [self.o2, self.o3]
+        self.assertEqual(self.list, [self.o1, self.o2, self.o3])
+        self.check_refcounts(o1=1, o2=1, o3=1, o4=0)
+
+    def test_insert_remove(self):
+        self.list.remove(self.o3)
+        self.assertEqual(self.list, [self.o1, self.o2])
+        self.check_refcounts(o1=1, o2=1, o3=0, o4=0)
+        self.list.insert(0, self.o4)
+        self.assertEqual(self.list, [self.o4, self.o1, self.o2])
+        self.check_refcounts(o1=1, o2=1, o3=0, o4=1)
+
+    def test_append_pop(self):
+        self.list.pop(1)
+        self.assertEqual(self.list, [self.o1, self.o3])
+        self.check_refcounts(o1=1, o2=0, o3=1, o4=0)
+        self.list.append(self.o4)
+        self.assertEqual(self.list, [self.o1, self.o3, self.o4])
+        self.check_refcounts(o1=1, o2=0, o3=1, o4=1)
+
+    def test_extend(self):
+        self.list.extend([self.o4, self.o1])
+        self.assertEqual(self.list, [self.o1, self.o2, self.o3, self.o4, self.o1])
+        self.check_refcounts(o1=2, o2=1, o3=1, o4=1)
+        del self.list[1:]
+        self.assertEqual(self.list, [self.o1])
+        self.check_refcounts(o1=1, o2=0, o3=0, o4=0)
+        self.list += [self.o2, self.o3]
+        self.assertEqual(self.list, [self.o1, self.o2, self.o3])
+        self.check_refcounts(o1=1, o2=1, o3=1, o4=0)
+
+    def test_inplace_repeat(self):
+        self.list *= 2
+        self.assertEqual(self.list, [self.o1, self.o2, self.o3, self.o1, self.o2, self.o3])
+        # We don't actually do it in place, we make a new managed storage
+        # self.check_refcounts(o1=2, o2=2, o3=2, o4=0)
+
+    def test_sort(self):
+        self.list.sort(key=lambda x: x.name, reverse=True)
+        self.assertEqual(self.list, [self.o3, self.o2, self.o1])
+        self.check_refcounts(o1=1, o2=1, o3=1, o4=0)
+
+    def test_reverse(self):
+        self.list.reverse()
+        self.assertEqual(self.list, [self.o3, self.o2, self.o1])
+        self.check_refcounts(o1=1, o2=1, o3=1, o4=0)
+
+    def test_clear(self):
+        self.list.clear()
+        self.assertEqual(self.list, [])
+        # We create a new storage and let the old be GC'ed
+        # self.check_refcounts(o1=0, o2=0, o3=0, o4=0)
+
+
+def test_eq_side_effects():
+    class X:
+        def __eq__(self,other) :
+            l1[0] = 42
+            l2[0] = 11
+            return False
+
+    l1 = [X()]
+    l2 = [0]
+    assert l1 > l2 # actually comparing 42 > 11
+    assert l1 == [42]
+    assert l2 == [11]
+
+
+    class X:
+        def __eq__(self,other) :
+            l1.clear()
+            return False
+
+    l1 = [X()]
+    l2 = [0]
+    assert l1 < l2 # l1 cleared -> is smaller than l2
+    assert l1 == []
+    assert l2 == [0]
+
+
+def test_list_create():
+    def gen(items):
+        yield from items
+
+    o = object()
+
+    ast_no = 0
+    def test_list_ctor(t1, t2):
+        nonlocal ast_no
+        # Run several times to transition to cached
+        # Use eval with a number to force a new AST
+        # Test both builtin iterator and generic paths
+        ast_no += 1
+        for i in range(13):
+            t = t1 if i < 11 else t2
+            res = eval(f"list(it{ast_no})", {f'it{ast_no}': t})
+            assert tuple(res) == t
+        ast_no += 1
+        for i in range(13):
+            t = t1 if i < 11 else t2
+            res = eval(f"list(it{ast_no})", {f'it{ast_no}': gen(t)})
+            assert tuple(res) == t
+
+    test_list_ctor((1, 2, 3), (1, o, 3))
+    test_list_ctor((1, 2, 3), (1, 2 ** 32, 3))
+    test_list_ctor((1, 2, 3), (1, 2 ** 64, 3))
+    test_list_ctor((1, 2 ** 32, 3), (1, 2 ** 64, 3))
+    test_list_ctor((1.0, 2.0, 3.0), (2.0, o, 3.0))
+    test_list_ctor((True, False, True), (True, o, True))
 
 
 if __name__ == '__main__':

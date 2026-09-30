@@ -1,4 +1,4 @@
-# Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,10 +36,9 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import unittest
 
 from . import CPyExtType, assert_raises
-
-__dir__ = __file__.rpartition("/")[0]
 
 
 def _reference_classmethod(args):
@@ -83,7 +82,7 @@ def _get_c_type(ptype):
         return "unsigned " + ptype[1:].lower()
     return ptype.lower()
 
-class TestMethod(object):
+class TestMethod(unittest.TestCase):
 
     def test_member(self):
         TestMember = CPyExtType(
@@ -98,6 +97,22 @@ class TestMethod(object):
                 if (utf8 == NULL)
                     return NULL;
                 tmo->member_string = strdup(utf8);
+                Py_INCREF(Py_None);
+                return Py_None;
+            }
+
+            PyObject* set_string_inplace(PyObject *self, PyObject *arg) {
+                TestMemberObject *tmo = (TestMemberObject *)self;
+                Py_ssize_t len;
+                const char *utf8 = PyUnicode_AsUTF8AndSize(arg, &len);
+                if (utf8 == NULL)
+                    return NULL;
+                if (len >= (Py_ssize_t)sizeof(tmo->member_string_inplace)) {
+                    PyErr_SetString(PyExc_ValueError, "string too long");
+                    return NULL;
+                }
+                memcpy(tmo->member_string_inplace, utf8, len);
+                tmo->member_string_inplace[len] = 0;
                 Py_INCREF(Py_None);
                 return Py_None;
             }
@@ -139,6 +154,7 @@ class TestMethod(object):
             float member_float;
             double member_double;
             char *member_string;
+            char member_string_inplace[8];
             char member_char;
             char member_byte;
             unsigned char member_ubyte;
@@ -160,6 +176,7 @@ class TestMethod(object):
             {"member_float", T_FLOAT, offsetof(TestMemberObject, member_float), 0, "float member"},
             {"member_double", T_DOUBLE, offsetof(TestMemberObject, member_double), 0, "double member"},
             {"member_string", T_STRING, offsetof(TestMemberObject, member_string), 0, "string member"},
+            {"member_string_inplace", T_STRING_INPLACE, offsetof(TestMemberObject, member_string_inplace), 0, "string inplace member"},
             {"member_char", T_CHAR, offsetof(TestMemberObject, member_char), 0, "char member"},
             {"member_byte", T_BYTE, offsetof(TestMemberObject, member_byte), 0, "byte member"},
             {"member_ubyte", T_UBYTE, offsetof(TestMemberObject, member_ubyte), 0, "ubyte member"},
@@ -173,6 +190,7 @@ class TestMethod(object):
             """,
             tp_methods='''
             {"set_string", (PyCFunction)set_string, METH_O, ""},
+            {"set_string_inplace", (PyCFunction)set_string_inplace, METH_O, ""},
             {"get_min_values", (PyCFunction)get_min_values, METH_NOARGS, ""},
             {"get_max_values", (PyCFunction)get_max_values, METH_NOARGS, ""}
             ''',
@@ -213,6 +231,15 @@ class TestMethod(object):
         import warnings
         warnings.simplefilter("ignore")
 
+        def assert_overflow(member, value, message, expected_value):
+            try:
+                setattr(obj, member, value)
+            except OverflowError as e:
+                assert str(e) == message
+            else:
+                assert False, "expected OverflowError"
+            assert getattr(obj, member) == expected_value
+
         # char, uchar, short, ushort, int, uint, long, ulong, Py_ssize_t
         max_values = obj.get_max_values()
         min_values = obj.get_min_values()
@@ -237,20 +264,34 @@ class TestMethod(object):
             assert val != min_values[i], "was: %r" % getattr(obj, m)
             assert_raises(TypeError, setattr, obj, m, "hello")
             assert_raises(OverflowError, setattr, obj, m, int(-1e40))
-            assert_raises(OverflowError, setattr, obj, m, int(1e40))
+            setattr(obj, m, 42)
+            message = "Python int too large to convert to C unsigned long" if m == "member_uint" else "Python int too large to convert to C long"
+            assert_overflow(m, int(1e40), message, 42)
 
         # T_LONG, T_ULONG, T_PYSSIZET
         max_values = (0x7FFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0x7FFFFFFFFFFFFFFF, 0x7FFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)
-        err_values = (-1, 0xFFFFFFFFFFFFFFFF, -1, -1, 0xFFFFFFFFFFFFFFFF)
+        err_values = (-1, 42, -1, -1, 42)
+        err_messages = ("Python int too large to convert to C long",
+                        "Python int too large to convert to C unsigned long",
+                        "Python int too large to convert to C ssize_t",
+                        "int too big to convert",
+                        "int too big to convert")
         for i, m in enumerate(("member_long", "member_ulong", "member_pyssizet", "member_longlong", "member_ulonglong")):
             assert type(getattr(obj, m)) is int
             assert getattr(obj, m) == 0
             assert_raises(TypeError, delattr, obj, m)
             setattr(obj, m, max_values[i])
             assert getattr(obj, m) == max_values[i]
-            assert_raises(OverflowError, setattr, obj, m, max_values[i] + 1)
-            val = getattr(obj, m)
-            assert val == err_values[i], "member: %s ;; was: %r" % (m, val)
+            setattr(obj, m, 42)
+            assert_overflow(m, max_values[i] + 1, err_messages[i], err_values[i])
+
+        class Indexable:
+            def __index__(self):
+                return 42
+
+        obj.member_pyssizet = 42
+        assert_raises(TypeError, setattr, obj, "member_pyssizet", Indexable())
+        assert obj.member_pyssizet == -1
 
         # T_FLOAT, T_DOUBLE
         for i, m in enumerate(("member_float", "member_double")):
@@ -277,6 +318,19 @@ class TestMethod(object):
         obj.set_string("hello")
         assert type(obj.member_string) is str
         assert obj.member_string == "hello"
+
+        # T_STRING_INPLACE
+        assert type(obj.member_string_inplace) is str
+        assert obj.member_string_inplace == ""
+        assert_raises(TypeError, delattr, obj, "member_string_inplace")
+        assert_raises(TypeError, setattr, obj, "member_string_inplace", "hello")
+        obj.set_string_inplace("hello")
+        assert type(obj.member_string_inplace) is str
+        assert obj.member_string_inplace == "hello"
+        obj.set_string_inplace("hi")
+        assert obj.member_string_inplace == "hi"
+        assert_raises(ValueError, obj.set_string_inplace, "too long")
+        assert obj.member_string_inplace == "hi"
 
         # T_CHAR
         assert type(obj.member_char) is str

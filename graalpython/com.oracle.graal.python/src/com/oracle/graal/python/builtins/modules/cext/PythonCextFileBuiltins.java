@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,11 +45,11 @@ import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITE;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
 
-import com.oracle.graal.python.builtins.modules.BuiltinConstructors.StrNode;
 import com.oracle.graal.python.builtins.modules.BuiltinFunctions.ReprNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTernaryBuiltinNode;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.str.StringBuiltins;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.StringLiterals;
@@ -66,12 +66,12 @@ public final class PythonCextFileBuiltins {
 
         @Specialization
         static int writeStr(Object obj, Object f, int flags,
-                        @Bind("this") Node inliningTarget,
-                        @Cached StrNode strNode,
+                        @Bind Node inliningTarget,
+                        @Cached StringBuiltins.StrNewNode strNode,
                         @Cached ReprNode reprNode,
                         @Cached PyObjectGetAttr getAttr,
                         @Cached CallNode callNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             checkNonNullArg(inliningTarget, obj, raiseNode);
             checkNonNullArg(inliningTarget, f, raiseNode);
             Object value;
@@ -83,7 +83,7 @@ public final class PythonCextFileBuiltins {
                 value = reprNode.execute(null, obj);
             }
             Object writeCallable = getAttr.execute(inliningTarget, f, T_WRITE);
-            callNode.execute(writeCallable, value);
+            callNode.executeWithoutFrame(writeCallable, value);
             return 0;
         }
 

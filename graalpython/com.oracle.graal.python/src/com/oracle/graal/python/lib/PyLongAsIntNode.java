@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,7 +45,6 @@ import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowEr
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.PRaiseNode.Lazy;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
@@ -59,7 +58,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 
 /**
- * Equivalent of CPython's {@code _PyLong_AsInt}. Converts an object into a Java int using its
+ * Equivalent of CPython's {@code PyLong_AsInt}. Converts an object into a Java int using its
  * {@code __index__} or (deprecated) {@code __int__} method. Raises {@code OverflowError} on
  * overflow.
  */
@@ -81,7 +80,7 @@ public abstract class PyLongAsIntNode extends PNodeWithContext {
     @Specialization
     static int doObject(VirtualFrame frame, Node inliningTarget, Object object,
                     @Cached PyLongAsLongAndOverflowNode pyLongAsLongAndOverflow,
-                    @Cached PRaiseNode.Lazy raiseNode) {
+                    @Cached PRaiseNode raiseNode) {
         try {
             long result = pyLongAsLongAndOverflow.execute(frame, inliningTarget, object);
             int intResult = (int) result;
@@ -95,7 +94,7 @@ public abstract class PyLongAsIntNode extends PNodeWithContext {
     }
 
     @InliningCutoff
-    private static PException raiseOverflow(Node inliningTarget, Lazy raiseNode) {
-        throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "Java int");
+    private static PException raiseOverflow(Node inliningTarget, PRaiseNode raiseNode) {
+        throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "Java int");
     }
 }

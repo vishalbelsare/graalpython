@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -62,8 +62,6 @@ public final class PFileIO extends PythonBuiltinObject {
     boolean finalizing;
     private int blksize;
 
-    private boolean utf8Write;
-
     public PFileIO(Object cls, Shape instanceShape) {
         super(cls, instanceShape);
         this.fd = null;
@@ -93,7 +91,9 @@ public final class PFileIO extends PythonBuiltinObject {
     public void setClosed() {
         if (fd != null) {
             if (fd.getOwnFD() != null) {
-                fd.getOwnFD().markReleased();
+                boolean markedReleased = fd.getOwnFD().markReleased();
+                assert markedReleased || fd.getOwnFD().isReleased();
+
             }
             fd = null;
         }
@@ -166,14 +166,6 @@ public final class PFileIO extends PythonBuiltinObject {
     public void setBlksize(int blksize) {
         this.blksize = blksize;
     }
-
-    public boolean isUTF8Write() {
-        return utf8Write;
-    }
-
-    public void setUTF8Write(boolean utf8Write) {
-        this.utf8Write = utf8Write;
-    }
 }
 
 @ValueType
@@ -218,11 +210,13 @@ final class OwnFD extends FinalizableReference {
 
     @SuppressWarnings("try")
     void doRelease() {
-        markReleased();
-        try (GilNode.UncachedRelease gil = GilNode.uncachedRelease()) {
-            PosixSupportLibrary.getUncached().close(context.getPosixSupport(), (int) getReference());
-        } catch (PosixException e) {
-            // ignore
+        if (markReleased()) {
+            assert isReleased();
+            try (GilNode.UncachedRelease gil = GilNode.uncachedRelease()) {
+                PosixSupportLibrary.getUncached().close(context.getPosixSupport(), (int) getReference());
+            } catch (PosixException e) {
+                // ignore
+            }
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,137 +40,139 @@
  */
 package com.oracle.graal.python.builtins.modules.cext;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.MemoryError;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CHAR_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PY_BUFFER_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Void;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.writeIntField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.writeLongField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.writePtrField;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.calloc;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.free;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.malloc;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTernaryBuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.array.ArrayNodes;
 import com.oracle.graal.python.builtins.objects.array.PArray;
 import com.oracle.graal.python.builtins.objects.buffer.BufferFlags;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
 import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
-import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.WriteTruffleStringNode;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.runtime.nativeaccess.NativeMemory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.util.BufferFormat;
+import com.oracle.graal.python.util.OverflowException;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PythonCextArrayBuiltins {
 
+    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, Py_ssize_t, Int}, call = Ignored)
+    static long GraalPyPrivate_Array_New(long clsPtr, long size, int typeCode) {
+        Object cls = NativeToPythonInternalNode.executeUncached(clsPtr, false);
+        TruffleString typeCodeString = TruffleString.fromCodePointUncached(typeCode, TS_ENCODING);
+        BufferFormat format = BufferFormat.forArray(typeCodeString, TruffleString.CodePointLengthNode.getUncached(),
+                        TruffleString.CodePointAtIndexUTF32Node.getUncached());
+        try {
+            PArray array = PFactory.createArray(cls, TypeNodes.GetInstanceShape.executeUncached(cls), typeCodeString, format, Math.toIntExact(size));
+            return PythonToNativeInternalNode.executeUncached(array, true);
+        } catch (ArithmeticException | OverflowException e) {
+            throw PRaiseNode.raiseStatic(null, MemoryError);
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObjectRawPointer}, call = Ignored)
+    static int GraalPyPrivate_Array_TypeCode(long arrayPtr) {
+        return expectArray(arrayPtr, "GraalPyArray_GetDescriptor").getFormatString().codePointAtIndexUncached(0, TS_ENCODING);
+    }
+
     /**
      * Graalpy-specific function implemented for Cython
      */
-    @CApiBuiltin(ret = Int, args = {PyObject, Py_ssize_t}, call = Direct)
-    abstract static class _PyArray_Resize extends CApiBinaryBuiltinNode {
-        @Specialization
-        static int resize(PArray array, long newSize,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ArrayNodes.EnsureCapacityNode ensureCapacityNode,
-                        @Cached ArrayNodes.SetLengthNode setLengthNode) {
-            ensureCapacityNode.execute(inliningTarget, array, (int) newSize);
-            setLengthNode.execute(inliningTarget, array, (int) newSize);
-            return 0;
-        }
+    @CApiBuiltin(ret = Int, args = {PyObjectRawPointer, Py_ssize_t}, call = Direct)
+    static int GraalPyArray_Resize(long arrayPtr, long newSize) {
+        PArray array = expectArray(arrayPtr, "GraalPyArray_Resize");
+        ArrayNodes.EnsureCapacityNode.executeUncached(array, (int) newSize);
+        ArrayNodes.SetLengthNode.executeUncached(array, (int) newSize);
+        return 0;
     }
 
-    @CApiBuiltin(ret = CHAR_PTR, args = {PyObject}, call = Direct)
-    abstract static class _PyArray_Data extends CApiUnaryBuiltinNode {
-        @Specialization
-        static Object get(PArray array,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ArrayNodes.EnsureNativeStorageNode ensureNativeStorageNode) {
-            return ensureNativeStorageNode.execute(inliningTarget, array).getPtr();
+    @CApiBuiltin(ret = CHAR_PTR, args = {PyObjectRawPointer}, call = Direct)
+    static long GraalPyArray_Data(long arrayPtr) {
+        PArray array = expectArray(arrayPtr, "GraalPyArray_Data");
+        if (array.getBytesLength() > 0) {
+            return ArrayNodes.EnsureNativeStorageNode.executeUncached(array).getPtr();
         }
+        return NULLPTR;
     }
 
-    @CApiBuiltin(ret = Int, args = {PyObject, PY_BUFFER_PTR, Int}, call = Ignored)
-    abstract static class PyTruffle_Array_getbuffer extends CApiTernaryBuiltinNode {
-        @Specialization
-        static int getbuffer(PArray array, Object pyBufferPtr, int flags,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ArrayNodes.EnsureNativeStorageNode ensureNativeStorageNode,
-                        @Cached TruffleString.SwitchEncodingNode switchEncodingNode,
-                        @Cached TruffleString.CopyToByteArrayNode copyToByteArrayNode,
-                        @Cached CApiTransitions.PythonToNativeNewRefNode toNativeNewRefNode,
-                        @Cached CStructAccess.WritePointerNode writePointerNode,
-                        @Cached CStructAccess.WriteLongNode writeLongNode,
-                        @Cached CStructAccess.WriteIntNode writeIntNode,
-                        @Cached CStructAccess.WriteByteNode writeByteNode,
-                        @Cached CStructAccess.AllocateNode allocateNode) {
-            Object bufPtr = ensureNativeStorageNode.execute(inliningTarget, array).getPtr();
-            Object nativeNull = PythonContext.get(inliningTarget).getNativeNull().getPtr();
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__buf, bufPtr);
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__obj, toNativeNewRefNode.execute(array));
-            writeLongNode.write(pyBufferPtr, CFields.Py_buffer__len, array.getBytesLength());
-            writeIntNode.write(pyBufferPtr, CFields.Py_buffer__readonly, 0);
-            writeIntNode.write(pyBufferPtr, CFields.Py_buffer__ndim, 1);
-            writeLongNode.write(pyBufferPtr, CFields.Py_buffer__itemsize, array.getFormat().bytesize);
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__suboffsets, nativeNull);
-            Object shapePtr = nativeNull;
-            if ((flags & BufferFlags.PyBUF_ND) == BufferFlags.PyBUF_ND) {
-                shapePtr = allocateNode.alloc(Long.BYTES);
-                writeLongNode.write(shapePtr, array.getLength());
-            }
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__shape, shapePtr);
-            Object stridesPtr = nativeNull;
-            if ((flags & BufferFlags.PyBUF_STRIDES) == BufferFlags.PyBUF_STRIDES) {
-                stridesPtr = allocateNode.alloc(Long.BYTES);
-                writeLongNode.write(stridesPtr, array.getFormat().bytesize);
-            }
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__strides, stridesPtr);
-            Object formatPtr = nativeNull;
-            if (((flags & BufferFlags.PyBUF_FORMAT) == BufferFlags.PyBUF_FORMAT)) {
-                TruffleString format = array.getFormatString();
-                // TODO wchar_t check
-                TruffleString.Encoding formatEncoding = TruffleString.Encoding.US_ASCII;
-                format = switchEncodingNode.execute(format, formatEncoding);
-                int formatLen = format.byteLength(formatEncoding);
-                byte[] bytes = new byte[formatLen + 1];
-                copyToByteArrayNode.execute(format, 0, bytes, 0, formatLen, formatEncoding);
-                formatPtr = allocateNode.alloc(bytes.length);
-                writeByteNode.writeByteArray(formatPtr, bytes);
-            }
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__format, formatPtr);
-            writePointerNode.write(pyBufferPtr, CFields.Py_buffer__internal, nativeNull);
-
-            array.getExports().incrementAndGet();
-            return 0;
+    @CApiBuiltin(ret = Int, args = {PyObjectRawPointer, PY_BUFFER_PTR, Int}, call = Ignored)
+    static int GraalPyPrivate_Array_getbuffer(long arrayPtr, long pyBufferPtr, int flags) {
+        PArray array = expectArray(arrayPtr, "GraalPyPrivate_Array_getbuffer");
+        long bufPtr = ArrayNodes.EnsureNativeStorageNode.executeUncached(array).getPtr();
+        writePtrField(pyBufferPtr, CFields.Py_buffer__buf, bufPtr);
+        writePtrField(pyBufferPtr, CFields.Py_buffer__obj, PythonToNativeInternalNode.executeNewRefUncached(array));
+        writeLongField(pyBufferPtr, CFields.Py_buffer__len, array.getBytesLength());
+        writeIntField(pyBufferPtr, CFields.Py_buffer__readonly, 0);
+        writeIntField(pyBufferPtr, CFields.Py_buffer__ndim, 1);
+        writeLongField(pyBufferPtr, CFields.Py_buffer__itemsize, array.getFormat().bytesize);
+        writePtrField(pyBufferPtr, CFields.Py_buffer__suboffsets, NULLPTR);
+        long shapePtr = NULLPTR;
+        if ((flags & BufferFlags.PyBUF_ND) == BufferFlags.PyBUF_ND) {
+            shapePtr = malloc(Long.BYTES);
+            NativeMemory.writeLong(shapePtr, array.getLength());
         }
+        writePtrField(pyBufferPtr, CFields.Py_buffer__shape, shapePtr);
+        long stridesPtr = NULLPTR;
+        if ((flags & BufferFlags.PyBUF_STRIDES) == BufferFlags.PyBUF_STRIDES) {
+            stridesPtr = malloc(Long.BYTES);
+            NativeMemory.writeLong(stridesPtr, array.getFormat().bytesize);
+        }
+        writePtrField(pyBufferPtr, CFields.Py_buffer__strides, stridesPtr);
+        long formatPtr = NULLPTR;
+        if ((flags & BufferFlags.PyBUF_FORMAT) == BufferFlags.PyBUF_FORMAT) {
+            TruffleString format = array.getFormatString();
+            // TODO wchar_t check
+            TruffleString.Encoding formatEncoding = TruffleString.Encoding.US_ASCII;
+            format = format.switchEncodingUncached(formatEncoding);
+            int formatLen = format.byteLength(formatEncoding);
+            formatPtr = calloc(formatLen + 1);
+            WriteTruffleStringNode.writeUncached(formatPtr, format, formatEncoding);
+        }
+        writePtrField(pyBufferPtr, CFields.Py_buffer__format, formatPtr);
+        writePtrField(pyBufferPtr, CFields.Py_buffer__internal, NULLPTR);
+
+        array.getExports().incrementAndGet();
+        return 0;
     }
 
-    @CApiBuiltin(ret = Void, args = {PyObject, PY_BUFFER_PTR}, call = Ignored)
-    abstract static class PyTruffle_Array_releasebuffer extends CApiBinaryBuiltinNode {
-        @Specialization
-        static Object releasebuffer(PArray array, Object pyBufferPtr,
-                        @CachedLibrary(limit = "1") InteropLibrary lib,
-                        @Cached CStructAccess.ReadPointerNode readPointerNode,
-                        @Cached CStructAccess.FreeNode freeNode) {
-            array.getExports().decrementAndGet();
-            freeArrayField(pyBufferPtr, CFields.Py_buffer__shape, readPointerNode, lib, freeNode);
-            freeArrayField(pyBufferPtr, CFields.Py_buffer__strides, readPointerNode, lib, freeNode);
-            freeArrayField(pyBufferPtr, CFields.Py_buffer__format, readPointerNode, lib, freeNode);
-            return PNone.NO_VALUE;
-        }
+    @CApiBuiltin(ret = Void, args = {PyObjectRawPointer, PY_BUFFER_PTR}, call = Ignored)
+    static void GraalPyPrivate_Array_releasebuffer(long arrayPtr, long pyBufferPtr) {
+        PArray array = expectArray(arrayPtr, "GraalPyPrivate_Array_releasebuffer");
+        array.getExports().decrementAndGet();
+        free(CStructAccess.readPtrField(pyBufferPtr, CFields.Py_buffer__shape));
+        free(CStructAccess.readPtrField(pyBufferPtr, CFields.Py_buffer__strides));
+        free(CStructAccess.readPtrField(pyBufferPtr, CFields.Py_buffer__format));
+    }
 
-        private static void freeArrayField(Object pyBufferPtr, CFields cfield, CStructAccess.ReadPointerNode readPointerNode, InteropLibrary lib, CStructAccess.FreeNode freeNode) {
-            Object field = readPointerNode.read(pyBufferPtr, cfield);
-            if (!lib.isNull(field)) {
-                freeNode.free(field);
-            }
+    private static PArray expectArray(long arrayPtr, String where) {
+        Object obj = NativeToPythonInternalNode.executeUncached(arrayPtr, false);
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.UNLIKELY_PROBABILITY, !(obj instanceof PArray))) {
+            throw PythonCextBuiltins.badInternalCall(where, "arrayPtr");
         }
+        return (PArray) obj;
     }
 }

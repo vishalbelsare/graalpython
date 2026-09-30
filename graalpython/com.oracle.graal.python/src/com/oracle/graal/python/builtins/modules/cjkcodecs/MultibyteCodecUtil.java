@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -66,28 +66,30 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.RuntimeE
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.UnicodeDecodeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.UnicodeEncodeError;
-import static com.oracle.graal.python.util.PythonUtils.EMPTY_BYTE_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 
 import java.nio.CharBuffer;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.modules.codecs.CodecsRegistry.PyCodecLookupErrorNode;
 import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.exception.BaseExceptionAttrNode;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.lib.PyBytesCheckNode;
 import com.oracle.graal.python.lib.PyLongAsIntNode;
 import com.oracle.graal.python.lib.PyLongCheckNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.lib.PyUnicodeCheckNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
@@ -136,25 +138,22 @@ public class MultibyteCodecUtil {
     }
 
     @GenerateInline
-    @GenerateCached(alwaysInlineCached = true)
+    @GenerateCached(false)
     abstract static class CallErrorCallbackNode extends Node {
 
-        abstract Object execute(VirtualFrame frame, Node inliningTarget, Object errors, Object exc);
+        abstract Object execute(VirtualFrame frame, Node inliningTarget, TruffleString errors, Object exc);
 
         // call_error_callback
         @Specialization
-        static Object callErrorCallback(Node inliningTarget, Object errors, Object exc,
-                        @Cached CastToTruffleStringNode castToStringNode,
+        static Object callErrorCallback(VirtualFrame frame, Node inliningTarget, TruffleString errors, Object exc,
                         @Cached PyCodecLookupErrorNode lookupErrorNode,
                         @Cached(inline = false) CallNode callNode) {
-            assert (PyUnicodeCheckNode.executeUncached(errors));
-            TruffleString str = castToStringNode.execute(inliningTarget, errors);
-            Object cb = lookupErrorNode.execute(inliningTarget, str);
-            return callNode.execute(cb, exc);
+            Object cb = lookupErrorNode.execute(frame, inliningTarget, errors);
+            return callNode.execute(frame, cb, exc);
         }
     }
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 120 -> 103
+    @GenerateInline(false)       // footprint reduction 120 -> 103
     abstract static class EncodeErrorNode extends Node {
 
         private static final CharBuffer REPLACEMENT = CharBuffer.wrap("?");
@@ -162,27 +161,29 @@ public class MultibyteCodecUtil {
         abstract int execute(VirtualFrame frame, MultibyteCodec codec,
                         MultibyteCodecState state,
                         MultibyteEncodeBuffer buf,
-                        Object errors, int e);
+                        TruffleString errors, int e);
 
         // multibytecodec_encerror
         @Specialization
         static int encerror(VirtualFrame frame, MultibyteCodec codec,
                         MultibyteCodecState state,
-                        MultibyteEncodeBuffer buf, Object errors, int e,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PythonObjectFactory factory,
+                        MultibyteEncodeBuffer buf, TruffleString errors, int e,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached BaseExceptionAttrNode attrNode,
-                        @Cached SequenceStorageNodes.GetInternalObjectArrayNode getArray,
+                        @Cached TupleNodes.GetTupleStorage getTupleStorage,
+                        @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
                         @Cached PyUnicodeCheckNode unicodeCheckNode,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                         @Cached CastToTruffleStringNode toTString,
                         @Cached PyLongCheckNode longCheckNode,
                         @Cached PyBytesCheckNode bytesCheckNode,
                         @Cached PyLongAsIntNode asSizeNode,
-                        @Cached(inline = true) CallErrorCallbackNode callErrorCallbackNode,
+                        @Cached PyTupleCheckNode tupleCheckNode,
+                        @Cached CallErrorCallbackNode callErrorCallbackNode,
                         @Cached BytesNodes.ToBytesNode toBytesNode,
                         @Cached EncodeNode encodeNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
 
             TruffleString reason = ILLEGAL_MULTIBYTE_SEQUENCE;
             int esize = e;
@@ -196,9 +197,9 @@ public class MultibyteCodecUtil {
                         esize = buf.getInpos();
                         break;
                     case MBERR_INTERNAL:
-                        throw raiseNode.get(inliningTarget).raise(RuntimeError, INTERNAL_CODEC_ERROR);
+                        throw raiseNode.raise(inliningTarget, RuntimeError, INTERNAL_CODEC_ERROR);
                     default:
-                        throw raiseNode.get(inliningTarget).raise(RuntimeError, UNKNOWN_RUNTIME_ERROR);
+                        throw raiseNode.raise(inliningTarget, RuntimeError, UNKNOWN_RUNTIME_ERROR);
                 }
             }
 
@@ -233,10 +234,10 @@ public class MultibyteCodecUtil {
 
             /* use cached exception object if available */
             if (buf.excobj == null) {
-                buf.excobj = factory.createBaseException(UnicodeEncodeError);
+                buf.excobj = PFactory.createBaseException(language, UnicodeEncodeError);
                 TruffleString encoding = codec.encoding;
                 Object[] args = new Object[]{encoding, buf.toTString(), start, end, reason};
-                buf.excobj.setArgs(factory.createTuple(args));
+                buf.excobj.setArgs(PFactory.createTuple(language, args));
                 buf.excobj.setExceptionAttributes(args);
             } else {
                 attrNode.execute(buf.excobj, start, IDX_START, UNICODE_ERROR_ATTR_FACTORY);
@@ -245,23 +246,22 @@ public class MultibyteCodecUtil {
             }
 
             if (errors == ERROR_STRICT) {
-                throw raiseNode.get(inliningTarget).raiseExceptionObject(buf.excobj);
+                throw raiseNode.raiseExceptionObject(inliningTarget, buf.excobj);
                 // PyCodec_StrictErrors(buf.excobj);
             }
 
             Object retobj = callErrorCallbackNode.execute(frame, inliningTarget, errors, buf.excobj);
 
-            boolean isError = !(retobj instanceof PTuple);
+            boolean isError = !tupleCheckNode.execute(inliningTarget, retobj);
             Object tobj = null;
             Object newposobj = null;
             boolean isUnicode = false;
             if (!isError) {
-                PTuple tuple = (PTuple) retobj;
-                Object[] array = getArray.execute(inliningTarget, tuple.getSequenceStorage());
-                isError = array.length != 2;
+                SequenceStorage storage = getTupleStorage.execute(inliningTarget, retobj);
+                isError = storage.length() != 2;
                 if (!isError) {
-                    tobj = array[0];
-                    newposobj = array[1];
+                    tobj = getItemNode.execute(inliningTarget, storage, 0);
+                    newposobj = getItemNode.execute(inliningTarget, storage, 1);
                     isUnicode = unicodeCheckNode.execute(inliningTarget, tobj);
                     isError = !isUnicode && !bytesCheckNode.execute(inliningTarget, tobj);
                     isError = isError || !longCheckNode.execute(inliningTarget, newposobj);
@@ -269,18 +269,17 @@ public class MultibyteCodecUtil {
             }
 
             if (isError) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ENCODING_ERROR_HANDLER_MUST_RETURN);
+                throw raiseNode.raise(inliningTarget, TypeError, ENCODING_ERROR_HANDLER_MUST_RETURN);
             }
 
             PBytes retstr;
             if (isUnicode) {
                 TruffleString str = toTString.execute(inliningTarget, tobj);
                 int datalen = codePointLengthNode.execute(str, TS_ENCODING);
-                retstr = encodeEmptyInput(datalen, MBENC_FLUSH, factory);
+                retstr = encodeEmptyInput(inliningTarget, datalen, MBENC_FLUSH);
                 if (retstr == null) {
                     MultibyteEncodeBuffer tmpbuf = new MultibyteEncodeBuffer(str);
-                    retstr = encodeNode.execute(frame, inliningTarget, codec, state, tmpbuf, ERROR_STRICT, MBENC_FLUSH,
-                                    factory);
+                    retstr = encodeNode.execute(frame, inliningTarget, codec, state, tmpbuf, ERROR_STRICT, MBENC_FLUSH);
                 }
             } else {
                 retstr = (PBytes) tobj;
@@ -300,10 +299,10 @@ public class MultibyteCodecUtil {
                     newpos += buf.getInlen();
                 }
             } catch (PException exception) {
-                throw raiseNode.get(inliningTarget).raise(IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
+                throw raiseNode.raise(inliningTarget, IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
             }
             if (newpos < 0 || newpos > buf.getInlen()) {
-                throw raiseNode.get(inliningTarget).raise(IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
+                throw raiseNode.raise(inliningTarget, IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
             }
 
             buf.setInpos(newpos);
@@ -312,7 +311,7 @@ public class MultibyteCodecUtil {
         }
     }
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 88 -> 72
+    @GenerateInline(false)       // footprint reduction 88 -> 72
     abstract static class DecodeErrorNode extends Node {
 
         abstract void execute(VirtualFrame frame, MultibyteCodec codec,
@@ -324,16 +323,18 @@ public class MultibyteCodecUtil {
         static void decerror(VirtualFrame frame, MultibyteCodec codec,
                         // MultibyteCodecState state,
                         MultibyteDecodeBuffer buf, TruffleString errors, int e,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PythonObjectFactory factory,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached BaseExceptionAttrNode attrNode,
-                        @Cached SequenceStorageNodes.GetInternalObjectArrayNode getArray,
+                        @Cached TupleNodes.GetTupleStorage getTupleStorage,
+                        @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
                         @Cached PyUnicodeCheckNode unicodeCheckNode,
                         @Cached PyLongCheckNode longCheckNode,
                         @Cached PyLongAsIntNode asSizeNode,
+                        @Cached PyTupleCheckNode tupleCheckNode,
                         @Cached CastToJavaStringNode toString,
-                        @Cached(inline = true) CallErrorCallbackNode callErrorCallbackNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached CallErrorCallbackNode callErrorCallbackNode,
+                        @Cached PRaiseNode raiseNode) {
 
             TruffleString reason = ILLEGAL_MULTIBYTE_SEQUENCE;
             int esize = e;
@@ -348,9 +349,9 @@ public class MultibyteCodecUtil {
                         esize = buf.remaining();
                         break;
                     case MBERR_INTERNAL:
-                        throw raiseNode.get(inliningTarget).raise(RuntimeError, INTERNAL_CODEC_ERROR);
+                        throw raiseNode.raise(inliningTarget, RuntimeError, INTERNAL_CODEC_ERROR);
                     default:
-                        throw raiseNode.get(inliningTarget).raise(RuntimeError, UNKNOWN_RUNTIME_ERROR);
+                        throw raiseNode.raise(inliningTarget, RuntimeError, UNKNOWN_RUNTIME_ERROR);
                 }
             }
 
@@ -367,11 +368,11 @@ public class MultibyteCodecUtil {
 
             /* use cached exception object if available */
             if (buf.excobj == null) {
-                buf.excobj = factory.createBaseException(UnicodeDecodeError);
-                PBytes inbuf = buf.createPBytes(factory);
+                buf.excobj = PFactory.createBaseException(language, UnicodeDecodeError);
+                PBytes inbuf = PFactory.createBytes(language, buf.inputBuffer.array(), buf.getInpos());
                 TruffleString encoding = codec.encoding;
                 Object[] args = new Object[]{encoding, inbuf, buf.getInpos(), start, end, reason};
-                buf.excobj.setArgs(factory.createTuple(args));
+                buf.excobj.setArgs(PFactory.createTuple(language, args));
                 buf.excobj.setExceptionAttributes(args);
             } else {
                 attrNode.execute(buf.excobj, start, IDX_START, UNICODE_ERROR_ATTR_FACTORY);
@@ -380,29 +381,28 @@ public class MultibyteCodecUtil {
             }
 
             if (errors == ERROR_STRICT) {
-                throw raiseNode.get(inliningTarget).raiseExceptionObject(buf.excobj);
+                throw raiseNode.raiseExceptionObject(inliningTarget, buf.excobj);
                 // PyCodec_StrictErrors(buf.excobj);
             }
 
             Object retobj = callErrorCallbackNode.execute(frame, inliningTarget, errors, buf.excobj);
 
-            boolean isError = !(retobj instanceof PTuple);
+            boolean isError = !tupleCheckNode.execute(inliningTarget, retobj);
             Object retuni = null;
             Object newposobj = null;
             if (!isError) {
-                PTuple tuple = (PTuple) retobj;
-                Object[] array = getArray.execute(inliningTarget, tuple.getSequenceStorage());
-                isError = array.length != 2;
+                SequenceStorage storage = getTupleStorage.execute(inliningTarget, retobj);
+                isError = storage.length() != 2;
                 if (!isError) {
-                    retuni = array[0];
-                    newposobj = array[1];
+                    retuni = getItemNode.execute(inliningTarget, storage, 0);
+                    newposobj = getItemNode.execute(inliningTarget, storage, 1);
                     isError = !unicodeCheckNode.execute(inliningTarget, retuni);
                     isError = isError || !longCheckNode.execute(inliningTarget, newposobj);
                 }
             }
 
             if (isError) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, DECODING_ERROR_HANDLER_MUST_RETURN);
+                throw raiseNode.raise(inliningTarget, TypeError, DECODING_ERROR_HANDLER_MUST_RETURN);
             }
 
             buf.writeStr(toString.execute(retuni));
@@ -414,20 +414,19 @@ public class MultibyteCodecUtil {
                     newpos += buf.getInpos();
                 }
             } catch (PException ee) {
-                throw raiseNode.get(inliningTarget).raise(IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
+                throw raiseNode.raise(inliningTarget, IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
             }
             if (newpos > buf.getInSize()) {
-                throw raiseNode.get(inliningTarget).raise(IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
+                throw raiseNode.raise(inliningTarget, IndexError, POSITION_D_FROM_ERROR_HANDLER_OUT_OF_BOUNDS, newpos);
             }
 
             buf.setInpos(newpos);
         }
     }
 
-    protected static PBytes encodeEmptyInput(int len, int flags,
-                    PythonObjectFactory factory) {
+    protected static PBytes encodeEmptyInput(Node inliningTarget, int len, int flags) {
         if (len == 0 && (flags & MBENC_RESET) == 0) {
-            return factory.createBytes(EMPTY_BYTE_ARRAY);
+            return PFactory.createEmptyBytes(PythonLanguage.get(inliningTarget));
         }
         return null;
     }
@@ -436,22 +435,20 @@ public class MultibyteCodecUtil {
     @GenerateCached(false)
     abstract static class EncodeNode extends Node {
 
-        abstract PBytes execute(VirtualFrame frame, Node inliningTarget, MultibyteCodec codec, MultibyteCodecState state, MultibyteEncodeBuffer buf, Object errors, int flags,
-                        PythonObjectFactory factory);
+        abstract PBytes execute(VirtualFrame frame, Node inliningTarget, MultibyteCodec codec, MultibyteCodecState state, MultibyteEncodeBuffer buf, TruffleString errors, int flags);
 
         // multibytecodec_encode
         @Specialization
-        static PBytes encode(VirtualFrame frame, Node inliningTarget, MultibyteCodec codec, MultibyteCodecState state, MultibyteEncodeBuffer buf, Object errors, int flags,
-                        PythonObjectFactory factory,
+        static PBytes encode(VirtualFrame frame, Node inliningTarget, MultibyteCodec codec, MultibyteCodecState state, MultibyteEncodeBuffer buf, TruffleString errors, int flags,
                         @Cached(inline = false) EncodeErrorNode encodeErrorNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
 
             // if (buf.inlen == 0 && (flags & MBENC_RESET) == 0) {
-            // return factory.createBytes(EMPTY_BYTE_ARRAY);
+            // return PFactory.createBytes(language, EMPTY_BYTE_ARRAY);
             // }
 
             if (buf.getInlen() > (MAXSIZE - 16) / 2) {
-                throw raiseNode.get(inliningTarget).raise(MemoryError);
+                throw raiseNode.raise(inliningTarget, MemoryError);
             }
 
             while (!buf.isFull()) {
@@ -484,7 +481,7 @@ public class MultibyteCodecUtil {
                 }
             }
 
-            return buf.createPBytes(factory);
+            return buf.createPBytes();
         }
 
     }

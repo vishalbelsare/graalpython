@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -28,118 +28,187 @@ package com.oracle.graal.python.builtins.objects.generator;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
-import com.oracle.graal.python.nodes.bytecode.FrameInfo;
-import com.oracle.graal.python.nodes.bytecode.GeneratorYieldResult;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeGeneratorRootNode;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.graal.python.builtins.objects.object.PythonObject;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnit;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLFrameInfo;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.truffle.api.RootCallTarget;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
+import com.oracle.truffle.api.TruffleStackTraceElement;
+import com.oracle.truffle.api.bytecode.BytecodeLocation;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.bytecode.ContinuationResult;
+import com.oracle.truffle.api.bytecode.ContinuationRootNode;
+import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public class PGenerator extends PythonBuiltinObject {
 
     private TruffleString name;
     private TruffleString qualname;
-    /**
-     * Call targets with copies of the generator's AST. Each call target corresponds to one possible
-     * entry point into the generator: the first call, and continuation for each yield. Each AST can
-     * then specialize towards which nodes are executed when starting from that particular entry
-     * point. When yielding, the next index to the next call target to continue from is updated via
-     * {@link #handleResult}.
-     */
-    @CompilationFinal(dimensions = 1) protected final RootCallTarget[] callTargets;
-    protected final Object[] arguments;
+
     private boolean finished;
-    private PCode code;
-    private int currentCallTarget;
-    private final PBytecodeRootNode bytecodeRootNode;
-    private final FrameInfo frameInfo;
     // running means it is currently on the stack, not just started
     private boolean running;
-    private final boolean isCoroutine;
-    private final boolean isAsyncGen;
 
-    // An explicit isIterableCoroutine argument is needed for iterable coroutines (generally created
-    // via types.coroutine)
-    public static PGenerator create(PythonLanguage lang, TruffleString name, TruffleString qualname, PBytecodeRootNode rootNode, RootCallTarget[] callTargets, Object[] arguments,
-                    PythonBuiltinClassType cls, boolean isIterableCoroutine) {
-        // note: also done in PAsyncGen.create
-        rootNode.createGeneratorFrame(arguments);
-        return new PGenerator(lang, name, qualname, rootNode, callTargets, arguments, cls, isIterableCoroutine);
+    private MaterializedFrame frame;
+    private final PythonObject globals;
+    private final PFunction generatorFunction;
+    private final PBytecodeDSLRootNode rootNode;
+    private ContinuationRootNode prevContinuationRootNode;
+    private ContinuationRootNode continuationRootNode;
+    private boolean isStarted;
+
+    public static PGenerator create(PythonLanguage lang, PFunction function, PBytecodeDSLRootNode rootNode,
+                    PythonBuiltinClassType cls, ContinuationRootNode continuationRootNode, MaterializedFrame continuationFrame) {
+        return new PGenerator(lang, function, continuationFrame, cls, rootNode, continuationRootNode);
     }
 
-    public static PGenerator create(PythonLanguage lang, TruffleString name, TruffleString qualname, PBytecodeRootNode rootNode, RootCallTarget[] callTargets, Object[] arguments,
-                    PythonBuiltinClassType cls) {
-        return create(lang, name, qualname, rootNode, callTargets, arguments, cls, false);
-    }
-
-    protected PGenerator(PythonLanguage lang, TruffleString name, TruffleString qualname, PBytecodeRootNode rootNode, RootCallTarget[] callTargets, Object[] arguments, PythonBuiltinClassType cls,
-                    boolean isIterableCoroutine) {
+    protected PGenerator(PythonLanguage lang, PFunction function, MaterializedFrame frame, PythonBuiltinClassType cls,
+                    PBytecodeDSLRootNode rootNode, ContinuationRootNode continuationRootNode) {
         super(cls, cls.getInstanceShape(lang));
-        this.name = name;
-        this.qualname = qualname;
-        this.callTargets = callTargets;
-        this.currentCallTarget = 0;
-        this.arguments = arguments;
+        this.name = function.getName();
+        this.qualname = function.getQualname();
+        this.globals = function.getGlobals();
+        this.generatorFunction = function;
+        this.frame = frame;
         this.finished = false;
-        this.bytecodeRootNode = rootNode;
-        this.frameInfo = (FrameInfo) rootNode.getFrameDescriptor().getInfo();
-        this.isCoroutine = isIterableCoroutine || cls == PythonBuiltinClassType.PCoroutine;
-        this.isAsyncGen = cls == PythonBuiltinClassType.PAsyncGenerator;
+        this.rootNode = rootNode;
+        this.continuationRootNode = continuationRootNode;
     }
 
-    public final void handleResult(PythonLanguage language, GeneratorYieldResult result) {
-        currentCallTarget = result.resumeBci;
-        if (callTargets[currentCallTarget] == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            PBytecodeGeneratorRootNode rootNode = new PBytecodeGeneratorRootNode(language, bytecodeRootNode, result.resumeBci, result.resumeStackTop);
-            callTargets[currentCallTarget] = rootNode.getCallTarget();
+    public Object[] prepareResume() {
+        Object[] arguments = getGeneratorFrame().getArguments();
+        PArguments.setException(arguments, null);
+        PArguments.setCallerFrameInfo(arguments, null);
+        return arguments;
+    }
+
+    public ContinuationRootNode getBytecodeDSLContinuationRootNode() {
+        return continuationRootNode;
+    }
+
+    /**
+     * Test whether given traceback element represents a frame used by Bytecode DSL for execution of
+     * a generator.
+     */
+    public static boolean isDSLGeneratorTracebackElement(TruffleStackTraceElement element) {
+        // We need to check the source root node type, because this could be another Truffle
+        // language that uses Bytecode DSL
+        return isDSLGeneratorTarget(element.getTarget());
+    }
+
+    public static boolean isDSLGeneratorTarget(RootCallTarget callTarget) {
+        return callTarget.getRootNode() instanceof ContinuationRootNode cr &&
+                        cr.getSourceRootNode() instanceof PBytecodeDSLRootNode;
+    }
+
+    public static Frame unwrapDSLGeneratorFrame(TruffleStackTraceElement element) {
+        if (isDSLGeneratorTracebackElement(element)) {
+            return (Frame) element.getFrame().getArguments()[0];
+        }
+        return element.getFrame();
+    }
+
+    public static RootNode unwrapContinuationRoot(RootNode rootNode) {
+        if (rootNode instanceof ContinuationRootNode continuationRoot) {
+            return unwrapContinuationRoot(continuationRoot);
+        }
+        return rootNode;
+    }
+
+    public static PBytecodeDSLRootNode unwrapContinuationRoot(ContinuationRootNode continuationRoot) {
+        return PBytecodeDSLRootNode.cast(continuationRoot);
+    }
+
+    public static boolean isGeneratorFrame(Frame frame) {
+        Object frameInfo = frame.getFrameDescriptor().getInfo();
+        // just to avoid interface dispatch we must cast the info object
+        return frameInfo instanceof BytecodeDSLFrameInfo info && info.getCodeUnit().isGeneratorOrCoroutine() && frame.getArguments()[0] instanceof MaterializedFrame;
+    }
+
+    public static MaterializedFrame getGeneratorFrame(Frame frame) {
+        assert isGeneratorFrame(frame);
+        return (MaterializedFrame) frame;
+    }
+
+    public MaterializedFrame getGeneratorFrame() {
+        return frame;
+    }
+
+    public PythonObject getGlobals() {
+        return globals;
+    }
+
+    public PFunction getGeneratorFunction() {
+        return generatorFunction;
+    }
+
+    public static Object getSendValue(Object[] arguments) {
+        return PArguments.getArgument(arguments, 1);
+    }
+
+    public RootNode getRootNode() {
+        return rootNode;
+    }
+
+    /**
+     * Returns the call target that should be used the next time the generator is called.
+     */
+    public RootCallTarget getCurrentCallTarget() {
+        return continuationRootNode.getCallTarget();
+    }
+
+    public BytecodeNode getBytecodeNode() {
+        assert !running; // When it is running, we must use stack walking to get the location
+        if (isStarted) {
+            return prevContinuationRootNode.getLocation().getBytecodeNode();
+        } else {
+            return rootNode.getBytecodeNode();
         }
     }
 
     /**
-     * Returns the call target that should be used the next time the generator is called. Each time
-     * a generator call target returns through a yield, the generator should be updated with the
-     * next yield index to use via {@link #handleResult}
+     * Return the BytecodeNode that should be used for accessing the frame of a continuation root
+     * node.
      */
-    public final RootCallTarget getCurrentCallTarget() {
-        return callTargets[currentCallTarget];
+    public BytecodeNode getContinuationBytecodeNode() {
+        assert isStarted;
+        return continuationRootNode.getLocation().getBytecodeNode();
     }
 
-    public final Object getYieldFrom() {
-        if (running || finished) {
+    public BytecodeLocation getCurrentLocation() {
+        return continuationRootNode.getLocation();
+    }
+
+    public Object getYieldFrom() {
+        if (isRunning() || isFinished()) {
             return null;
         }
-        return frameInfo.getYieldFrom(PArguments.getGeneratorFrame(arguments), getBci(), getCurrentRootNode().getResumeStackTop());
-    }
 
-    private PBytecodeGeneratorRootNode getCurrentRootNode() {
-        return (PBytecodeGeneratorRootNode) getCurrentCallTarget().getRootNode();
-    }
-
-    public final boolean isStarted() {
-        return currentCallTarget != 0 && !running;
-    }
-
-    public final int getBci() {
-        if (!isStarted()) {
-            return -1;
-        } else if (finished) {
-            return bytecodeRootNode.getCodeUnit().code.length;
-        } else {
-            return getCurrentRootNode().getResumeBci();
+        if (!rootNode.hasYieldFromGenerator() || !isStarted) {
+            return null;
         }
+        return rootNode.readYieldFromGenerator(getContinuationBytecodeNode(), getGeneratorFrame());
     }
 
-    public final Object[] getArguments() {
-        return arguments;
+    public boolean isStarted() {
+        return isStarted && !isRunning();
+    }
+
+    public Object handleResult(Object result) {
+        ContinuationResult continuationResult = (ContinuationResult) result;
+        assert PBytecodeDSLRootNode.cast(continuationResult.getContinuationRootNode()).getFrameDescriptor() == frame.getFrameDescriptor();
+        isStarted = true;
+        // We must keep the previous root so that we can load its BytecodeNode to resolve BCI to
+        // location, the next continuation node may have different BytecodeNode.
+        prevContinuationRootNode = continuationRootNode;
+        continuationRootNode = continuationResult.getContinuationRootNode();
+        return continuationResult.getResult();
     }
 
     public final boolean isFinished() {
@@ -148,20 +217,12 @@ public class PGenerator extends PythonBuiltinObject {
 
     public final void markAsFinished() {
         finished = true;
+        frame = null;
     }
 
     @Override
     public final String toString() {
         return "<generator object " + name + " at " + hashCode() + ">";
-    }
-
-    public final PCode getOrCreateCode(Node inliningTarget, InlinedConditionProfile hasCodeProfile, PythonObjectFactory.Lazy factory) {
-        if (hasCodeProfile.profile(inliningTarget, code == null)) {
-            RootCallTarget callTarget;
-            callTarget = bytecodeRootNode.getCallTarget();
-            code = factory.get(inliningTarget).createCode(callTarget);
-        }
-        return code;
     }
 
     public final boolean isRunning() {
@@ -189,11 +250,17 @@ public class PGenerator extends PythonBuiltinObject {
         this.qualname = qualname;
     }
 
+    private BytecodeDSLCodeUnit getCodeUnit() {
+        return rootNode.getCodeUnit();
+    }
+
     public final boolean isCoroutine() {
-        return isCoroutine;
+        BytecodeDSLCodeUnit codeUnit = getCodeUnit();
+        return codeUnit.isCoroutine() || codeUnit.isIterableCoroutine();
     }
 
     public final boolean isAsyncGen() {
-        return isAsyncGen;
+        return getCodeUnit().isAsyncGenerator();
     }
+
 }

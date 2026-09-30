@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,18 +40,24 @@
  */
 package com.oracle.graal.python.builtins.objects.array;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.common.BufferStorageNodes;
 import com.oracle.graal.python.builtins.objects.common.BufferStorageNodes.UnpackValueNode;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.slice.PSlice.SliceInfo;
+import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.runtime.sequence.storage.ByteSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.NativeByteSequenceStorage;
-import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
+import com.oracle.graal.python.util.BufferFormat;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
@@ -59,9 +65,32 @@ import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedBranchProfile;
+import com.oracle.truffle.api.profiles.ValueProfile;
+import com.oracle.truffle.api.strings.TruffleString;
 
 public abstract class ArrayNodes {
+    @GenerateInline
+    @GenerateCached(false)
+    abstract static class GetFormatCheckedNode extends Node {
+        abstract BufferFormat execute(Node inliningTarget, TruffleString typeCode);
+
+        @Specialization
+        static BufferFormat get(Node inliningTarget, TruffleString typeCode,
+                        @Cached TruffleString.CodePointLengthNode lengthNode,
+                        @Cached TruffleString.CodePointAtIndexUTF32Node atIndexNode,
+                        @Cached PRaiseNode raise,
+                        @Cached(value = "createIdentityProfile()", inline = false) ValueProfile valueProfile) {
+            if (lengthNode.execute(typeCode, TS_ENCODING) != 1) {
+                throw raise.raise(inliningTarget, TypeError, ErrorMessages.ARRAY_ARG_1_MUST_BE_UNICODE);
+            }
+            BufferFormat format = BufferFormat.forArray(typeCode, lengthNode, atIndexNode);
+            if (format == null) {
+                throw raise.raise(inliningTarget, ValueError, ErrorMessages.BAD_TYPECODE);
+            }
+            return valueProfile.profile(format);
+        }
+    }
+
     @GenerateInline
     @GenerateUncached(false)
     @GenerateCached(false)
@@ -102,32 +131,39 @@ public abstract class ArrayNodes {
     }
 
     @GenerateInline
+    @GenerateUncached
     @GenerateCached(false)
     public abstract static class EnsureCapacityNode extends Node {
         public abstract void execute(Node inliningTarget, PArray array, int newCapacity);
 
+        @TruffleBoundary
+        public static void executeUncached(PArray array, int newCapacity) {
+            ArrayNodesFactory.EnsureCapacityNodeGen.getUncached().execute(null, array, newCapacity);
+        }
+
         @Specialization
         static void ensure(Node inliningTarget, PArray array, int newCapacity,
-                        @Cached SequenceStorageNodes.EnsureCapacityNode ensureCapacityNode,
-                        @Cached InlinedBranchProfile updateProfile) {
+                        @Cached SequenceStorageNodes.EnsureCapacityNode ensureCapacityNode) {
             try {
                 int internalCapacity = PythonUtils.multiplyExact(newCapacity, array.getItemSize());
-                SequenceStorage newStorage = ensureCapacityNode.execute(inliningTarget, array.getSequenceStorage(), internalCapacity);
-                if (array.getSequenceStorage() != newStorage) {
-                    updateProfile.enter(inliningTarget);
-                    array.setSequenceStorage(newStorage);
-                }
+                ensureCapacityNode.execute(inliningTarget, array.getSequenceStorage(), internalCapacity);
             } catch (OverflowException e) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                PRaiseNode.raiseUncached(inliningTarget, PythonBuiltinClassType.MemoryError);
+                PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.MemoryError);
             }
         }
     }
 
     @GenerateInline
+    @GenerateUncached
     @GenerateCached(false)
     public abstract static class SetLengthNode extends Node {
         public abstract void execute(Node inliningTarget, PArray array, int newLength);
+
+        @TruffleBoundary
+        public static void executeUncached(PArray array, int newLength) {
+            ArrayNodesFactory.SetLengthNodeGen.getUncached().execute(null, array, newLength);
+        }
 
         @Specialization
         static void set(Node inliningTarget, PArray array, int newLength,
@@ -137,7 +173,7 @@ public abstract class ArrayNodes {
                 setLenNode.execute(inliningTarget, array.getSequenceStorage(), internalLength);
             } catch (OverflowException e) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                PRaiseNode.raiseUncached(inliningTarget, PythonBuiltinClassType.MemoryError);
+                PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.MemoryError);
             }
         }
     }
@@ -177,23 +213,29 @@ public abstract class ArrayNodes {
                 setLengthNode.execute(inliningTarget, array, newLength);
             } catch (OverflowException e) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                PRaiseNode.raiseUncached(inliningTarget, PythonBuiltinClassType.MemoryError);
+                PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.MemoryError);
             }
         }
     }
 
     @GenerateInline
     @GenerateCached(false)
+    @GenerateUncached
     public abstract static class EnsureNativeStorageNode extends Node {
         public abstract NativeByteSequenceStorage execute(Node inliningTarget, PArray array);
 
+        @TruffleBoundary
+        public static NativeByteSequenceStorage executeUncached(PArray array) {
+            return ArrayNodesFactory.EnsureNativeStorageNodeGen.getUncached().execute(null, array);
+        }
+
         @Specialization
-        NativeByteSequenceStorage toNative(PArray array,
-                        @Cached(inline = false) SequenceStorageNodes.StorageToNativeNode storageToNativeNode) {
+        static NativeByteSequenceStorage toNative(Node inliningTarget, PArray array,
+                        @Cached SequenceStorageNodes.StorageToNativeNode storageToNativeNode) {
             if (array.getSequenceStorage() instanceof NativeByteSequenceStorage storage) {
                 return storage;
             } else if (array.getSequenceStorage() instanceof ByteSequenceStorage storage) {
-                NativeByteSequenceStorage nativeStorage = (NativeByteSequenceStorage) storageToNativeNode.execute(storage.getInternalByteArray(), storage.length());
+                NativeByteSequenceStorage nativeStorage = storageToNativeNode.executeBytes(inliningTarget, storage.getInternalByteArray(), storage.length());
                 array.setSequenceStorage(nativeStorage);
                 return nativeStorage;
             } else {

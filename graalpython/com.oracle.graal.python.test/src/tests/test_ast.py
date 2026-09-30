@@ -1,4 +1,4 @@
-# Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@ import unittest
 import _ast
 import ast
 import sys
+import types
 
 
 class BytesSubclass(bytes):
@@ -102,7 +103,7 @@ class AstTest(unittest.TestCase):
         class Node(_ast.AST):
             _fields = ('a', 'b')
 
-        self.assertEqual((Node, (), {'a': 41, 'b': 42}), Node(41, 42).__reduce__())
+        self.assertEqual((Node, (None, None), {'a': 41, 'b': 42}), Node(41, 42).__reduce__())
         self.assertEqual((_ast.AST, (), {}), _ast.AST().__reduce__())
 
     def test_dict_can_be_set(self):
@@ -127,11 +128,17 @@ class AstTest(unittest.TestCase):
 
     def test_non_string_fields(self):
         class Node(_ast.AST):
-            _fields = (42, [], 'a')
+            _fields = (42, 'a')
 
         self.assertEqual(1, Node(a=1).a)
         with self.assertRaisesRegex(TypeError, "must be string"):
             Node(1)
+
+        class UnhashableFieldsNode(_ast.AST):
+            _fields = ([], 'a')
+
+        with self.assertRaisesRegex(TypeError, "unhashable type: 'list'"):
+            UnhashableFieldsNode(a=1)
 
     def test_bytes_constant_kind(self):
         src = "x = u'abc'"
@@ -181,6 +188,31 @@ class AstTest(unittest.TestCase):
         exec(compile(tree, '<string>', 'exec'), vars)
         self.assertEqual("u'abc'", vars['f'].__annotations__['x'])
 
+    def test_parse_unicode(self):
+        self.assertEqual(ast.parse("𝕦𝕟𝕚𝕔𝕠𝕕𝕖").body[0].value.id, 'unicode')
+
+    def test_parse_empty_module(self):
+        m = ast.Module(body=[], type_ignores=[])
+        m = ast.fix_missing_locations(m)
+        code = compile(m, '1+1', 'exec')
+        assert code is not None
+        assert eval(code) is None
+        assert isinstance(code, types.CodeType)
+
+    def test_compile_match_singleton_none(self):
+        # This occurs in pytest-generated ASTs
+        m = ast.Module(
+            body=[
+                ast.Match(
+                    subject=ast.Name("v", ast.Load()),
+                    cases=[ast.match_case(pattern=ast.MatchSingleton(None), body=[ast.Pass()])],
+                )
+            ],
+            type_ignores=[],
+        )
+        m = ast.fix_missing_locations(m)
+        code = compile(m, "<test>", "exec")
+        assert isinstance(code, types.CodeType)
 
 if __name__ == '__main__':
     unittest.main()

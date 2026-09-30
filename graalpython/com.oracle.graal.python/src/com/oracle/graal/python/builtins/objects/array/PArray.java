@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -26,10 +26,8 @@
 package com.oracle.graal.python.builtins.objects.array;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.BufferError;
-import static com.oracle.graal.python.util.BufferFormat.T_UNICODE_TYPE_CODE_U;
 import static com.oracle.graal.python.util.BufferFormat.T_UNICODE_TYPE_CODE_W;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_BYTE_ARRAY;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.nio.ByteOrder;
@@ -37,17 +35,29 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAcquireLibrary;
+import com.oracle.graal.python.builtins.objects.cext.capi.PySequenceArrayWrapper;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.interop.PForeignToPTypeNode;
+import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.sequence.storage.ByteSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.NativeByteSequenceStorage;
+import com.oracle.graal.python.runtime.sequence.storage.NativeSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.BufferFormat;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.dsl.Bind;
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
@@ -56,9 +66,9 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
 
-// TODO interop library
 @ExportLibrary(PythonBufferAcquireLibrary.class)
 @ExportLibrary(PythonBufferAccessLibrary.class)
+@ExportLibrary(InteropLibrary.class)
 public final class PArray extends PythonBuiltinObject {
     private final BufferFormat format;
     private final TruffleString formatString;
@@ -74,11 +84,11 @@ public final class PArray extends PythonBuiltinObject {
         this.storage = new ByteSequenceStorage(EMPTY_BYTE_ARRAY);
     }
 
-    public PArray(Object clazz, Shape instanceShape, TruffleString formatString, BufferFormat format, int length) throws OverflowException {
+    public PArray(Object clazz, Shape instanceShape, TruffleString formatString, BufferFormat format, int byteSize) {
         super(clazz, instanceShape);
         this.formatString = formatString;
         this.format = format;
-        this.storage = new ByteSequenceStorage(new byte[PythonUtils.multiplyExact(length, format.bytesize)]);
+        this.storage = new ByteSequenceStorage(new byte[byteSize]);
     }
 
     public BufferFormat getFormat() {
@@ -92,7 +102,7 @@ public final class PArray extends PythonBuiltinObject {
 
     @ExportMessage(name = "getFormatString")
     public TruffleString getFormatStringForBuffer() {
-        if (T_UNICODE_TYPE_CODE_U.equalsUncached(formatString, TS_ENCODING)) {
+        if (format == BufferFormat.UNICODE_U) {
             return T_UNICODE_TYPE_CODE_W;
         }
         return formatString;
@@ -128,9 +138,9 @@ public final class PArray extends PythonBuiltinObject {
         return exports;
     }
 
-    public void checkCanResize(Node inliningTarget, PRaiseNode.Lazy raiseNode) {
+    public void checkCanResize(Node inliningTarget, PRaiseNode raiseNode) {
         if (exports.get() != 0) {
-            throw raiseNode.get(inliningTarget).raise(BufferError, ErrorMessages.EXPORTS_CANNOT_RESIZE);
+            throw raiseNode.raise(inliningTarget, BufferError, ErrorMessages.EXPORTS_CANNOT_RESIZE);
         }
     }
 
@@ -157,11 +167,11 @@ public final class PArray extends PythonBuiltinObject {
         IEEE_754_FLOAT_BE(15, BufferFormat.FLOAT, ByteOrder.BIG_ENDIAN),
         IEEE_754_DOUBLE_LE(16, BufferFormat.DOUBLE, ByteOrder.LITTLE_ENDIAN),
         IEEE_754_DOUBLE_BE(17, BufferFormat.DOUBLE, ByteOrder.BIG_ENDIAN),
-        UTF32_LE(20, BufferFormat.UNICODE, ByteOrder.LITTLE_ENDIAN, tsLiteral("utf-32-le")),
-        UTF32_BE(21, BufferFormat.UNICODE, ByteOrder.BIG_ENDIAN, tsLiteral("utf-32-be")),
-        // These two need to come after UTF32, so that forFormat doesn't pick them for UNICODE
-        UTF16_LE(18, BufferFormat.UNICODE, ByteOrder.LITTLE_ENDIAN, tsLiteral("utf-16-le")),
-        UTF16_BE(19, BufferFormat.UNICODE, ByteOrder.BIG_ENDIAN, tsLiteral("utf-16-be"));
+        UTF32_LE(20, BufferFormat.UNICODE_W, ByteOrder.LITTLE_ENDIAN, tsLiteral("utf-32-le")),
+        UTF32_BE(21, BufferFormat.UNICODE_W, ByteOrder.BIG_ENDIAN, tsLiteral("utf-32-be")),
+        // These two need to come after UTF32, so that forFormat doesn't pick them for Unicode
+        UTF16_LE(18, BufferFormat.UNICODE_W, ByteOrder.LITTLE_ENDIAN, tsLiteral("utf-16-le")),
+        UTF16_BE(19, BufferFormat.UNICODE_W, ByteOrder.BIG_ENDIAN, tsLiteral("utf-16-be"));
 
         public final int code;
         public final BufferFormat format;
@@ -196,6 +206,9 @@ public final class PArray extends PythonBuiltinObject {
         }
 
         public static MachineFormat forFormat(BufferFormat format) {
+            if (BufferFormat.isUnicode(format)) {
+                return BY_BUFFER_FORMAT[BufferFormat.UNICODE_W.ordinal()];
+            }
             return BY_BUFFER_FORMAT[format.ordinal()];
         }
 
@@ -263,62 +276,165 @@ public final class PArray extends PythonBuiltinObject {
     }
 
     @ExportMessage
-    short readShort(int byteOffset,
+    short readShortByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readShort(storage, byteOffset);
+        return bufferLib.readShortByteOrder(storage, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    void writeShort(int byteOffset, short value,
+    void writeShortByteOrder(int byteOffset, short value, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeShort(storage, byteOffset, value);
+        bufferLib.writeShortByteOrder(storage, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    int readInt(int byteOffset,
+    int readIntByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readInt(storage, byteOffset);
+        return bufferLib.readIntByteOrder(storage, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    void writeInt(int byteOffset, int value,
+    void writeIntByteOrder(int byteOffset, int value, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeInt(storage, byteOffset, value);
+        bufferLib.writeIntByteOrder(storage, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    long readLong(int byteOffset,
+    long readLongByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readLong(storage, byteOffset);
+        return bufferLib.readLongByteOrder(storage, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    void writeLong(int byteOffset, long value,
+    void writeLongByteOrder(int byteOffset, long value, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeLong(storage, byteOffset, value);
+        bufferLib.writeLongByteOrder(storage, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    float readFloat(int byteOffset,
+    float readFloatByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readFloat(storage, byteOffset);
+        return bufferLib.readFloatByteOrder(storage, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    void writeFloat(int byteOffset, float value,
+    void writeFloatByteOrder(int byteOffset, float value, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeFloat(storage, byteOffset, value);
+        bufferLib.writeFloatByteOrder(storage, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    double readDouble(int byteOffset,
+    double readDoubleByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readDouble(storage, byteOffset);
+        return bufferLib.readDoubleByteOrder(storage, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    void writeDouble(int byteOffset, double value,
+    void writeDoubleByteOrder(int byteOffset, double value, ByteOrder byteOrder,
                     @Shared @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeDouble(storage, byteOffset, value);
+        bufferLib.writeDoubleByteOrder(storage, byteOffset, value, byteOrder);
+    }
+
+    @ExportMessage
+    public boolean hasArrayElements() {
+        return true;
+    }
+
+    @ExportMessage
+    public long getArraySize() {
+        return storage.length();
+    }
+
+    @ExportMessage
+    public Object readArrayElement(long index,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItem,
+                    @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
+        boolean mustRelease = gil.acquire();
+        try {
+            try {
+                return getItem.execute(inliningTarget, storage, PInt.intValueExact(index));
+            } catch (OverflowException e) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw InvalidArrayIndexException.create(index);
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public void writeArrayElement(long index, Object value,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceStorageNodes.SetItemScalarNode setItem,
+                    @Exclusive @Cached PForeignToPTypeNode convert,
+                    @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
+        boolean mustRelease = gil.acquire();
+        try {
+            try {
+                setItem.execute(inliningTarget, storage, PInt.intValueExact(index), convert.executeConvert(value));
+            } catch (OverflowException e) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw InvalidArrayIndexException.create(index);
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public void removeArrayElement(long index,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceStorageNodes.DeleteItemNode delItem,
+                    @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
+        boolean mustRelease = gil.acquire();
+        try {
+            try {
+                delItem.execute(inliningTarget, storage, PInt.intValueExact(index));
+            } catch (OverflowException e) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw InvalidArrayIndexException.create(index);
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    private boolean isInBounds(long idx) {
+        return 0 <= idx && idx < storage.length();
+    }
+
+    @ExportMessage
+    public boolean isArrayElementReadable(long idx) {
+        return isInBounds(idx);
+    }
+
+    @ExportMessage
+    public boolean isArrayElementModifiable(long idx) {
+        return isInBounds(idx);
+    }
+
+    @ExportMessage
+    public boolean isArrayElementInsertable(long idx) {
+        return !isInBounds(idx);
+    }
+
+    @ExportMessage
+    public boolean isArrayElementRemovable(long idx) {
+        return isInBounds(idx);
+    }
+
+    @ExportMessage(library = PythonBufferAccessLibrary.class, name = "isNative")
+    boolean isNativeStorage() {
+        return storage instanceof NativeByteSequenceStorage;
+    }
+
+    @ExportMessage
+    long getNativePointer(
+                    @Bind Node inliningTarget,
+                    @Cached PySequenceArrayWrapper.ToNativeStorageNode toNativeStorageNode) {
+        NativeSequenceStorage newStorage = toNativeStorageNode.execute(inliningTarget, storage, true);
+        setSequenceStorage(newStorage);
+        return newStorage.getPtr();
     }
 }

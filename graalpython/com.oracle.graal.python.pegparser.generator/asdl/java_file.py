@@ -1,4 +1,4 @@
-# Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,10 +39,11 @@
 import os
 import textwrap
 from contextlib import contextmanager
+from io import StringIO
 from typing import Optional
 
 HEADER = """/*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -131,8 +132,40 @@ class Emitter:
 def create(out_dir_base: str, java_package: str, java_class_name: str):
     sst_dir = os.path.join(out_dir_base, *java_package.split('.'))
     os.makedirs(sst_dir, exist_ok=True)
-    with open(os.path.join(sst_dir, java_class_name + '.java'), 'w') as f:
-        emitter = Emitter(f)
-        f.write(HEADER)
-        f.write(f'package {java_package};\n')
-        yield emitter
+    filename = os.path.join(sst_dir, java_class_name + '.java')
+
+    # Determine which line separator to use
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8", newline=os.linesep) as f:
+            old_content = f.read()
+        if os.linesep != "\n":
+            if old_content.replace(os.linesep, "\n") == old_content:
+                # Windows file has Unix line endings
+                linesep = "\n"
+            else:
+                linesep = os.linesep
+        else:
+            linesep = "\n"
+    else:
+        old_content = None
+        linesep = os.linesep
+
+    # Generate content in memory so we can compare with existing content and avoid
+    # rewriting unchanged files (e.g. in case of a read-only source filesystem).
+    buf = StringIO(newline=linesep)
+    emitter = Emitter(buf)
+    buf.write(HEADER)
+    buf.write(f'package {java_package};\n')
+
+    yield emitter
+
+    generated = buf.getvalue()
+
+    if old_content is not None and old_content == generated:
+        # Not modified.
+        return
+
+    # Content differs (or file is missing). Now try to update the real file.
+    # If the source filesystem is read-only, this will fail.
+    with open(filename, "w", encoding="utf-8", newline=linesep) as f:
+        f.write(generated)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,6 @@
  */
 package com.oracle.graal.python.runtime.formatting;
 
-import com.oracle.graal.python.builtins.objects.complex.PComplex;
 import com.oracle.graal.python.runtime.formatting.InternalFormat.Spec;
 import com.oracle.truffle.api.nodes.Node;
 
@@ -54,7 +53,7 @@ public class ComplexFormatter extends InternalFormat.Formatter {
         Spec imSpec;
         if (hasNoSpecType()) {
             // no type spec: should be like the default __str__
-            reSpec = getComponentSpecForNoSpecType(spec, InternalFormat.Spec.NONE);
+            reSpec = getComponentSpecForNoSpecType(spec, spec.sign);
             imSpec = getComponentSpecForNoSpecType(spec, '+');
         } else {
             // Turn off any flags that should apply to the result as a whole and not to the
@@ -76,6 +75,7 @@ public class ComplexFormatter extends InternalFormat.Formatter {
                         '\0', // (fill)
                         '<', // (align)
                         sign, //
+                        spec.noNegativeZero, //
                         spec.alternate, //
                         -1, // (width)
                         spec.grouping, //
@@ -88,20 +88,14 @@ public class ComplexFormatter extends InternalFormat.Formatter {
         // are printed without the decimal part, which is mostly what "g" does
         int precision = spec.precision;
         char type = 'r';
-        if (precision < 0) {
-            precision = 0;
-        } else {
+        if (precision >= 0) {
             type = 'g';
         }
-        return new InternalFormat.Spec(' ', '>', sign, false, InternalFormat.Spec.UNSPECIFIED, Spec.NONE, precision, type);
+        return new InternalFormat.Spec(' ', '>', sign, spec.noNegativeZero, spec.alternate, InternalFormat.Spec.UNSPECIFIED, spec.grouping, precision, type);
     }
 
     private boolean hasNoSpecType() {
         return spec.getType('\0') == '\0';
-    }
-
-    public ComplexFormatter format(PComplex value) {
-        return format(value.getReal(), value.getImag());
     }
 
     public ComplexFormatter format(double real, double imag) {

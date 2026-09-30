@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,18 +48,20 @@ import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecM
 import static com.oracle.graal.python.nodes.ErrorMessages.CODEC_IS_UNEXPECTED_TYPE;
 import static com.oracle.graal.python.nodes.ErrorMessages.PENDING_BUFFER_OVERFLOW;
 import static com.oracle.graal.python.nodes.ErrorMessages.PENDING_BUFFER_TOO_LARGE;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.MemoryError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.UnicodeError;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -68,10 +70,12 @@ import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
+import com.oracle.graal.python.nodes.HiddenAttr;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromDynamicObjectNode;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToDynamicObjectNode;
+import com.oracle.graal.python.nodes.StringLiterals;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
@@ -80,7 +84,7 @@ import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -89,41 +93,41 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = MultibyteIncrementalDecoder)
 public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = MultibyteIncrementalDecoderBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
-        return MultibyteStreamWriterBuiltinsFactory.getFactories();
+        return MultibyteIncrementalDecoderBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 1, parameterNames = {"$cls", "errors"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, parameterNames = {"$cls", "errors"})
     @GenerateNodeFactory
     protected abstract static class NewNode extends PythonBinaryBuiltinNode {
 
-        private static final TruffleString CODEC = tsLiteral("codec");
-
         @Specialization
         static Object mbstreamreaderNew(VirtualFrame frame, Object type, Object err,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode castToStringNode,
                         @Cached PyObjectGetAttr getAttr,
                         @Cached TruffleString.EqualNode isEqual,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) { // "|s:IncrementalDecoder"
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) { // "|s:IncrementalDecoder"
             TruffleString errors = null;
             if (err != PNone.NO_VALUE) {
                 errors = castToStringNode.execute(inliningTarget, err);
             }
 
-            MultibyteIncrementalDecoderObject self = factory.createMultibyteIncrementalDecoderObject(type);
+            MultibyteIncrementalDecoderObject self = PFactory.createMultibyteIncrementalDecoderObject(type, getInstanceShape.execute(type));
 
-            Object codec = getAttr.execute(frame, inliningTarget, type, CODEC);
+            Object codec = getAttr.execute(frame, inliningTarget, type, StringLiterals.T_CODEC);
             if (!(codec instanceof MultibyteCodecObject)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, CODEC_IS_UNEXPECTED_TYPE);
+                throw raiseNode.raise(inliningTarget, TypeError, CODEC_IS_UNEXPECTED_TYPE);
             }
 
             self.codec = ((MultibyteCodecObject) codec).codec;
@@ -134,7 +138,8 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self"})
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "MultibyteIncrementalDecoder", minNumOfPositionalArgs = 1, parameterNames = {"$self"})
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonUnaryBuiltinNode {
 
@@ -162,9 +167,9 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
         // _multibytecodec_MultibyteIncrementalDecoder_decode_impl
         @Specialization
         static Object decode(VirtualFrame frame, MultibyteIncrementalDecoderObject self, byte[] input, int end,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached MultibyteCodecUtil.DecodeErrorNode decodeErrorNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             byte[] data = input;
             int size = input.length;
 
@@ -174,7 +179,7 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
             byte[] wdata = data;
             if (self.pendingsize != 0) {
                 if (size > MAXSIZE - self.pendingsize) {
-                    throw raiseNode.get(inliningTarget).raise(MemoryError);
+                    throw raiseNode.raise(inliningTarget, MemoryError);
                 }
                 wsize = size + self.pendingsize;
                 wdata = new byte[wsize];
@@ -208,11 +213,11 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
 
         static int decoderAppendPending(Node inliningTarge, MultibyteStatefulDecoderContext ctx,
                         MultibyteDecodeBuffer buf,
-                        PRaiseNode.Lazy raiseNode) {
+                        PRaiseNode raiseNode) {
             int npendings = buf.remaining();
             if (npendings + ctx.pendingsize > MAXDECPENDING ||
                             npendings > MAXSIZE - ctx.pendingsize) {
-                throw raiseNode.get(inliningTarge).raise(UnicodeError, PENDING_BUFFER_OVERFLOW);
+                throw raiseNode.raise(inliningTarge, UnicodeError, PENDING_BUFFER_OVERFLOW);
             }
             buf.getRemaining(ctx.pending, ctx.pendingsize, npendings);
             ctx.pendingsize += npendings;
@@ -236,20 +241,20 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
 
     }
 
-    public static final HiddenKey DECODER_OBJECT_ATTR = new HiddenKey("decoder_object");
-
     @Builtin(name = "getstate", minNumOfPositionalArgs = 1, parameterNames = {"$self"}, doc = "getstate($self, /)\n--\n\n")
     @GenerateNodeFactory
     abstract static class GetStateNode extends PythonUnaryBuiltinNode {
 
         // _multibytecodec_MultibyteIncrementalDecoder_getstate_impl
+        @Specialization
         static Object getstate(MultibyteIncrementalDecoderObject self,
-                        @Cached WriteAttributeToDynamicObjectNode writeAttrNode,
-                        @Cached PythonObjectFactory factory) {
-            PBytes buffer = factory.createBytes(Arrays.copyOf(self.pending, self.pendingsize));
-            PInt statelong = factory.createInt(0);
-            writeAttrNode.execute(statelong, DECODER_OBJECT_ATTR, self.state);
-            return factory.createTuple(new Object[]{buffer, statelong});
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached HiddenAttr.WriteNode writeHiddenAttrNode) {
+            PBytes buffer = PFactory.createBytes(language, Arrays.copyOf(self.pending, self.pendingsize));
+            PInt statelong = PFactory.createInt(language, BigInteger.ZERO);
+            writeHiddenAttrNode.execute(inliningTarget, statelong, HiddenAttr.DECODER_OBJECT, self.state);
+            return PFactory.createTuple(language, new Object[]{buffer, statelong});
         }
     }
 
@@ -264,12 +269,13 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
         }
 
         // _multibytecodec_MultibyteIncrementalDecoder_setstate_impl
+        @Specialization
         static Object setstate(VirtualFrame frame, MultibyteIncrementalDecoderObject self, PTuple state,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ReadAttributeFromDynamicObjectNode readAttrNode,
+                        @Bind Node inliningTarget,
+                        @Cached HiddenAttr.ReadNode readHiddenAttrNode,
                         @Cached BytesNodes.ToBytesNode toBytesNode,
                         @Cached SequenceStorageNodes.GetInternalObjectArrayNode getArray,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Object[] array = getArray.execute(inliningTarget, state.getSequenceStorage());
             Object buffer = array[0];
             Object statelong = array[1];
@@ -277,18 +283,20 @@ public final class MultibyteIncrementalDecoderBuiltins extends PythonBuiltins {
             byte[] bufferstr = toBytesNode.execute(frame, buffer);
             int buffersize = bufferstr.length;
             if (buffersize > MAXDECPENDING) {
-                throw raiseNode.get(inliningTarget).raise(UnicodeError, PENDING_BUFFER_TOO_LARGE);
+                throw raiseNode.raise(inliningTarget, UnicodeError, PENDING_BUFFER_TOO_LARGE);
             }
 
             self.pendingsize = buffersize;
             PythonUtils.arraycopy(bufferstr, 0, self.pending, 0, self.pendingsize);
-            Object s = readAttrNode.execute(statelong, DECODER_OBJECT_ATTR);
-            if (s == PNone.NO_VALUE) {
-                self.state = null;
+            Object s;
+            if (statelong instanceof PInt) {
+                s = readHiddenAttrNode.execute(inliningTarget, (PInt) statelong, HiddenAttr.DECODER_OBJECT, null);
             } else {
-                assert s instanceof MultibyteCodecState : "Not MultibyteCodecState object!";
-                self.state = (MultibyteCodecState) s;
+                // GetStateNode sets DECODER_OBJECT only on PInt, so for others it must be absent
+                s = null;
             }
+            assert s == null || s instanceof MultibyteCodecState : "Not MultibyteCodecState object!";
+            self.state = (MultibyteCodecState) s;
             // PythonUtils.arraycopy(statebytes, 0, self.state.c, 0, MULTIBYTECODECSTATE);
 
             return PNone.NONE;

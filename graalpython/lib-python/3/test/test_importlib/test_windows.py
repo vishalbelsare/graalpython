@@ -1,15 +1,14 @@
-from . import util as test_util
+from test.test_importlib import util as test_util
 machinery = test_util.import_importlib('importlib.machinery')
 
 import os
 import re
 import sys
 import unittest
-import warnings
 from test import support
 from test.support import import_helper
 from contextlib import contextmanager
-from .util import temp_module
+from test.test_importlib.util import temp_module
 
 import_helper.import_module('winreg', required_on=['win'])
 from winreg import (
@@ -93,30 +92,16 @@ class WindowsRegistryFinderTests:
 
     def test_find_spec_missing(self):
         spec = self.machinery.WindowsRegistryFinder.find_spec('spam')
-        self.assertIs(spec, None)
-
-    def test_find_module_missing(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            loader = self.machinery.WindowsRegistryFinder.find_module('spam')
-        self.assertIs(loader, None)
+        self.assertIsNone(spec)
 
     def test_module_found(self):
         with setup_module(self.machinery, self.test_module):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                loader = self.machinery.WindowsRegistryFinder.find_module(self.test_module)
             spec = self.machinery.WindowsRegistryFinder.find_spec(self.test_module)
-            self.assertIsNot(loader, None)
-            self.assertIsNot(spec, None)
+            self.assertIsNotNone(spec)
 
     def test_module_not_found(self):
         with setup_module(self.machinery, self.test_module, path="."):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                loader = self.machinery.WindowsRegistryFinder.find_module(self.test_module)
             spec = self.machinery.WindowsRegistryFinder.find_spec(self.test_module)
-            self.assertIsNone(loader)
             self.assertIsNone(spec)
 
 (Frozen_WindowsRegistryFinderTests,
@@ -127,8 +112,10 @@ class WindowsRegistryFinderTests:
 class WindowsExtensionSuffixTests:
     def test_tagged_suffix(self):
         suffixes = self.machinery.EXTENSION_SUFFIXES
-        expected_tag = ".cp{0.major}{0.minor}-{1}.pyd".format(sys.version_info,
-            re.sub('[^a-zA-Z0-9]', '_', get_platform()))
+        abi_flags = "t" if support.Py_GIL_DISABLED else ""
+        ver = sys.version_info
+        platform = re.sub('[^a-zA-Z0-9]', '_', get_platform())
+        expected_tag = f".cp{ver.major}{ver.minor}{abi_flags}-{platform}.pyd"
         try:
             untagged_i = suffixes.index(".pyd")
         except ValueError:
@@ -189,3 +176,6 @@ class WindowsBootstrapPathTests(unittest.TestCase):
         self.check_join("C:", "C:", "")
         self.check_join("//Server/Share\\", "//Server/Share/", "")
         self.check_join("//Server/Share\\", "//Server/Share", "")
+
+if __name__ == '__main__':
+    unittest.main()

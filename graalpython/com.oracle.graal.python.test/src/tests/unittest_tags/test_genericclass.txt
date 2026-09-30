@@ -1,22 +1,21 @@
-*graalpython.lib-python.3.test.test_genericclass.CAPITest.test_c_class
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_classmethod
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_errors
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_errors_2
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_format
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_inheritance
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_inheritance_2
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_metaclass
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_metaclass_first
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_patched
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_with_builtins
-*graalpython.lib-python.3.test.test_genericclass.TestClassGetitem.test_class_getitem_with_metaclass
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_errors
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_errors_2
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_metaclass
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_none
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_signature
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_type_call
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_with_builtins
-*graalpython.lib-python.3.test.test_genericclass.TestMROEntry.test_mro_entry_with_builtins_2
+test.test_genericclass.TestClassGetitem.test_class_getitem @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_classmethod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_errors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_errors_2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_format @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_inheritance @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_inheritance_2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_metaclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_metaclass_first @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_patched @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_with_builtins @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestClassGetitem.test_class_getitem_with_metaclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_errors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_errors_2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_metaclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_none @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_signature @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_type_call @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_with_builtins @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericclass.TestMROEntry.test_mro_entry_with_builtins_2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

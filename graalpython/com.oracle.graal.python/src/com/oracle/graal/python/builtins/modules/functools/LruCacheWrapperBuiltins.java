@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,25 +42,25 @@ package com.oracle.graal.python.builtins.modules.functools;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.builtins.modules.functools.FunctoolsModuleBuiltins.KWD_MARK;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_FUNCTOOLS;
 import static com.oracle.graal.python.nodes.ErrorMessages.MAXSIZE_SHOULD_BE_INTEGER_OR_NONE;
 import static com.oracle.graal.python.nodes.ErrorMessages.THE_FIRST_ARGUMENT_MUST_BE_CALLABLE;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DICT__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___QUALNAME__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CALL__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLEAR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___COPY__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___DEEPCOPY__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GET__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -70,6 +70,9 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.DescrGetBuiltinNode;
 import com.oracle.graal.python.lib.PyCallableCheckNode;
 import com.oracle.graal.python.lib.PyIndexCheckNode;
 import com.oracle.graal.python.lib.PyLongCheckExactNode;
@@ -80,12 +83,10 @@ import com.oracle.graal.python.lib.PyUnicodeCheckExactNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
-import com.oracle.graal.python.nodes.call.special.CallVarargsMethodNode;
+import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
@@ -93,11 +94,12 @@ import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
 import com.oracle.graal.python.nodes.object.SetDictNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -107,27 +109,16 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PLruCacheWrapper)
 public final class LruCacheWrapperBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = LruCacheWrapperBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return LruCacheWrapperBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 5, takesVarArgs = true, takesVarKeywordArgs = true, //
-                    constructsClass = PythonBuiltinClassType.PLruCacheWrapper, //
-                    parameterNames = {"$cls", "user_function", "maxsize", "typed", "cache_info_type"}, //
-                    doc = "Create a cached callable that wraps another function.\n" + //
-                                    "\n" + //
-                                    "user_function:      the function being cached\n" + //
-                                    "\n" + //
-                                    "maxsize:  0         for no caching\n" + //
-                                    "          None      for unlimited cache size\n" + //
-                                    "          n         for a bounded cache\n" + //
-                                    "\n" + //
-                                    "typed:    False     cache f(3) and f(3.0) as identical calls\n" + //
-                                    "          True      cache f(3) and f(3.0) as distinct calls\n" + //
-                                    "\n" + //
-                                    "cache_info_type:    namedtuple class with the fields:\n" + //
-                                    "                       hits misses currsize maxsize\n")
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "lru_cache", minNumOfPositionalArgs = 5, takesVarArgs = true, takesVarKeywordArgs = true, //
+                    parameterNames = {"$cls", "user_function", "maxsize", "typed", "cache_info_type"})
     @ArgumentClinic(name = "typed", conversion = ClinicConversion.Int)
     @GenerateNodeFactory
     protected abstract static class LruCacheNewNode extends PythonClinicBuiltinNode {
@@ -140,16 +131,15 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
         @Specialization
         static Object lruCacheNew(VirtualFrame frame, Object type,
                         Object func, Object maxsize_O, int typed, Object cache_info_type,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ReadAttributeFromObjectNode readAttr,
+                        @Bind Node inliningTarget,
                         @Cached PyCallableCheckNode callableCheck,
                         @Cached PyIndexCheckNode indexCheck,
                         @Cached PyNumberAsSizeNode numberAsSize,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
 
             if (!callableCheck.execute(inliningTarget, func)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, THE_FIRST_ARGUMENT_MUST_BE_CALLABLE);
+                throw raiseNode.raise(inliningTarget, TypeError, THE_FIRST_ARGUMENT_MUST_BE_CALLABLE);
             }
 
             /* select the caching function, and make/inc maxsize_O */
@@ -170,10 +160,11 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                     wrapper = WrapperType.BOUNDED;
                 }
             } else {
-                throw raiseNode.get(inliningTarget).raise(TypeError, MAXSIZE_SHOULD_BE_INTEGER_OR_NONE);
+                throw raiseNode.raise(inliningTarget, TypeError, MAXSIZE_SHOULD_BE_INTEGER_OR_NONE);
             }
 
-            LruCacheObject obj = factory.createLruCacheObject(type);
+            PythonContext context = PythonContext.get(inliningTarget);
+            LruCacheObject obj = PFactory.createLruCacheObject(context.getLanguage(inliningTarget), type, getInstanceShape.execute(type));
 
             obj.root.prev = obj.root;
             obj.root.next = obj.root;
@@ -185,7 +176,7 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
             obj.misses = obj.hits = 0;
             obj.maxsize = maxsize;
 
-            obj.kwdMark = readAttr.execute(PythonContext.get(inliningTarget).lookupBuiltinModule(T_FUNCTOOLS), KWD_MARK);
+            obj.kwdMark = context.lookupBuiltinModule(T_FUNCTOOLS).getModuleState(Object.class);
 
             obj.cacheInfoType = cache_info_type;
             // obj.dict = null;
@@ -199,15 +190,9 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
     public abstract static class CacheInfoNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object info(VirtualFrame frame, LruCacheObject self,
-                        @Cached CallVarargsMethodNode callNode) {
-            if (self.maxsize == -1) {
-                return callNode.execute(frame, self.cacheInfoType,
-                                new Object[]{self.hits, self.misses, PNone.NONE, self.cache.size()},
-                                PKeyword.EMPTY_KEYWORDS);
-            }
-            return callNode.execute(frame, self.cacheInfoType,
-                            new Object[]{self.hits, self.misses, self.maxsize, self.cache.size()},
-                            PKeyword.EMPTY_KEYWORDS);
+                        @Cached CallNode callNode) {
+            Object maxsize = self.maxsize == -1 ? PNone.NONE : self.maxsize;
+            return callNode.execute(frame, self.cacheInfoType, self.hits, self.misses, maxsize, self.cache.size());
         }
     }
 
@@ -238,14 +223,14 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
     public abstract static class LruDictNode extends PythonBinaryBuiltinNode {
         @Specialization(guards = "isNoValue(mapping)")
         static Object getDict(LruCacheObject self, @SuppressWarnings("unused") PNone mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetOrCreateDictNode getDict) {
             return getDict.execute(inliningTarget, self);
         }
 
         @Specialization
         static Object setDict(LruCacheObject self, PDict mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached SetDictNode setDict) {
             setDict.execute(inliningTarget, self, mapping);
             return PNone.NONE;
@@ -253,8 +238,8 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!isNoValue(mapping)", "!isDict(mapping)"})
         static Object setDict(@SuppressWarnings("unused") LruCacheObject self, Object mapping,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
         }
     }
 
@@ -263,20 +248,21 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
     public abstract static class PartialReduceNode extends PythonUnaryBuiltinNode {
         @Specialization
         Object reduce(VirtualFrame frame, LruCacheObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetAttr getQualname) {
             return getQualname.execute(frame, inliningTarget, self, T___QUALNAME__);
         }
     }
 
-    @Builtin(name = J___CALL__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_call, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     protected abstract static class PartialCallNode extends PythonVarargsBuiltinNode {
 
         // uncached_lru_cache_wrapper
         @Specialization(guards = "self.isUncached()")
         static Object uncachedLruCacheWrapper(VirtualFrame frame, LruCacheObject self, Object[] args, PKeyword[] kwds,
-                        @Shared @Cached CallVarargsMethodNode callNode) {
+                        @Shared @Cached CallNode callNode) {
             self.misses++;
             return callNode.execute(frame, self.func, args, kwds);
         }
@@ -286,8 +272,7 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                         Node inliningTarget,
                         GetClassNode getClassNode,
                         PyUnicodeCheckExactNode unicodeCheckExact,
-                        PyLongCheckExactNode longCheckExact,
-                        PythonObjectFactory factory) {
+                        PyLongCheckExactNode longCheckExact) {
             int kwdsSize = kwds.length;
             /* short path, key will match args anyway, which is a tuple */
             if (typed == 0 && kwdsSize == 0) {
@@ -301,7 +286,7 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                     }
                 }
 
-                return factory.createTuple(args);
+                return PFactory.createTuple(PythonLanguage.get(inliningTarget), args);
             }
             int argsLen = args.length;
             int keySize = args.length;
@@ -336,7 +321,7 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                 }
             }
             assert (keyPos == keySize);
-            return factory.createTuple(keyArray);
+            return PFactory.createTuple(PythonLanguage.get(inliningTarget), keyArray);
         }
 
         // infinite_lru_cache_wrapper
@@ -346,7 +331,7 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                         long hash,
                         Object cachedItem,
                         ObjectHashMap.PutNode setItem,
-                        CallVarargsMethodNode callNode) {
+                        CallNode callNode) {
             Object result = cachedItem;
             if (result != null) {
                 self.hits++;
@@ -420,7 +405,7 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                         ObjectHashMap.GetNode getItem,
                         ObjectHashMap.PutNode setItem,
                         ObjectHashMap.RemoveNode popItem,
-                        CallVarargsMethodNode callNode) {
+                        CallNode callNode) {
             if (cachedItem != null) {
                 assert cachedItem instanceof LruListElemObject : "cachedItem should be an LruListElemObject";
                 LruListElemObject link = (LruListElemObject) cachedItem;
@@ -520,8 +505,8 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!self.isUncached()")
         static Object cachedLruCacheWrapper(VirtualFrame frame, LruCacheObject self, Object[] args, PKeyword[] kwds,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached CallVarargsMethodNode callNode,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached CallNode callNode,
                         @Cached PyObjectHashNode hashNode,
                         @Cached ObjectHashMap.GetNode getItem,
                         @Cached ObjectHashMap.PutNode setItem,
@@ -529,10 +514,9 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
                         @Cached PyUnicodeCheckExactNode unicodeCheckExact,
                         @Cached PyLongCheckExactNode longCheckExact,
                         @Cached ObjectHashMap.RemoveNode popItem,
-                        @Cached InlinedConditionProfile profile,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached InlinedConditionProfile profile) {
             Object key = lruCacheMakeKey(self.kwdMark, args, kwds, self.typed,
-                            inliningTarget, getClassNode, unicodeCheckExact, longCheckExact, factory);
+                            inliningTarget, getClassNode, unicodeCheckExact, longCheckExact);
             long hash = hashNode.execute(frame, inliningTarget, key);
             Object cached = getItem.execute(frame, inliningTarget, self.cache, key, hash);
             if (profile.profile(inliningTarget, self.isInfinite())) {
@@ -572,17 +556,19 @@ public final class LruCacheWrapperBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___GET__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 3)
+    @Slot(SlotKind.tp_descr_get)
+    @GenerateUncached
     @GenerateNodeFactory
-    abstract static class GetNode extends PythonTernaryBuiltinNode {
+    abstract static class GetNode extends DescrGetBuiltinNode {
 
         @Specialization
         static Object getmethod(LruCacheObject self, Object obj, @SuppressWarnings("unused") Object type,
-                        @Cached PythonObjectFactory factory) {
-            if (obj instanceof PNone) {
+                        @Bind Node inliningTarget,
+                        @Cached InlinedConditionProfile objIsNoneProfile) {
+            if (objIsNoneProfile.profile(inliningTarget, obj instanceof PNone)) {
                 return self;
             }
-            return factory.createMethod(obj, self);
+            return PFactory.createMethod(PythonLanguage.get(inliningTarget), obj, self);
         }
     }
 

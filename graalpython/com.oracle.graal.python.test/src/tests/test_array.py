@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,9 +36,12 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-import sys
 
+import copy
+import types
 from array import array
+
+from tests.util import skip_if_sandboxed, storage_to_native
 
 
 def assert_raises(err, fn, *args, **kwargs):
@@ -100,11 +103,10 @@ def test_add_int_to_long_array():
     assert y[0] == 42
 
 
+@skip_if_sandboxed("Needs native storage support in sandboxed runs")
 def test_array_native_storage():
     a = array('l', [1, 2, 3])
-    if sys.implementation.name == 'graalpy':
-        assert hasattr(__graalpython__, 'storage_to_native'), "Needs to be run with --python.EnableDebuggingBuiltins"
-        __graalpython__.storage_to_native(a)
+    storage_to_native(a)
     assert a[1] == 2
     a[1] = 3
     assert a == array('l', [1, 3, 3])
@@ -112,3 +114,59 @@ def test_array_native_storage():
     del a[2:]
     a.insert(1, -1)
     assert a == array('l', [1, -1, 3])
+
+
+def test_copy():
+    a = array('l', [1, 2, 3])
+    b = a.__copy__()
+    c = copy.copy(a)
+    assert type(b) is array
+    assert b == a
+    assert c == a
+    assert b is not a
+    assert c is not a
+    a[0] = 42
+    assert b == array('l', [1, 2, 3])
+    assert c == array('l', [1, 2, 3])
+
+
+@skip_if_sandboxed("Needs native storage support in sandboxed runs")
+def test_copy_native_storage():
+    a = array('l', [1, 2, 3])
+    storage_to_native(a)
+    b = a.__copy__()
+    assert b == a
+    a[1] = 42
+    assert b == array('l', [1, 2, 3])
+
+
+def test_deepcopy():
+    a = array('l', [1, 2, 3])
+    b = a.__deepcopy__({})
+    c = copy.deepcopy(a)
+    assert type(b) is array
+    assert b == a
+    assert c == a
+    assert b is not a
+    assert c is not a
+    a[0] = 42
+    assert b == array('l', [1, 2, 3])
+    assert c == array('l', [1, 2, 3])
+
+
+def test_class_getitem():
+    alias = array[int]
+    assert isinstance(alias, types.GenericAlias)
+    assert alias.__origin__ is array
+    assert alias.__args__ == (int,)
+    assert array.__class_getitem__(str).__args__ == (str,)
+
+
+def test_mul():
+    a = array('l', [1, 2, 3])
+    assert len(a * 0) == 0
+
+    b = a * 1
+    a[2] = 42
+    assert list(a) == [1, 2, 42]
+    assert list(b) == [1, 2, 3]

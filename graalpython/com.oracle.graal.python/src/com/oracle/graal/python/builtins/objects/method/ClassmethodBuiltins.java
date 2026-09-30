@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,40 +40,38 @@
  */
 package com.oracle.graal.python.builtins.objects.method;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CALL__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GET__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_CLASSMETHOD;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
-import com.oracle.graal.python.builtins.objects.function.PFunction;
-import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.DescrGetBuiltinNode;
+import com.oracle.graal.python.lib.PyObjectLookupAttr;
 import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
-import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.lib.PyObjectSetAttr;
 import com.oracle.graal.python.nodes.PGuards;
-import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.GenerateCached;
-import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
-import com.oracle.truffle.api.dsl.ImportStatic;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.ReportPolymorphism;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -81,125 +79,75 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
-@CoreFunctions(extendClasses = {PythonBuiltinClassType.PClassmethod, PythonBuiltinClassType.PBuiltinClassMethod})
+@CoreFunctions(extendClasses = PythonBuiltinClassType.PClassmethod)
 public final class ClassmethodBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = ClassmethodBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ClassmethodBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___GET__, minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 3)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_CLASSMETHOD, minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    @ReportPolymorphism
-    abstract static class GetNode extends PythonTernaryBuiltinNode {
-
-        /**
-         * N.b.: cachedCallable.notNull is sufficient here, because
-         * {@link PDecoratedMethod#setCallable} can only be called when the callable was previously
-         * {@code null}. So if it ever was not null and we cached that, it is being held alive by
-         * the {@code self} argument now and there cannot be a race.
-         */
-        @Specialization(guards = {"isSingleContext()", "isNoValue(type)", "cachedSelf == self"}, limit = "3")
-        static Object getCached(@SuppressWarnings("unused") PDecoratedMethod self, Object obj, @SuppressWarnings("unused") Object type,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Cached(value = "self", weak = true) PDecoratedMethod cachedSelf,
-                        @SuppressWarnings("unused") @Cached(value = "self.getCallable()", weak = true) Object cachedCallable,
-                        @Shared @Cached GetClassNode getClass,
-                        @Shared @Cached MakeMethodNode makeMethod) {
-            return makeMethod.execute(inliningTarget, getClass.execute(inliningTarget, obj), cachedCallable);
-        }
-
-        @Specialization(guards = "isNoValue(type)", replaces = "getCached")
-        static Object get(PDecoratedMethod self, Object obj, @SuppressWarnings("unused") Object type,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetClassNode getClass,
-                        @Shared @Cached MakeMethodNode makeMethod,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            return doGet(inliningTarget, self, getClass.execute(inliningTarget, obj), makeMethod, raiseNode);
-        }
-
-        /**
-         * @see #getCached
-         */
-        @Specialization(guards = {"isSingleContext()", "!isNoValue(type)", "cachedSelf == self"}, limit = "3")
-        static Object getTypeCached(@SuppressWarnings("unused") PDecoratedMethod self, @SuppressWarnings("unused") Object obj, Object type,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Cached(value = "self", weak = true) PDecoratedMethod cachedSelf,
-                        @SuppressWarnings("unused") @Cached(value = "self.getCallable()", weak = true) Object cachedCallable,
-                        @Shared @Cached MakeMethodNode makeMethod) {
-            return makeMethod.execute(inliningTarget, type, cachedCallable);
-        }
-
-        @Specialization(guards = "!isNoValue(type)", replaces = "getTypeCached")
-        static Object getType(PDecoratedMethod self, @SuppressWarnings("unused") Object obj, Object type,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached MakeMethodNode makeMethod,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            return doGet(inliningTarget, self, type, makeMethod, raiseNode);
-        }
-
-        private static Object doGet(Node inliningTarget, PDecoratedMethod self, Object type, MakeMethodNode makeMethod, PRaiseNode.Lazy raiseNode) {
-            Object callable = self.getCallable();
-            if (callable == null) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.UNINITIALIZED_S_OBJECT);
-            }
-            return makeMethod.execute(inliningTarget, type, callable);
-        }
-    }
-
-    @GenerateInline
-    @GenerateCached(false)
-    @ImportStatic(PGuards.class)
-    @ReportPolymorphism
-    abstract static class MakeMethodNode extends PNodeWithContext {
-        abstract Object execute(Node inliningTarget, Object self, Object func);
-
+    public abstract static class ClassmethodNode extends PythonBinaryBuiltinNode {
         @Specialization
-        Object method(Object self, PFunction func,
-                        @Shared("factory") @Cached(inline = false) PythonObjectFactory factory) {
-            return factory.createMethod(self, func);
-        }
-
-        @Specialization(guards = "!func.needsDeclaringType()")
-        Object methodBuiltin(Object self, PBuiltinFunction func,
-                        @Shared("factory") @Cached(inline = false) PythonObjectFactory factory) {
-            return factory.createBuiltinMethod(self, func);
-        }
-
-        @Specialization(guards = "func.needsDeclaringType()")
-        Object methodBuiltinWithDeclaringType(Object self, PBuiltinFunction func,
-                        @Shared("factory") @Cached(inline = false) PythonObjectFactory factory) {
-            return factory.createBuiltinMethod(self, func, func.getEnclosingType());
-        }
-
-        @Specialization(guards = "!isFunction(func)")
-        Object generic(Object self, Object func,
-                        @Shared("factory") @Cached(inline = false) PythonObjectFactory factory) {
-            return factory.createMethod(self, func);
+        static Object doObjectIndirect(Object cls, @SuppressWarnings("unused") Object callable,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createClassmethod(cls, getInstanceShape.execute(cls));
         }
     }
 
-    @Builtin(name = J___CALL__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @Slot.SlotSignature(name = "classmethod", minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    abstract static class CallNode extends PythonVarargsBuiltinNode {
-        @Child private com.oracle.graal.python.nodes.call.CallNode callNode = com.oracle.graal.python.nodes.call.CallNode.create();
-
+    abstract static class InitNode extends PythonBinaryBuiltinNode {
         @Specialization
-        protected Object doIt(VirtualFrame frame, PDecoratedMethod self, Object[] arguments, PKeyword[] keywords) {
-            return callNode.execute(frame, self.getCallable(), arguments, keywords);
-        }
-
-        @Override
-        public Object varArgExecute(VirtualFrame frame, @SuppressWarnings("unused") Object self, Object[] arguments, PKeyword[] keywords) throws VarargsBuiltinDirectInvocationNotSupported {
-            Object[] argsWithoutSelf = new Object[arguments.length - 1];
-            PythonUtils.arraycopy(arguments, 1, argsWithoutSelf, 0, argsWithoutSelf.length);
-            return execute(frame, arguments[0], argsWithoutSelf, keywords);
+        protected PNone init(VirtualFrame frame, PDecoratedMethod self, Object callable,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectLookupAttr lookup,
+                        @Cached PyObjectSetAttr setAttr) {
+            self.setCallable(callable);
+            DecoratedMethodBuiltins.wraps(frame, self, callable, inliningTarget, lookup, setAttr);
+            return PNone.NONE;
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_descr_get, isComplex = true)
+    @ReportPolymorphism
+    @GenerateUncached
+    @GenerateNodeFactory
+    abstract static class GetNode extends DescrGetBuiltinNode {
+        // If self.getCallable() is null, let the next @Specialization handle that
+        @Specialization(guards = {"isSingleContext()", "isNoValue(type) == typeIsNoValue", "cachedSelf == self", "cachedCallable != null"}, limit = "3")
+        static Object getCached(@SuppressWarnings("unused") PDecoratedMethod self, Object obj, Object type,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Cached(value = "self", weak = true) PDecoratedMethod cachedSelf,
+                        @Cached(value = "self.getCallable()", weak = true) Object cachedCallable,
+                        @Cached("isNoValue(type)") boolean typeIsNoValue,
+                        @Exclusive @Cached GetClassNode getClass,
+                        @Exclusive @Cached ClassmethodCommonBuiltins.MakeMethodNode makeMethod) {
+            Object actualType = typeIsNoValue ? getClass.execute(inliningTarget, obj) : type;
+            return makeMethod.execute(inliningTarget, actualType, cachedCallable);
+        }
+
+        @InliningCutoff
+        @Specialization(replaces = "getCached")
+        static Object get(PDecoratedMethod self, Object obj, Object type,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached GetClassNode getClass,
+                        @Exclusive @Cached ClassmethodCommonBuiltins.MakeMethodNode makeMethod,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
+            Object actualType = PGuards.isNoValue(type) ? getClass.execute(inliningTarget, obj) : type;
+            return makeMethod.execute(inliningTarget, actualType, ClassmethodCommonBuiltins.getCallable(inliningTarget, self, raiseNode));
+        }
+    }
+
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         private static final TruffleString PREFIX = tsLiteral("<classmethod(");
@@ -209,12 +157,12 @@ public final class ClassmethodBuiltins extends PythonBuiltins {
 
         @Specialization
         Object repr(VirtualFrame frame, PDecoratedMethod self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectReprAsTruffleStringNode repr,
                         @Cached TruffleStringBuilder.AppendStringNode append,
                         @Cached TruffleStringBuilder.ToStringNode toString) {
             TruffleString callableRepr = repr.execute(frame, inliningTarget, self.getCallable());
-            TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING, PREFIX_LEN + callableRepr.byteLength(TS_ENCODING) + SUFFIX_LEN);
+            TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32(PREFIX_LEN + callableRepr.byteLength(TS_ENCODING) + SUFFIX_LEN);
             append.execute(sb, PREFIX);
             append.execute(sb, callableRepr);
             append.execute(sb, SUFFIX);

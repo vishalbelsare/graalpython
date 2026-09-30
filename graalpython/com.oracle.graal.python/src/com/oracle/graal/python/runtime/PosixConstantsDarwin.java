@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,8 +48,8 @@ class PosixConstantsDarwin {
     }
 
     static void getConstants(PosixConstants.Registry constants) {
-        constants.put("HAVE_FUTIMENS", false);
-        constants.put("HAVE_UTIMENSAT", false);
+        constants.put("HAVE_FUTIMENS", true);
+        constants.put("HAVE_UTIMENSAT", true);
         constants.put("FD_SETSIZE", 1024);
         constants.put("PATH_MAX", 1024);
         constants.put("L_ctermid", 1024);
@@ -68,7 +68,19 @@ class PosixConstantsDarwin {
         constants.put("SEEK_HOLE", 3);
         constants.put("SOMAXCONN", 128);
         constants.put("PIPE_BUF", 512);
+        constants.put("POLLIN", 0x00000001);
+        constants.put("POLLPRI", 0x00000002);
+        constants.put("POLLOUT", 0x00000004);
+        constants.put("POLLERR", 0x00000008);
+        constants.put("POLLHUP", 0x00000010);
+        constants.put("POLLNVAL", 0x00000020);
+        constants.put("POLLRDNORM", 0x00000040);
+        constants.put("POLLRDBAND", 0x00000080);
+        constants.put("POLLWRNORM", 0x00000004);
+        constants.put("POLLWRBAND", 0x00000100);
         constants.put("SEM_VALUE_MAX", 32767);
+        constants.put("RUSAGE_CHILDREN", -1);
+        constants.put("RUSAGE_SELF", 0);
         constants.put("O_ACCMODE", 0x00000003);
         constants.put("O_RDONLY", 0x00000000);
         constants.put("O_WRONLY", 0x00000001);
@@ -88,6 +100,12 @@ class PosixConstantsDarwin {
         constants.put("O_EXLOCK", 0x00000020);
         constants.put("O_EXEC", 0x40000000);
         constants.put("O_SEARCH", 0x40100000);
+        constants.put("O_EVTONLY", 0x00008000);
+        constants.put("O_FSYNC", 0x00000080);
+        constants.put("O_SYMLINK", 0x00200000);
+        constants.put("O_NOFOLLOW", 0x00000100);
+        constants.put("O_NOFOLLOW_ANY", 0x20000000);
+        constants.put("O_ASYNC", 0x00000040);
         constants.put("S_IFMT", 0x0000F000);
         constants.put("S_IFSOCK", 0x0000C000);
         constants.put("S_IFLNK", 0x0000A000);
@@ -240,5 +258,22 @@ class PosixConstantsDarwin {
         constants.put("IPV6_RECVTCLASS", 35);
         constants.put("IPV6_RTHDR_TYPE_0", 0);
         constants.put("IPV6_TCLASS", 36);
+        constants.put("_SC_ARG_MAX", 1);
+        constants.put("_SC_CHILD_MAX", 2);
+        constants.put("_SC_LOGIN_NAME_MAX", 73);
+        constants.put("_SC_NGROUPS_MAX", 4);
+        constants.put("_SC_CLK_TCK", 3);
+        constants.put("_SC_OPEN_MAX", 5);
+        constants.put("_SC_PAGESIZE", 29);
+        constants.put("_SC_PAGE_SIZE", 29);
+        constants.put("_SC_RE_DUP_MAX", 16);
+        constants.put("_SC_STREAM_MAX", 26);
+        constants.put("_SC_TTY_NAME_MAX", 101);
+        constants.put("_SC_TZNAME_MAX", 27);
+        constants.put("_SC_VERSION", 8);
+        constants.put("_SC_SEM_NSEMS_MAX", 49);
+        constants.put("_SC_PHYS_PAGES", 200);
+        constants.put("_SC_NPROCESSORS_CONF", 83);
+        constants.put("_SC_NPROCESSORS_ONLN", 84);
     }
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2017 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -26,7 +26,7 @@ PyAPI_DATA(PyTypeObject) PyCapsule_Type;
 
 typedef void (*PyCapsule_Destructor)(PyObject *);
 
-#define PyCapsule_CheckExact(op) Py_IS_TYPE(op, &PyCapsule_Type)
+#define PyCapsule_CheckExact(op) Py_IS_TYPE((op), &PyCapsule_Type)
 
 
 PyAPI_FUNC(PyObject *) PyCapsule_New(
@@ -55,7 +55,6 @@ PyAPI_FUNC(int) PyCapsule_SetContext(PyObject *capsule, void *context);
 PyAPI_FUNC(void *) PyCapsule_Import(
     const char *name,           /* UTF-8 encoded string */
     int no_block);
-
 
 #ifdef __cplusplus
 }

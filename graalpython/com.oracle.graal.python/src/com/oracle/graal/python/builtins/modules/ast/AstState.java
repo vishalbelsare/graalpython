@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,6 +48,7 @@ package com.oracle.graal.python.builtins.modules.ast;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.builtins.objects.type.PythonClass;
@@ -63,6 +64,7 @@ final class AstState {
     static final TruffleString T_F_ATTR = tsLiteral("attr");
     static final TruffleString T_F_BASES = tsLiteral("bases");
     static final TruffleString T_F_BODY = tsLiteral("body");
+    static final TruffleString T_F_BOUND = tsLiteral("bound");
     static final TruffleString T_F_CASES = tsLiteral("cases");
     static final TruffleString T_F_CAUSE = tsLiteral("cause");
     static final TruffleString T_F_CLS = tsLiteral("cls");
@@ -72,6 +74,7 @@ final class AstState {
     static final TruffleString T_F_CONVERSION = tsLiteral("conversion");
     static final TruffleString T_F_CTX = tsLiteral("ctx");
     static final TruffleString T_F_DECORATOR_LIST = tsLiteral("decorator_list");
+    static final TruffleString T_F_DEFAULT_VALUE = tsLiteral("default_value");
     static final TruffleString T_F_DEFAULTS = tsLiteral("defaults");
     static final TruffleString T_F_ELT = tsLiteral("elt");
     static final TruffleString T_F_ELTS = tsLiteral("elts");
@@ -128,6 +131,7 @@ final class AstState {
     static final TruffleString T_F_TYPE = tsLiteral("type");
     static final TruffleString T_F_TYPE_COMMENT = tsLiteral("type_comment");
     static final TruffleString T_F_TYPE_IGNORES = tsLiteral("type_ignores");
+    static final TruffleString T_F_TYPE_PARAMS = tsLiteral("type_params");
     static final TruffleString T_F_UPPER = tsLiteral("upper");
     static final TruffleString T_F_VALUE = tsLiteral("value");
     static final TruffleString T_F_VALUES = tsLiteral("values");
@@ -209,6 +213,7 @@ final class AstState {
     static final TruffleString T_C_NOTEQ = tsLiteral("NotEq");
     static final TruffleString T_C_NOTIN = tsLiteral("NotIn");
     static final TruffleString T_C_OR = tsLiteral("Or");
+    static final TruffleString T_C_PARAMSPEC = tsLiteral("ParamSpec");
     static final TruffleString T_C_PASS = tsLiteral("Pass");
     static final TruffleString T_C_POW = tsLiteral("Pow");
     static final TruffleString T_C_RSHIFT = tsLiteral("RShift");
@@ -222,8 +227,12 @@ final class AstState {
     static final TruffleString T_C_SUB = tsLiteral("Sub");
     static final TruffleString T_C_SUBSCRIPT = tsLiteral("Subscript");
     static final TruffleString T_C_TRY = tsLiteral("Try");
+    static final TruffleString T_C_TRYSTAR = tsLiteral("TryStar");
     static final TruffleString T_C_TUPLE = tsLiteral("Tuple");
+    static final TruffleString T_C_TYPEALIAS = tsLiteral("TypeAlias");
     static final TruffleString T_C_TYPEIGNORE = tsLiteral("TypeIgnore");
+    static final TruffleString T_C_TYPEVAR = tsLiteral("TypeVar");
+    static final TruffleString T_C_TYPEVARTUPLE = tsLiteral("TypeVarTuple");
     static final TruffleString T_C_UADD = tsLiteral("UAdd");
     static final TruffleString T_C_USUB = tsLiteral("USub");
     static final TruffleString T_C_UNARYOP = tsLiteral("UnaryOp");
@@ -247,6 +256,7 @@ final class AstState {
     static final TruffleString T_T_PATTERN = tsLiteral("pattern");
     static final TruffleString T_T_STMT = tsLiteral("stmt");
     static final TruffleString T_T_TYPE_IGNORE = tsLiteral("type_ignore");
+    static final TruffleString T_T_TYPE_PARAM = tsLiteral("type_param");
     static final TruffleString T_T_UNARYOP = tsLiteral("unaryop");
     static final TruffleString T_T_WITHITEM = tsLiteral("withitem");
 
@@ -263,6 +273,7 @@ final class AstState {
     final PythonClass clsReturn;
     final PythonClass clsDelete;
     final PythonClass clsAssign;
+    final PythonClass clsTypeAlias;
     final PythonClass clsAugAssign;
     final PythonClass clsAnnAssign;
     final PythonClass clsFor;
@@ -274,6 +285,7 @@ final class AstState {
     final PythonClass clsMatch;
     final PythonClass clsRaise;
     final PythonClass clsTry;
+    final PythonClass clsTryStar;
     final PythonClass clsAssert;
     final PythonClass clsImport;
     final PythonClass clsImportFrom;
@@ -336,6 +348,10 @@ final class AstState {
     final PythonClass clsMatchOr;
     final PythonClass clsTypeIgnoreTy;
     final PythonClass clsTypeIgnore;
+    final PythonClass clsTypeParamTy;
+    final PythonClass clsTypeVar;
+    final PythonClass clsParamSpec;
+    final PythonClass clsTypeVarTuple;
 
     final PythonClass clsLoad;
     final PythonObject singletonLoad;
@@ -453,12 +469,13 @@ final class AstState {
                         tsa(),
                         tsa(T_F_LINENO, T_F_COL_OFFSET, T_F_END_LINENO, T_F_END_COL_OFFSET),
                         tsa(T_F_END_LINENO, T_F_END_COL_OFFSET),
-                        ts("stmt = FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment)\n" +
-                        "     | AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment)\n" +
-                        "     | ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list)\n" +
+                        ts("stmt = FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)\n" +
+                        "     | AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)\n" +
+                        "     | ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list, type_param* type_params)\n" +
                         "     | Return(expr? value)\n" +
                         "     | Delete(expr* targets)\n" +
                         "     | Assign(expr* targets, expr value, string? type_comment)\n" +
+                        "     | TypeAlias(expr name, type_param* type_params, expr value)\n" +
                         "     | AugAssign(expr target, operator op, expr value)\n" +
                         "     | AnnAssign(expr target, expr annotation, expr? value, int simple)\n" +
                         "     | For(expr target, expr iter, stmt* body, stmt* orelse, string? type_comment)\n" +
@@ -470,6 +487,7 @@ final class AstState {
                         "     | Match(expr subject, match_case* cases)\n" +
                         "     | Raise(expr? exc, expr? cause)\n" +
                         "     | Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)\n" +
+                        "     | TryStar(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)\n" +
                         "     | Assert(expr test, expr? msg)\n" +
                         "     | Import(alias* names)\n" +
                         "     | ImportFrom(identifier? module, alias* names, int? level)\n" +
@@ -483,26 +501,26 @@ final class AstState {
 
         // StmtTy.FunctionDef
         clsFunctionDef = factory.makeType(T_C_FUNCTIONDEF, clsStmtTy,
-                        tsa(T_F_NAME, T_F_ARGS, T_F_BODY, T_F_DECORATOR_LIST, T_F_RETURNS, T_F_TYPE_COMMENT),
+                        tsa(T_F_NAME, T_F_ARGS, T_F_BODY, T_F_DECORATOR_LIST, T_F_RETURNS, T_F_TYPE_COMMENT, T_F_TYPE_PARAMS),
                         null,
                         tsa(T_F_RETURNS, T_F_TYPE_COMMENT),
-                        ts("FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment)")
+                        ts("FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)")
         );
 
         // StmtTy.AsyncFunctionDef
         clsAsyncFunctionDef = factory.makeType(T_C_ASYNCFUNCTIONDEF, clsStmtTy,
-                        tsa(T_F_NAME, T_F_ARGS, T_F_BODY, T_F_DECORATOR_LIST, T_F_RETURNS, T_F_TYPE_COMMENT),
+                        tsa(T_F_NAME, T_F_ARGS, T_F_BODY, T_F_DECORATOR_LIST, T_F_RETURNS, T_F_TYPE_COMMENT, T_F_TYPE_PARAMS),
                         null,
                         tsa(T_F_RETURNS, T_F_TYPE_COMMENT),
-                        ts("AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment)")
+                        ts("AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)")
         );
 
         // StmtTy.ClassDef
         clsClassDef = factory.makeType(T_C_CLASSDEF, clsStmtTy,
-                        tsa(T_F_NAME, T_F_BASES, T_F_KEYWORDS, T_F_BODY, T_F_DECORATOR_LIST),
+                        tsa(T_F_NAME, T_F_BASES, T_F_KEYWORDS, T_F_BODY, T_F_DECORATOR_LIST, T_F_TYPE_PARAMS),
                         null,
                         tsa(),
-                        ts("ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list)")
+                        ts("ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list, type_param* type_params)")
         );
 
         // StmtTy.Return
@@ -527,6 +545,14 @@ final class AstState {
                         null,
                         tsa(T_F_TYPE_COMMENT),
                         ts("Assign(expr* targets, expr value, string? type_comment)")
+        );
+
+        // StmtTy.TypeAlias
+        clsTypeAlias = factory.makeType(T_C_TYPEALIAS, clsStmtTy,
+                        tsa(T_F_NAME, T_F_TYPE_PARAMS, T_F_VALUE),
+                        null,
+                        tsa(),
+                        ts("TypeAlias(expr name, type_param* type_params, expr value)")
         );
 
         // StmtTy.AugAssign
@@ -615,6 +641,14 @@ final class AstState {
                         null,
                         tsa(),
                         ts("Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)")
+        );
+
+        // StmtTy.TryStar
+        clsTryStar = factory.makeType(T_C_TRYSTAR, clsStmtTy,
+                        tsa(T_F_BODY, T_F_HANDLERS, T_F_ORELSE, T_F_FINALBODY),
+                        null,
+                        tsa(),
+                        ts("TryStar(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)")
         );
 
         // StmtTy.Assert
@@ -954,7 +988,7 @@ final class AstState {
                         tsa(),
                         ts("Load")
         );
-        singletonLoad = factory.createSingleton(clsLoad);
+        singletonLoad = AstTypeFactory.createSingleton(clsLoad);
 
         // ExprContextTy.Store
         clsStore = factory.makeType(T_C_STORE, clsExprContextTy,
@@ -963,7 +997,7 @@ final class AstState {
                         tsa(),
                         ts("Store")
         );
-        singletonStore = factory.createSingleton(clsStore);
+        singletonStore = AstTypeFactory.createSingleton(clsStore);
 
         // ExprContextTy.Del
         clsDel = factory.makeType(T_C_DEL, clsExprContextTy,
@@ -972,7 +1006,7 @@ final class AstState {
                         tsa(),
                         ts("Del")
         );
-        singletonDel = factory.createSingleton(clsDel);
+        singletonDel = AstTypeFactory.createSingleton(clsDel);
 
         // BoolOpTy
         clsBoolOpTy = factory.makeType(T_T_BOOLOP, clsAst,
@@ -989,7 +1023,7 @@ final class AstState {
                         tsa(),
                         ts("And")
         );
-        singletonAnd = factory.createSingleton(clsAnd);
+        singletonAnd = AstTypeFactory.createSingleton(clsAnd);
 
         // BoolOpTy.Or
         clsOr = factory.makeType(T_C_OR, clsBoolOpTy,
@@ -998,7 +1032,7 @@ final class AstState {
                         tsa(),
                         ts("Or")
         );
-        singletonOr = factory.createSingleton(clsOr);
+        singletonOr = AstTypeFactory.createSingleton(clsOr);
 
         // OperatorTy
         clsOperatorTy = factory.makeType(T_T_OPERATOR, clsAst,
@@ -1015,7 +1049,7 @@ final class AstState {
                         tsa(),
                         ts("Add")
         );
-        singletonAdd = factory.createSingleton(clsAdd);
+        singletonAdd = AstTypeFactory.createSingleton(clsAdd);
 
         // OperatorTy.Sub
         clsSub = factory.makeType(T_C_SUB, clsOperatorTy,
@@ -1024,7 +1058,7 @@ final class AstState {
                         tsa(),
                         ts("Sub")
         );
-        singletonSub = factory.createSingleton(clsSub);
+        singletonSub = AstTypeFactory.createSingleton(clsSub);
 
         // OperatorTy.Mult
         clsMult = factory.makeType(T_C_MULT, clsOperatorTy,
@@ -1033,7 +1067,7 @@ final class AstState {
                         tsa(),
                         ts("Mult")
         );
-        singletonMult = factory.createSingleton(clsMult);
+        singletonMult = AstTypeFactory.createSingleton(clsMult);
 
         // OperatorTy.MatMult
         clsMatMult = factory.makeType(T_C_MATMULT, clsOperatorTy,
@@ -1042,7 +1076,7 @@ final class AstState {
                         tsa(),
                         ts("MatMult")
         );
-        singletonMatMult = factory.createSingleton(clsMatMult);
+        singletonMatMult = AstTypeFactory.createSingleton(clsMatMult);
 
         // OperatorTy.Div
         clsDiv = factory.makeType(T_C_DIV, clsOperatorTy,
@@ -1051,7 +1085,7 @@ final class AstState {
                         tsa(),
                         ts("Div")
         );
-        singletonDiv = factory.createSingleton(clsDiv);
+        singletonDiv = AstTypeFactory.createSingleton(clsDiv);
 
         // OperatorTy.Mod
         clsMod = factory.makeType(T_C_MOD, clsOperatorTy,
@@ -1060,7 +1094,7 @@ final class AstState {
                         tsa(),
                         ts("Mod")
         );
-        singletonMod = factory.createSingleton(clsMod);
+        singletonMod = AstTypeFactory.createSingleton(clsMod);
 
         // OperatorTy.Pow
         clsPow = factory.makeType(T_C_POW, clsOperatorTy,
@@ -1069,7 +1103,7 @@ final class AstState {
                         tsa(),
                         ts("Pow")
         );
-        singletonPow = factory.createSingleton(clsPow);
+        singletonPow = AstTypeFactory.createSingleton(clsPow);
 
         // OperatorTy.LShift
         clsLShift = factory.makeType(T_C_LSHIFT, clsOperatorTy,
@@ -1078,7 +1112,7 @@ final class AstState {
                         tsa(),
                         ts("LShift")
         );
-        singletonLShift = factory.createSingleton(clsLShift);
+        singletonLShift = AstTypeFactory.createSingleton(clsLShift);
 
         // OperatorTy.RShift
         clsRShift = factory.makeType(T_C_RSHIFT, clsOperatorTy,
@@ -1087,7 +1121,7 @@ final class AstState {
                         tsa(),
                         ts("RShift")
         );
-        singletonRShift = factory.createSingleton(clsRShift);
+        singletonRShift = AstTypeFactory.createSingleton(clsRShift);
 
         // OperatorTy.BitOr
         clsBitOr = factory.makeType(T_C_BITOR, clsOperatorTy,
@@ -1096,7 +1130,7 @@ final class AstState {
                         tsa(),
                         ts("BitOr")
         );
-        singletonBitOr = factory.createSingleton(clsBitOr);
+        singletonBitOr = AstTypeFactory.createSingleton(clsBitOr);
 
         // OperatorTy.BitXor
         clsBitXor = factory.makeType(T_C_BITXOR, clsOperatorTy,
@@ -1105,7 +1139,7 @@ final class AstState {
                         tsa(),
                         ts("BitXor")
         );
-        singletonBitXor = factory.createSingleton(clsBitXor);
+        singletonBitXor = AstTypeFactory.createSingleton(clsBitXor);
 
         // OperatorTy.BitAnd
         clsBitAnd = factory.makeType(T_C_BITAND, clsOperatorTy,
@@ -1114,7 +1148,7 @@ final class AstState {
                         tsa(),
                         ts("BitAnd")
         );
-        singletonBitAnd = factory.createSingleton(clsBitAnd);
+        singletonBitAnd = AstTypeFactory.createSingleton(clsBitAnd);
 
         // OperatorTy.FloorDiv
         clsFloorDiv = factory.makeType(T_C_FLOORDIV, clsOperatorTy,
@@ -1123,7 +1157,7 @@ final class AstState {
                         tsa(),
                         ts("FloorDiv")
         );
-        singletonFloorDiv = factory.createSingleton(clsFloorDiv);
+        singletonFloorDiv = AstTypeFactory.createSingleton(clsFloorDiv);
 
         // UnaryOpTy
         clsUnaryOpTy = factory.makeType(T_T_UNARYOP, clsAst,
@@ -1140,7 +1174,7 @@ final class AstState {
                         tsa(),
                         ts("Invert")
         );
-        singletonInvert = factory.createSingleton(clsInvert);
+        singletonInvert = AstTypeFactory.createSingleton(clsInvert);
 
         // UnaryOpTy.Not
         clsNot = factory.makeType(T_C_NOT, clsUnaryOpTy,
@@ -1149,7 +1183,7 @@ final class AstState {
                         tsa(),
                         ts("Not")
         );
-        singletonNot = factory.createSingleton(clsNot);
+        singletonNot = AstTypeFactory.createSingleton(clsNot);
 
         // UnaryOpTy.UAdd
         clsUAdd = factory.makeType(T_C_UADD, clsUnaryOpTy,
@@ -1158,7 +1192,7 @@ final class AstState {
                         tsa(),
                         ts("UAdd")
         );
-        singletonUAdd = factory.createSingleton(clsUAdd);
+        singletonUAdd = AstTypeFactory.createSingleton(clsUAdd);
 
         // UnaryOpTy.USub
         clsUSub = factory.makeType(T_C_USUB, clsUnaryOpTy,
@@ -1167,7 +1201,7 @@ final class AstState {
                         tsa(),
                         ts("USub")
         );
-        singletonUSub = factory.createSingleton(clsUSub);
+        singletonUSub = AstTypeFactory.createSingleton(clsUSub);
 
         // CmpOpTy
         clsCmpOpTy = factory.makeType(T_T_CMPOP, clsAst,
@@ -1184,7 +1218,7 @@ final class AstState {
                         tsa(),
                         ts("Eq")
         );
-        singletonEq = factory.createSingleton(clsEq);
+        singletonEq = AstTypeFactory.createSingleton(clsEq);
 
         // CmpOpTy.NotEq
         clsNotEq = factory.makeType(T_C_NOTEQ, clsCmpOpTy,
@@ -1193,7 +1227,7 @@ final class AstState {
                         tsa(),
                         ts("NotEq")
         );
-        singletonNotEq = factory.createSingleton(clsNotEq);
+        singletonNotEq = AstTypeFactory.createSingleton(clsNotEq);
 
         // CmpOpTy.Lt
         clsLt = factory.makeType(T_C_LT, clsCmpOpTy,
@@ -1202,7 +1236,7 @@ final class AstState {
                         tsa(),
                         ts("Lt")
         );
-        singletonLt = factory.createSingleton(clsLt);
+        singletonLt = AstTypeFactory.createSingleton(clsLt);
 
         // CmpOpTy.LtE
         clsLtE = factory.makeType(T_C_LTE, clsCmpOpTy,
@@ -1211,7 +1245,7 @@ final class AstState {
                         tsa(),
                         ts("LtE")
         );
-        singletonLtE = factory.createSingleton(clsLtE);
+        singletonLtE = AstTypeFactory.createSingleton(clsLtE);
 
         // CmpOpTy.Gt
         clsGt = factory.makeType(T_C_GT, clsCmpOpTy,
@@ -1220,7 +1254,7 @@ final class AstState {
                         tsa(),
                         ts("Gt")
         );
-        singletonGt = factory.createSingleton(clsGt);
+        singletonGt = AstTypeFactory.createSingleton(clsGt);
 
         // CmpOpTy.GtE
         clsGtE = factory.makeType(T_C_GTE, clsCmpOpTy,
@@ -1229,7 +1263,7 @@ final class AstState {
                         tsa(),
                         ts("GtE")
         );
-        singletonGtE = factory.createSingleton(clsGtE);
+        singletonGtE = AstTypeFactory.createSingleton(clsGtE);
 
         // CmpOpTy.Is
         clsIs = factory.makeType(T_C_IS, clsCmpOpTy,
@@ -1238,7 +1272,7 @@ final class AstState {
                         tsa(),
                         ts("Is")
         );
-        singletonIs = factory.createSingleton(clsIs);
+        singletonIs = AstTypeFactory.createSingleton(clsIs);
 
         // CmpOpTy.IsNot
         clsIsNot = factory.makeType(T_C_ISNOT, clsCmpOpTy,
@@ -1247,7 +1281,7 @@ final class AstState {
                         tsa(),
                         ts("IsNot")
         );
-        singletonIsNot = factory.createSingleton(clsIsNot);
+        singletonIsNot = AstTypeFactory.createSingleton(clsIsNot);
 
         // CmpOpTy.In
         clsIn = factory.makeType(T_C_IN, clsCmpOpTy,
@@ -1256,7 +1290,7 @@ final class AstState {
                         tsa(),
                         ts("In")
         );
-        singletonIn = factory.createSingleton(clsIn);
+        singletonIn = AstTypeFactory.createSingleton(clsIn);
 
         // CmpOpTy.NotIn
         clsNotIn = factory.makeType(T_C_NOTIN, clsCmpOpTy,
@@ -1265,7 +1299,7 @@ final class AstState {
                         tsa(),
                         ts("NotIn")
         );
-        singletonNotIn = factory.createSingleton(clsNotIn);
+        singletonNotIn = AstTypeFactory.createSingleton(clsNotIn);
 
         // ComprehensionTy
         clsComprehensionTy = factory.makeType(T_T_COMPREHENSION, clsAst,
@@ -1433,6 +1467,153 @@ final class AstState {
                         tsa(),
                         ts("TypeIgnore(int lineno, string tag)")
         );
+
+        // TypeParamTy
+        clsTypeParamTy = factory.makeType(T_T_TYPE_PARAM, clsAst,
+                        tsa(),
+                        tsa(T_F_LINENO, T_F_COL_OFFSET, T_F_END_LINENO, T_F_END_COL_OFFSET),
+                        tsa(),
+                        ts("type_param = TypeVar(identifier name, expr? bound, expr? default_value)\n" +
+                        "           | ParamSpec(identifier name, expr? default_value)\n" +
+                        "           | TypeVarTuple(identifier name, expr? default_value)")
+        );
+
+        // TypeParamTy.TypeVar
+        clsTypeVar = factory.makeType(T_C_TYPEVAR, clsTypeParamTy,
+                        tsa(T_F_NAME, T_F_BOUND, T_F_DEFAULT_VALUE),
+                        null,
+                        tsa(T_F_BOUND, T_F_DEFAULT_VALUE),
+                        ts("TypeVar(identifier name, expr? bound, expr? default_value)")
+        );
+
+        // TypeParamTy.ParamSpec
+        clsParamSpec = factory.makeType(T_C_PARAMSPEC, clsTypeParamTy,
+                        tsa(T_F_NAME, T_F_DEFAULT_VALUE),
+                        null,
+                        tsa(T_F_DEFAULT_VALUE),
+                        ts("ParamSpec(identifier name, expr? default_value)")
+        );
+
+        // TypeParamTy.TypeVarTuple
+        clsTypeVarTuple = factory.makeType(T_C_TYPEVARTUPLE, clsTypeParamTy,
+                        tsa(T_F_NAME, T_F_DEFAULT_VALUE),
+                        null,
+                        tsa(T_F_DEFAULT_VALUE),
+                        ts("TypeVarTuple(identifier name, expr? default_value)")
+        );
+
+        // Field types
+        factory.setFieldTypes(clsModule, tsa(T_F_BODY, T_F_TYPE_IGNORES), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsTypeIgnoreTy, true, false));
+        factory.setFieldTypes(clsInteractive, tsa(T_F_BODY), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsExpression, tsa(T_F_BODY), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsFunctionType, tsa(T_F_ARGTYPES, T_F_RETURNS), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsFunctionDef, tsa(T_F_NAME, T_F_ARGS, T_F_BODY, T_F_DECORATOR_LIST, T_F_RETURNS, T_F_TYPE_COMMENT, T_F_TYPE_PARAMS), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsArgumentsTy, false, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(PythonBuiltinClassType.PString, false, true), factory.makeFieldType(clsTypeParamTy, true, false));
+        factory.setFieldTypes(clsAsyncFunctionDef, tsa(T_F_NAME, T_F_ARGS, T_F_BODY, T_F_DECORATOR_LIST, T_F_RETURNS, T_F_TYPE_COMMENT, T_F_TYPE_PARAMS), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsArgumentsTy, false, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(PythonBuiltinClassType.PString, false, true), factory.makeFieldType(clsTypeParamTy, true, false));
+        factory.setFieldTypes(clsClassDef, tsa(T_F_NAME, T_F_BASES, T_F_KEYWORDS, T_F_BODY, T_F_DECORATOR_LIST, T_F_TYPE_PARAMS), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsKeywordTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsTypeParamTy, true, false));
+        factory.setFieldTypes(clsReturn, tsa(T_F_VALUE), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsDelete, tsa(T_F_TARGETS), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsAssign, tsa(T_F_TARGETS, T_F_VALUE, T_F_TYPE_COMMENT), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsTypeAlias, tsa(T_F_NAME, T_F_TYPE_PARAMS, T_F_VALUE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsTypeParamTy, true, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsAugAssign, tsa(T_F_TARGET, T_F_OP, T_F_VALUE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsOperatorTy, false, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsAnnAssign, tsa(T_F_TARGET, T_F_ANNOTATION, T_F_VALUE, T_F_SIMPLE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(PythonBuiltinClassType.PInt, false, false));
+        factory.setFieldTypes(clsFor, tsa(T_F_TARGET, T_F_ITER, T_F_BODY, T_F_ORELSE, T_F_TYPE_COMMENT), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsAsyncFor, tsa(T_F_TARGET, T_F_ITER, T_F_BODY, T_F_ORELSE, T_F_TYPE_COMMENT), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsWhile, tsa(T_F_TEST, T_F_BODY, T_F_ORELSE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsIf, tsa(T_F_TEST, T_F_BODY, T_F_ORELSE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsWith, tsa(T_F_ITEMS, T_F_BODY, T_F_TYPE_COMMENT), factory.makeFieldType(clsWithItemTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsAsyncWith, tsa(T_F_ITEMS, T_F_BODY, T_F_TYPE_COMMENT), factory.makeFieldType(clsWithItemTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsMatch, tsa(T_F_SUBJECT, T_F_CASES), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsMatchCaseTy, true, false));
+        factory.setFieldTypes(clsRaise, tsa(T_F_EXC, T_F_CAUSE), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsTry, tsa(T_F_BODY, T_F_HANDLERS, T_F_ORELSE, T_F_FINALBODY), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsExceptHandlerTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsTryStar, tsa(T_F_BODY, T_F_HANDLERS, T_F_ORELSE, T_F_FINALBODY), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsExceptHandlerTy, true, false), factory.makeFieldType(clsStmtTy, true, false), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsAssert, tsa(T_F_TEST, T_F_MSG), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsImport, tsa(T_F_NAMES), factory.makeFieldType(clsAliasTy, true, false));
+        factory.setFieldTypes(clsImportFrom, tsa(T_F_MODULE, T_F_NAMES, T_F_LEVEL), factory.makeFieldType(PythonBuiltinClassType.PString, false, true), factory.makeFieldType(clsAliasTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PInt, false, true));
+        factory.setFieldTypes(clsGlobal, tsa(T_F_NAMES), factory.makeFieldType(PythonBuiltinClassType.PString, true, false));
+        factory.setFieldTypes(clsNonlocal, tsa(T_F_NAMES), factory.makeFieldType(PythonBuiltinClassType.PString, true, false));
+        factory.setFieldTypes(clsExpr, tsa(T_F_VALUE), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsPass, tsa());
+        factory.setFieldTypes(clsBreak, tsa());
+        factory.setFieldTypes(clsContinue, tsa());
+        factory.setFieldTypes(clsBoolOp, tsa(T_F_OP, T_F_VALUES), factory.makeFieldType(clsBoolOpTy, false, false), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsNamedExpr, tsa(T_F_TARGET, T_F_VALUE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsBinOp, tsa(T_F_LEFT, T_F_OP, T_F_RIGHT), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsOperatorTy, false, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsUnaryOp, tsa(T_F_OP, T_F_OPERAND), factory.makeFieldType(clsUnaryOpTy, false, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsLambda, tsa(T_F_ARGS, T_F_BODY), factory.makeFieldType(clsArgumentsTy, false, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsIfExp, tsa(T_F_TEST, T_F_BODY, T_F_ORELSE), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsDict, tsa(T_F_KEYS, T_F_VALUES), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsSet, tsa(T_F_ELTS), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsListComp, tsa(T_F_ELT, T_F_GENERATORS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsComprehensionTy, true, false));
+        factory.setFieldTypes(clsSetComp, tsa(T_F_ELT, T_F_GENERATORS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsComprehensionTy, true, false));
+        factory.setFieldTypes(clsDictComp, tsa(T_F_KEY, T_F_VALUE, T_F_GENERATORS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsComprehensionTy, true, false));
+        factory.setFieldTypes(clsGeneratorExp, tsa(T_F_ELT, T_F_GENERATORS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsComprehensionTy, true, false));
+        factory.setFieldTypes(clsAwait, tsa(T_F_VALUE), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsYield, tsa(T_F_VALUE), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsYieldFrom, tsa(T_F_VALUE), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsCompare, tsa(T_F_LEFT, T_F_OPS, T_F_COMPARATORS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsCmpOpTy, true, false), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsCall, tsa(T_F_FUNC, T_F_ARGS, T_F_KEYWORDS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsKeywordTy, true, false));
+        factory.setFieldTypes(clsFormattedValue, tsa(T_F_VALUE, T_F_CONVERSION, T_F_FORMAT_SPEC), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(PythonBuiltinClassType.PInt, false, false), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsJoinedStr, tsa(T_F_VALUES), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsConstant, tsa(T_F_VALUE, T_F_KIND), factory.makeFieldType(PythonBuiltinClassType.PythonObject, false, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsAttribute, tsa(T_F_VALUE, T_F_ATTR, T_F_CTX), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprContextTy, false, false));
+        factory.setFieldTypes(clsSubscript, tsa(T_F_VALUE, T_F_SLICE, T_F_CTX), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprContextTy, false, false));
+        factory.setFieldTypes(clsStarred, tsa(T_F_VALUE, T_F_CTX), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprContextTy, false, false));
+        factory.setFieldTypes(clsName, tsa(T_F_ID, T_F_CTX), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprContextTy, false, false));
+        factory.setFieldTypes(clsList, tsa(T_F_ELTS, T_F_CTX), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprContextTy, false, false));
+        factory.setFieldTypes(clsTuple, tsa(T_F_ELTS, T_F_CTX), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsExprContextTy, false, false));
+        factory.setFieldTypes(clsSlice, tsa(T_F_LOWER, T_F_UPPER, T_F_STEP), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsLoad, tsa());
+        factory.setFieldTypes(clsStore, tsa());
+        factory.setFieldTypes(clsDel, tsa());
+        factory.setFieldTypes(clsAnd, tsa());
+        factory.setFieldTypes(clsOr, tsa());
+        factory.setFieldTypes(clsAdd, tsa());
+        factory.setFieldTypes(clsSub, tsa());
+        factory.setFieldTypes(clsMult, tsa());
+        factory.setFieldTypes(clsMatMult, tsa());
+        factory.setFieldTypes(clsDiv, tsa());
+        factory.setFieldTypes(clsMod, tsa());
+        factory.setFieldTypes(clsPow, tsa());
+        factory.setFieldTypes(clsLShift, tsa());
+        factory.setFieldTypes(clsRShift, tsa());
+        factory.setFieldTypes(clsBitOr, tsa());
+        factory.setFieldTypes(clsBitXor, tsa());
+        factory.setFieldTypes(clsBitAnd, tsa());
+        factory.setFieldTypes(clsFloorDiv, tsa());
+        factory.setFieldTypes(clsInvert, tsa());
+        factory.setFieldTypes(clsNot, tsa());
+        factory.setFieldTypes(clsUAdd, tsa());
+        factory.setFieldTypes(clsUSub, tsa());
+        factory.setFieldTypes(clsEq, tsa());
+        factory.setFieldTypes(clsNotEq, tsa());
+        factory.setFieldTypes(clsLt, tsa());
+        factory.setFieldTypes(clsLtE, tsa());
+        factory.setFieldTypes(clsGt, tsa());
+        factory.setFieldTypes(clsGtE, tsa());
+        factory.setFieldTypes(clsIs, tsa());
+        factory.setFieldTypes(clsIsNot, tsa());
+        factory.setFieldTypes(clsIn, tsa());
+        factory.setFieldTypes(clsNotIn, tsa());
+        factory.setFieldTypes(clsComprehensionTy, tsa(T_F_TARGET, T_F_ITER, T_F_IFS, T_F_IS_ASYNC), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PInt, false, false));
+        factory.setFieldTypes(clsExceptHandler, tsa(T_F_TYPE, T_F_NAME, T_F_BODY), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(PythonBuiltinClassType.PString, false, true), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsArgumentsTy, tsa(T_F_POSONLYARGS, T_F_ARGS, T_F_VARARG, T_F_KWONLYARGS, T_F_KW_DEFAULTS, T_F_KWARG, T_F_DEFAULTS), factory.makeFieldType(clsArgTy, true, false), factory.makeFieldType(clsArgTy, true, false), factory.makeFieldType(clsArgTy, false, true), factory.makeFieldType(clsArgTy, true, false), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsArgTy, false, true), factory.makeFieldType(clsExprTy, true, false));
+        factory.setFieldTypes(clsArgTy, tsa(T_F_ARG, T_F_ANNOTATION, T_F_TYPE_COMMENT), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsKeywordTy, tsa(T_F_ARG, T_F_VALUE), factory.makeFieldType(PythonBuiltinClassType.PString, false, true), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsAliasTy, tsa(T_F_NAME, T_F_ASNAME), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsWithItemTy, tsa(T_F_CONTEXT_EXPR, T_F_OPTIONAL_VARS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsMatchCaseTy, tsa(T_F_PATTERN, T_F_GUARD, T_F_BODY), factory.makeFieldType(clsPatternTy, false, false), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(clsStmtTy, true, false));
+        factory.setFieldTypes(clsMatchValue, tsa(T_F_VALUE), factory.makeFieldType(clsExprTy, false, false));
+        factory.setFieldTypes(clsMatchSingleton, tsa(T_F_VALUE), factory.makeFieldType(PythonBuiltinClassType.PythonObject, false, false));
+        factory.setFieldTypes(clsMatchSequence, tsa(T_F_PATTERNS), factory.makeFieldType(clsPatternTy, true, false));
+        factory.setFieldTypes(clsMatchMapping, tsa(T_F_KEYS, T_F_PATTERNS, T_F_REST), factory.makeFieldType(clsExprTy, true, false), factory.makeFieldType(clsPatternTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsMatchClass, tsa(T_F_CLS, T_F_PATTERNS, T_F_KWD_ATTRS, T_F_KWD_PATTERNS), factory.makeFieldType(clsExprTy, false, false), factory.makeFieldType(clsPatternTy, true, false), factory.makeFieldType(PythonBuiltinClassType.PString, true, false), factory.makeFieldType(clsPatternTy, true, false));
+        factory.setFieldTypes(clsMatchStar, tsa(T_F_NAME), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsMatchAs, tsa(T_F_PATTERN, T_F_NAME), factory.makeFieldType(clsPatternTy, false, true), factory.makeFieldType(PythonBuiltinClassType.PString, false, true));
+        factory.setFieldTypes(clsMatchOr, tsa(T_F_PATTERNS), factory.makeFieldType(clsPatternTy, true, false));
+        factory.setFieldTypes(clsTypeIgnore, tsa(T_F_LINENO, T_F_TAG), factory.makeFieldType(PythonBuiltinClassType.PInt, false, false), factory.makeFieldType(PythonBuiltinClassType.PString, false, false));
+        factory.setFieldTypes(clsTypeVar, tsa(T_F_NAME, T_F_BOUND, T_F_DEFAULT_VALUE), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprTy, false, true), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsParamSpec, tsa(T_F_NAME, T_F_DEFAULT_VALUE), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprTy, false, true));
+        factory.setFieldTypes(clsTypeVarTuple, tsa(T_F_NAME, T_F_DEFAULT_VALUE), factory.makeFieldType(PythonBuiltinClassType.PString, false, false), factory.makeFieldType(clsExprTy, false, true));
     }
 
     private static TruffleString ts(String s) {

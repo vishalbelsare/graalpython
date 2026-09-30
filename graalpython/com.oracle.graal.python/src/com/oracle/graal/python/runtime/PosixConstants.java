@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,8 @@ package com.oracle.graal.python.runtime;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.PythonOS;
 import com.oracle.truffle.api.CompilerDirectives;
 
 public final class PosixConstants {
@@ -56,21 +58,19 @@ public final class PosixConstants {
     public static final boolean IS_WIN32;
 
     static {
-        String os = System.getProperty("os.name");
-        if (os.contains("Linux")) {
+        if (PythonLanguage.getPythonOS() == PythonOS.PLATFORM_LINUX) {
             IS_LINUX = true;
             IS_DARWIN = false;
             IS_WIN32 = false;
-        } else if (os.contains("Mac")) {
+        } else if (PythonLanguage.getPythonOS() == PythonOS.PLATFORM_DARWIN) {
             IS_LINUX = false;
             IS_DARWIN = true;
             IS_WIN32 = false;
-        } else if (os.contains("Windows")) {
+        } else {
+            assert PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32;
             IS_LINUX = false;
             IS_DARWIN = false;
             IS_WIN32 = true;
-        } else {
-            throw new RuntimeException("Unsupported platform " + os);
         }
     }
 
@@ -97,7 +97,21 @@ public final class PosixConstants {
     public static final OptionalIntConstant SEEK_HOLE;
     public static final MandatoryIntConstant SOMAXCONN;
     public static final OptionalIntConstant PIPE_BUF;
+    public static final OptionalIntConstant POLLIN;
+    public static final OptionalIntConstant POLLPRI;
+    public static final OptionalIntConstant POLLOUT;
+    public static final OptionalIntConstant POLLERR;
+    public static final OptionalIntConstant POLLHUP;
+    public static final OptionalIntConstant POLLNVAL;
+    public static final OptionalIntConstant POLLRDNORM;
+    public static final OptionalIntConstant POLLRDBAND;
+    public static final OptionalIntConstant POLLWRNORM;
+    public static final OptionalIntConstant POLLWRBAND;
+    public static final OptionalIntConstant POLLMSG;
     public static final OptionalIntConstant SEM_VALUE_MAX;
+    public static final OptionalIntConstant RUSAGE_CHILDREN;
+    public static final MandatoryIntConstant RUSAGE_SELF;
+    public static final OptionalIntConstant RUSAGE_THREAD;
     public static final OptionalIntConstant O_ACCMODE;
     public static final MandatoryIntConstant O_RDONLY;
     public static final MandatoryIntConstant O_WRONLY;
@@ -127,6 +141,17 @@ public final class PosixConstants {
     public static final OptionalIntConstant O_SEARCH;
     public static final OptionalIntConstant O_PATH;
     public static final OptionalIntConstant O_TTY_INIT;
+    public static final OptionalIntConstant O_EVTONLY;
+    public static final OptionalIntConstant O_FSYNC;
+    public static final OptionalIntConstant O_SYMLINK;
+    public static final OptionalIntConstant O_NOINHERIT;
+    public static final OptionalIntConstant O_NOFOLLOW;
+    public static final OptionalIntConstant O_NOFOLLOW_ANY;
+    public static final OptionalIntConstant O_NOLINKS;
+    public static final OptionalIntConstant O_NOATIME;
+    public static final OptionalIntConstant O_RANDOM;
+    public static final OptionalIntConstant O_SEQUENTIAL;
+    public static final OptionalIntConstant O_ASYNC;
     public static final MandatoryIntConstant S_IFMT;
     public static final MandatoryIntConstant S_IFSOCK;
     public static final MandatoryIntConstant S_IFLNK;
@@ -136,7 +161,7 @@ public final class PosixConstants {
     public static final MandatoryIntConstant S_IFCHR;
     public static final MandatoryIntConstant S_IFIFO;
     public static final MandatoryIntConstant MAP_SHARED;
-    public static final MandatoryIntConstant MAP_PRIVATE;
+    public static final OptionalIntConstant MAP_PRIVATE;
     public static final MandatoryIntConstant MAP_ANONYMOUS;
     public static final OptionalIntConstant MAP_DENYWRITE;
     public static final OptionalIntConstant MAP_EXECUTABLE;
@@ -151,6 +176,11 @@ public final class PosixConstants {
     public static final OptionalIntConstant F_RDLCK;
     public static final OptionalIntConstant F_WRLCK;
     public static final OptionalIntConstant F_UNLCK;
+    public static final OptionalIntConstant _LK_UNLCK;
+    public static final OptionalIntConstant _LK_LOCK;
+    public static final OptionalIntConstant _LK_NBLCK;
+    public static final OptionalIntConstant _LK_RLCK;
+    public static final OptionalIntConstant _LK_NBRLCK;
     public static final MandatoryIntConstant DT_UNKNOWN;
     public static final MandatoryIntConstant DT_FIFO;
     public static final MandatoryIntConstant DT_CHR;
@@ -187,6 +217,11 @@ public final class PosixConstants {
     public static final MandatoryIntConstant RTLD_NOW;
     public static final MandatoryIntConstant RTLD_GLOBAL;
     public static final MandatoryIntConstant RTLD_LOCAL;
+    public static final OptionalIntConstant LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+    public static final OptionalIntConstant LOAD_LIBRARY_SEARCH_APPLICATION_DIR;
+    public static final OptionalIntConstant LOAD_LIBRARY_SEARCH_SYSTEM32;
+    public static final OptionalIntConstant LOAD_LIBRARY_SEARCH_USER_DIRS;
+    public static final OptionalIntConstant LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
     public static final MandatoryIntConstant AF_UNSPEC;
     public static final MandatoryIntConstant AF_INET;
     public static final MandatoryIntConstant AF_INET6;
@@ -329,18 +364,54 @@ public final class PosixConstants {
     public static final OptionalIntConstant IPV6_RECVPATHMTU;
     public static final OptionalIntConstant IPV6_TCLASS;
     public static final OptionalIntConstant IPV6_USE_MIN_MTU;
+    public static final MandatoryIntConstant _SC_ARG_MAX;
+    public static final MandatoryIntConstant _SC_CHILD_MAX;
+    public static final OptionalIntConstant _SC_HOST_NAME_MAX;
+    public static final MandatoryIntConstant _SC_LOGIN_NAME_MAX;
+    public static final OptionalIntConstant _SC_NGROUPS_MAX;
+    public static final MandatoryIntConstant _SC_CLK_TCK;
+    public static final MandatoryIntConstant _SC_OPEN_MAX;
+    public static final MandatoryIntConstant _SC_PAGESIZE;
+    public static final MandatoryIntConstant _SC_PAGE_SIZE;
+    public static final OptionalIntConstant _SC_RE_DUP_MAX;
+    public static final OptionalIntConstant _SC_STREAM_MAX;
+    public static final OptionalIntConstant _SC_SYMLOOP_MAX;
+    public static final OptionalIntConstant _SC_TTY_NAME_MAX;
+    public static final OptionalIntConstant _SC_TZNAME_MAX;
+    public static final OptionalIntConstant _SC_VERSION;
+    public static final OptionalIntConstant _SC_BC_BASE_MAX;
+    public static final OptionalIntConstant _SC_BC_DIM_MAX;
+    public static final OptionalIntConstant _SC_BC_SCALE_MAX;
+    public static final OptionalIntConstant _SC_BC_STRING_MAX;
+    public static final OptionalIntConstant _SC_COLL_WEIGHTS_MAX;
+    public static final OptionalIntConstant _SC_EXPR_NEST_MAX;
+    public static final OptionalIntConstant _SC_LINE_MAX;
+    public static final OptionalIntConstant _SC_2_VERSION;
+    public static final OptionalIntConstant _SC_2_C_DEV;
+    public static final OptionalIntConstant _SC_2_FORT_DEV;
+    public static final OptionalIntConstant _SC_2_FORT_RUN;
+    public static final OptionalIntConstant _SC_2_LOCALEDEF;
+    public static final OptionalIntConstant _SC_2_SW_DEV;
+    public static final MandatoryIntConstant _SC_SEM_NSEMS_MAX;
+    public static final MandatoryIntConstant _SC_PHYS_PAGES;
+    public static final OptionalIntConstant _SC_AVPHYS_PAGES;
+    public static final MandatoryIntConstant _SC_NPROCESSORS_CONF;
+    public static final MandatoryIntConstant _SC_NPROCESSORS_ONLN;
 
+    public static final IntConstant[] pollFlags;
     public static final IntConstant[] openFlags;
     public static final IntConstant[] fileType;
     public static final IntConstant[] mmapFlags;
     public static final IntConstant[] mmapProtection;
     public static final IntConstant[] flockOperation;
     public static final IntConstant[] flockType;
+    public static final IntConstant[] msvcrtLocking;
     public static final IntConstant[] direntType;
     public static final IntConstant[] waitOptions;
     public static final IntConstant[] accessMode;
     public static final IntConstant[] exitStatus;
     public static final IntConstant[] rtld;
+    public static final IntConstant[] winapiLoadLibraryFlags;
     public static final IntConstant[] socketFamily;
     public static final IntConstant[] socketType;
     public static final IntConstant[] ip4Address;
@@ -352,6 +423,7 @@ public final class PosixConstants {
     public static final IntConstant[] socketOptions;
     public static final IntConstant[] tcpOptions;
     public static final IntConstant[] ipv6Options;
+    public static final IntConstant[] sysconfigNames;
 
     static {
         Registry reg = Registry.create();
@@ -376,7 +448,21 @@ public final class PosixConstants {
         SEEK_HOLE = reg.createOptionalInt("SEEK_HOLE");
         SOMAXCONN = reg.createMandatoryInt("SOMAXCONN");
         PIPE_BUF = reg.createOptionalInt("PIPE_BUF");
+        POLLIN = reg.createOptionalInt("POLLIN");
+        POLLPRI = reg.createOptionalInt("POLLPRI");
+        POLLOUT = reg.createOptionalInt("POLLOUT");
+        POLLERR = reg.createOptionalInt("POLLERR");
+        POLLHUP = reg.createOptionalInt("POLLHUP");
+        POLLNVAL = reg.createOptionalInt("POLLNVAL");
+        POLLRDNORM = reg.createOptionalInt("POLLRDNORM");
+        POLLRDBAND = reg.createOptionalInt("POLLRDBAND");
+        POLLWRNORM = reg.createOptionalInt("POLLWRNORM");
+        POLLWRBAND = reg.createOptionalInt("POLLWRBAND");
+        POLLMSG = reg.createOptionalInt("POLLMSG");
         SEM_VALUE_MAX = reg.createOptionalInt("SEM_VALUE_MAX");
+        RUSAGE_CHILDREN = reg.createOptionalInt("RUSAGE_CHILDREN");
+        RUSAGE_SELF = reg.createMandatoryInt("RUSAGE_SELF");
+        RUSAGE_THREAD = reg.createOptionalInt("RUSAGE_THREAD");
         O_ACCMODE = reg.createOptionalInt("O_ACCMODE");
         O_RDONLY = reg.createMandatoryInt("O_RDONLY");
         O_WRONLY = reg.createMandatoryInt("O_WRONLY");
@@ -406,6 +492,17 @@ public final class PosixConstants {
         O_SEARCH = reg.createOptionalInt("O_SEARCH");
         O_PATH = reg.createOptionalInt("O_PATH");
         O_TTY_INIT = reg.createOptionalInt("O_TTY_INIT");
+        O_EVTONLY = reg.createOptionalInt("O_EVTONLY");
+        O_FSYNC = reg.createOptionalInt("O_FSYNC");
+        O_SYMLINK = reg.createOptionalInt("O_SYMLINK");
+        O_NOINHERIT = reg.createOptionalInt("O_NOINHERIT");
+        O_NOFOLLOW = reg.createOptionalInt("O_NOFOLLOW");
+        O_NOFOLLOW_ANY = reg.createOptionalInt("O_NOFOLLOW_ANY");
+        O_NOLINKS = reg.createOptionalInt("O_NOLINKS");
+        O_NOATIME = reg.createOptionalInt("O_NOATIME");
+        O_RANDOM = reg.createOptionalInt("O_RANDOM");
+        O_SEQUENTIAL = reg.createOptionalInt("O_SEQUENTIAL");
+        O_ASYNC = reg.createOptionalInt("O_ASYNC");
         S_IFMT = reg.createMandatoryInt("S_IFMT");
         S_IFSOCK = reg.createMandatoryInt("S_IFSOCK");
         S_IFLNK = reg.createMandatoryInt("S_IFLNK");
@@ -415,7 +512,7 @@ public final class PosixConstants {
         S_IFCHR = reg.createMandatoryInt("S_IFCHR");
         S_IFIFO = reg.createMandatoryInt("S_IFIFO");
         MAP_SHARED = reg.createMandatoryInt("MAP_SHARED");
-        MAP_PRIVATE = reg.createMandatoryInt("MAP_PRIVATE");
+        MAP_PRIVATE = reg.createOptionalInt("MAP_PRIVATE");
         MAP_ANONYMOUS = reg.createMandatoryInt("MAP_ANONYMOUS");
         MAP_DENYWRITE = reg.createOptionalInt("MAP_DENYWRITE");
         MAP_EXECUTABLE = reg.createOptionalInt("MAP_EXECUTABLE");
@@ -430,6 +527,11 @@ public final class PosixConstants {
         F_RDLCK = reg.createOptionalInt("F_RDLCK");
         F_WRLCK = reg.createOptionalInt("F_WRLCK");
         F_UNLCK = reg.createOptionalInt("F_UNLCK");
+        _LK_UNLCK = reg.createOptionalInt("_LK_UNLCK");
+        _LK_LOCK = reg.createOptionalInt("_LK_LOCK");
+        _LK_NBLCK = reg.createOptionalInt("_LK_NBLCK");
+        _LK_RLCK = reg.createOptionalInt("_LK_RLCK");
+        _LK_NBRLCK = reg.createOptionalInt("_LK_NBRLCK");
         DT_UNKNOWN = reg.createMandatoryInt("DT_UNKNOWN");
         DT_FIFO = reg.createMandatoryInt("DT_FIFO");
         DT_CHR = reg.createMandatoryInt("DT_CHR");
@@ -466,6 +568,11 @@ public final class PosixConstants {
         RTLD_NOW = reg.createMandatoryInt("RTLD_NOW");
         RTLD_GLOBAL = reg.createMandatoryInt("RTLD_GLOBAL");
         RTLD_LOCAL = reg.createMandatoryInt("RTLD_LOCAL");
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = reg.createOptionalInt("LOAD_LIBRARY_SEARCH_DEFAULT_DIRS");
+        LOAD_LIBRARY_SEARCH_APPLICATION_DIR = reg.createOptionalInt("LOAD_LIBRARY_SEARCH_APPLICATION_DIR");
+        LOAD_LIBRARY_SEARCH_SYSTEM32 = reg.createOptionalInt("LOAD_LIBRARY_SEARCH_SYSTEM32");
+        LOAD_LIBRARY_SEARCH_USER_DIRS = reg.createOptionalInt("LOAD_LIBRARY_SEARCH_USER_DIRS");
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR = reg.createOptionalInt("LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR");
         AF_UNSPEC = reg.createMandatoryInt("AF_UNSPEC");
         AF_INET = reg.createMandatoryInt("AF_INET");
         AF_INET6 = reg.createMandatoryInt("AF_INET6");
@@ -608,20 +715,58 @@ public final class PosixConstants {
         IPV6_RECVPATHMTU = reg.createOptionalInt("IPV6_RECVPATHMTU");
         IPV6_TCLASS = reg.createOptionalInt("IPV6_TCLASS");
         IPV6_USE_MIN_MTU = reg.createOptionalInt("IPV6_USE_MIN_MTU");
+        _SC_ARG_MAX = reg.createMandatoryInt("_SC_ARG_MAX");
+        _SC_CHILD_MAX = reg.createMandatoryInt("_SC_CHILD_MAX");
+        _SC_HOST_NAME_MAX = reg.createOptionalInt("_SC_HOST_NAME_MAX");
+        _SC_LOGIN_NAME_MAX = reg.createMandatoryInt("_SC_LOGIN_NAME_MAX");
+        _SC_NGROUPS_MAX = reg.createOptionalInt("_SC_NGROUPS_MAX");
+        _SC_CLK_TCK = reg.createMandatoryInt("_SC_CLK_TCK");
+        _SC_OPEN_MAX = reg.createMandatoryInt("_SC_OPEN_MAX");
+        _SC_PAGESIZE = reg.createMandatoryInt("_SC_PAGESIZE");
+        _SC_PAGE_SIZE = reg.createMandatoryInt("_SC_PAGE_SIZE");
+        _SC_RE_DUP_MAX = reg.createOptionalInt("_SC_RE_DUP_MAX");
+        _SC_STREAM_MAX = reg.createOptionalInt("_SC_STREAM_MAX");
+        _SC_SYMLOOP_MAX = reg.createOptionalInt("_SC_SYMLOOP_MAX");
+        _SC_TTY_NAME_MAX = reg.createOptionalInt("_SC_TTY_NAME_MAX");
+        _SC_TZNAME_MAX = reg.createOptionalInt("_SC_TZNAME_MAX");
+        _SC_VERSION = reg.createOptionalInt("_SC_VERSION");
+        _SC_BC_BASE_MAX = reg.createOptionalInt("_SC_BC_BASE_MAX");
+        _SC_BC_DIM_MAX = reg.createOptionalInt("_SC_BC_DIM_MAX");
+        _SC_BC_SCALE_MAX = reg.createOptionalInt("_SC_BC_SCALE_MAX");
+        _SC_BC_STRING_MAX = reg.createOptionalInt("_SC_BC_STRING_MAX");
+        _SC_COLL_WEIGHTS_MAX = reg.createOptionalInt("_SC_COLL_WEIGHTS_MAX");
+        _SC_EXPR_NEST_MAX = reg.createOptionalInt("_SC_EXPR_NEST_MAX");
+        _SC_LINE_MAX = reg.createOptionalInt("_SC_LINE_MAX");
+        _SC_2_VERSION = reg.createOptionalInt("_SC_2_VERSION");
+        _SC_2_C_DEV = reg.createOptionalInt("_SC_2_C_DEV");
+        _SC_2_FORT_DEV = reg.createOptionalInt("_SC_2_FORT_DEV");
+        _SC_2_FORT_RUN = reg.createOptionalInt("_SC_2_FORT_RUN");
+        _SC_2_LOCALEDEF = reg.createOptionalInt("_SC_2_LOCALEDEF");
+        _SC_2_SW_DEV = reg.createOptionalInt("_SC_2_SW_DEV");
+        _SC_SEM_NSEMS_MAX = reg.createMandatoryInt("_SC_SEM_NSEMS_MAX");
+        _SC_PHYS_PAGES = reg.createMandatoryInt("_SC_PHYS_PAGES");
+        _SC_AVPHYS_PAGES = reg.createOptionalInt("_SC_AVPHYS_PAGES");
+        _SC_NPROCESSORS_CONF = reg.createMandatoryInt("_SC_NPROCESSORS_CONF");
+        _SC_NPROCESSORS_ONLN = reg.createMandatoryInt("_SC_NPROCESSORS_ONLN");
 
+        pollFlags = new IntConstant[]{POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDNORM, POLLRDBAND, POLLWRNORM, POLLWRBAND, POLLMSG};
         openFlags = new IntConstant[]{O_ACCMODE, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC, O_APPEND, O_NONBLOCK, O_NOCTTY, O_NDELAY, O_DSYNC, O_CLOEXEC, O_SYNC, O_DIRECT, O_RSYNC,
-                        O_TMPFILE, O_TEMPORARY, O_DIRECTORY, O_BINARY, O_TEXT, O_XATTR, O_LARGEFILE, O_SHLOCK, O_EXLOCK, O_EXEC, O_SEARCH, O_PATH, O_TTY_INIT};
+                        O_TMPFILE, O_TEMPORARY, O_DIRECTORY, O_BINARY, O_TEXT, O_XATTR, O_LARGEFILE, O_SHLOCK, O_EXLOCK, O_EXEC, O_SEARCH, O_PATH, O_TTY_INIT, O_EVTONLY, O_FSYNC, O_SYMLINK,
+                        O_NOINHERIT, O_NOFOLLOW, O_NOFOLLOW_ANY, O_NOLINKS, O_NOATIME, O_RANDOM, O_SEQUENTIAL, O_ASYNC};
         fileType = new IntConstant[]{S_IFMT, S_IFSOCK, S_IFLNK, S_IFREG, S_IFBLK, S_IFDIR, S_IFCHR, S_IFIFO};
         mmapFlags = new IntConstant[]{MAP_SHARED, MAP_PRIVATE, MAP_ANONYMOUS, MAP_DENYWRITE, MAP_EXECUTABLE};
         mmapProtection = new IntConstant[]{PROT_NONE, PROT_READ, PROT_WRITE, PROT_EXEC};
         flockOperation = new IntConstant[]{LOCK_SH, LOCK_EX, LOCK_NB, LOCK_UN};
         flockType = new IntConstant[]{F_RDLCK, F_WRLCK, F_UNLCK};
+        msvcrtLocking = new IntConstant[]{_LK_UNLCK, _LK_LOCK, _LK_NBLCK, _LK_RLCK, _LK_NBRLCK};
         direntType = new IntConstant[]{DT_UNKNOWN, DT_FIFO, DT_CHR, DT_DIR, DT_BLK, DT_REG, DT_LNK, DT_SOCK, DT_WHT};
         waitOptions = new IntConstant[]{WNOHANG, WUNTRACED};
         accessMode = new IntConstant[]{R_OK, W_OK, X_OK, F_OK};
         exitStatus = new IntConstant[]{EX_OK, EX_USAGE, EX_DATAERR, EX_NOINPUT, EX_NOUSER, EX_NOHOST, EX_UNAVAILABLE, EX_SOFTWARE, EX_OSERR, EX_OSFILE, EX_CANTCREAT, EX_IOERR, EX_TEMPFAIL,
                         EX_PROTOCOL, EX_NOPERM, EX_CONFIG, EX_NOTFOUND};
         rtld = new IntConstant[]{RTLD_LAZY, RTLD_NOW, RTLD_GLOBAL, RTLD_LOCAL};
+        winapiLoadLibraryFlags = new IntConstant[]{LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LOAD_LIBRARY_SEARCH_USER_DIRS,
+                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR};
         socketFamily = new IntConstant[]{AF_UNSPEC, AF_INET, AF_INET6, AF_PACKET, AF_UNIX};
         socketType = new IntConstant[]{SOCK_DGRAM, SOCK_STREAM};
         ip4Address = new IntConstant[]{INADDR_ANY, INADDR_BROADCAST, INADDR_NONE, INADDR_LOOPBACK, INADDR_ALLHOSTS_GROUP, INADDR_MAX_LOCAL_GROUP, INADDR_UNSPEC_GROUP};
@@ -640,6 +785,10 @@ public final class PosixConstants {
         ipv6Options = new IntConstant[]{IPV6_JOIN_GROUP, IPV6_LEAVE_GROUP, IPV6_MULTICAST_HOPS, IPV6_MULTICAST_IF, IPV6_MULTICAST_LOOP, IPV6_UNICAST_HOPS, IPV6_V6ONLY, IPV6_CHECKSUM, IPV6_DONTFRAG,
                         IPV6_DSTOPTS, IPV6_HOPLIMIT, IPV6_HOPOPTS, IPV6_NEXTHOP, IPV6_PATHMTU, IPV6_PKTINFO, IPV6_RECVDSTOPTS, IPV6_RECVHOPLIMIT, IPV6_RECVHOPOPTS, IPV6_RECVPKTINFO, IPV6_RECVRTHDR,
                         IPV6_RECVTCLASS, IPV6_RTHDR, IPV6_RTHDRDSTOPTS, IPV6_RTHDR_TYPE_0, IPV6_RECVPATHMTU, IPV6_TCLASS, IPV6_USE_MIN_MTU};
+        sysconfigNames = new IntConstant[]{_SC_ARG_MAX, _SC_CHILD_MAX, _SC_HOST_NAME_MAX, _SC_LOGIN_NAME_MAX, _SC_NGROUPS_MAX, _SC_CLK_TCK, _SC_OPEN_MAX, _SC_PAGESIZE, _SC_PAGE_SIZE, _SC_RE_DUP_MAX,
+                        _SC_STREAM_MAX, _SC_SYMLOOP_MAX, _SC_TTY_NAME_MAX, _SC_TZNAME_MAX, _SC_VERSION, _SC_BC_BASE_MAX, _SC_BC_DIM_MAX, _SC_BC_SCALE_MAX, _SC_BC_STRING_MAX, _SC_COLL_WEIGHTS_MAX,
+                        _SC_EXPR_NEST_MAX, _SC_LINE_MAX, _SC_2_VERSION, _SC_2_C_DEV, _SC_2_FORT_DEV, _SC_2_FORT_RUN, _SC_2_LOCALEDEF, _SC_2_SW_DEV, _SC_SEM_NSEMS_MAX, _SC_PHYS_PAGES, _SC_AVPHYS_PAGES,
+                        _SC_NPROCESSORS_CONF, _SC_NPROCESSORS_ONLN};
     }
     // end generated by gen_native_cfg.py
     // @formatter:on
@@ -728,6 +877,13 @@ public final class PosixConstants {
             Registry registry = new Registry();
             if (IS_LINUX) {
                 PosixConstantsLinux.getConstants(registry);
+                // FIXME GR-51845 hardcoded constants that differ on aarch64
+                String arch = System.getProperty("os.arch");
+                if ("aarch64".equals(arch)) {
+                    registry.constants.put("O_DIRECT", 0x00010000);
+                    registry.constants.put("O_DIRECTORY", 0x00004000);
+                    registry.constants.put("O_TMPFILE", 0x00404000);
+                }
             } else if (IS_DARWIN) {
                 PosixConstantsDarwin.getConstants(registry);
             } else {

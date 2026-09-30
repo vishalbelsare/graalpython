@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,8 +46,11 @@ import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaBooleanNode;
 import com.oracle.graal.python.nodes.util.CastToJavaByteNode;
@@ -57,16 +60,15 @@ import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
 import com.oracle.graal.python.nodes.util.CastToJavaShortNode;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.graal.python.runtime.GilNode;
+import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.util.PythonUtils;
-import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.nodes.DirectCallNode;
-import com.oracle.truffle.api.nodes.IndirectCallNode;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.nodes.Node;
 
 @GenerateUncached
@@ -74,118 +76,128 @@ import com.oracle.truffle.api.nodes.Node;
 @SuppressWarnings("truffle-inlining") // some of the cached nodes in the specialization are not
                                       // inlineable
 public abstract class GetInteropBehaviorValueNode extends PNodeWithContext {
-    public final boolean executeBoolean(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaBooleanNode toBooleanNode, PRaiseNode.Lazy raiseNode,
+    public final boolean executeBoolean(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaBooleanNode toBooleanNode, PRaiseNode raiseNode,
                     PythonAbstractObject receiver, Object... extraArguments) {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
-        Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
-            return toBooleanNode.execute(inliningTarget, value);
-        } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a boolean", value);
+            Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
+            try {
+                return toBooleanNode.execute(inliningTarget, value);
+            } catch (CannotCastException cce) {
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a boolean", value);
+            }
+        } catch (UnsupportedMessageException usm) {
+            return false;
         }
     }
 
-    public final byte executeByte(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaByteNode toByteNode, PRaiseNode.Lazy raiseNode, PythonAbstractObject receiver,
-                    Object... extraArguments) {
+    public final byte executeByte(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaByteNode toByteNode, PRaiseNode raiseNode, PythonAbstractObject receiver,
+                    Object... extraArguments) throws UnsupportedMessageException {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
         Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
             return toByteNode.execute(inliningTarget, value);
         } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a byte", value);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a byte", value);
         }
     }
 
-    public final short executeShort(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaShortNode toShortNode, PRaiseNode.Lazy raiseNode,
-                    PythonAbstractObject receiver, Object... extraArguments) {
+    public final short executeShort(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaShortNode toShortNode, PRaiseNode raiseNode,
+                    PythonAbstractObject receiver, Object... extraArguments) throws UnsupportedMessageException {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
         Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
             return toShortNode.execute(inliningTarget, value);
         } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a short", value);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a short", value);
         }
     }
 
-    public final int executeInt(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaIntExactNode toIntNode, PRaiseNode.Lazy raiseNode, PythonAbstractObject receiver,
-                    Object... extraArguments) {
+    public final int executeInt(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaIntExactNode toIntNode, PRaiseNode raiseNode, PythonAbstractObject receiver,
+                    Object... extraArguments) throws UnsupportedMessageException {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
         Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
             return toIntNode.execute(inliningTarget, value);
         } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "an int", value);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "an int", value);
         }
     }
 
-    public final long executeLong(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaLongExactNode toLongNode, PRaiseNode.Lazy raiseNode,
-                    PythonAbstractObject receiver, Object... extraArguments) {
+    public final long executeLong(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaLongExactNode toLongNode, PRaiseNode raiseNode,
+                    PythonAbstractObject receiver, Object... extraArguments) throws UnsupportedMessageException {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
         Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
             return toLongNode.execute(inliningTarget, value);
         } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a long", value);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a long", value);
         }
     }
 
-    public final double executeDouble(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaDoubleNode toDoubleNode, PRaiseNode.Lazy raiseNode,
-                    PythonAbstractObject receiver, Object... extraArguments) {
+    public final double executeDouble(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaDoubleNode toDoubleNode, PRaiseNode raiseNode,
+                    PythonAbstractObject receiver, Object... extraArguments) throws UnsupportedMessageException {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
         Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
             return toDoubleNode.execute(inliningTarget, value);
         } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a double", value);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a double", value);
         }
     }
 
-    public final String executeString(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaStringNode toStringNode, PRaiseNode.Lazy raiseNode,
-                    PythonAbstractObject receiver, Object... extraArguments) {
+    public final String executeString(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, CastToJavaStringNode toStringNode, PRaiseNode raiseNode,
+                    PythonAbstractObject receiver, Object... extraArguments) throws UnsupportedMessageException {
         assert extraArguments.length == method.extraArguments : "number of passed arguments to GetInteropBehaviorValueNode does not match expected number of arguments for method";
         Object value = execute(inliningTarget, behavior, method, receiver, extraArguments);
         try {
             return toStringNode.execute(value);
         } catch (CannotCastException cce) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a string", value);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_MUST_BE_S_NOT_P, "return value", "a string", value);
         }
     }
 
-    public final Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object arg1, Object arg2) {
+    public final Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object arg1, Object arg2)
+                    throws UnsupportedMessageException {
         assert method.extraArguments == 2 : "method must take 2 arguments only";
         return execute(inliningTarget, behavior, method, receiver, new Object[]{arg1, arg2});
     }
 
-    public final Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object arg1) {
+    public final Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object arg1) throws UnsupportedMessageException {
         assert method.extraArguments == 1 : "method must take 1 argument only";
         return execute(inliningTarget, behavior, method, receiver, new Object[]{arg1});
     }
 
-    public final Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver) {
+    public final Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver) throws UnsupportedMessageException {
         assert method.extraArguments == 0 : "method must not take arguments";
         return execute(inliningTarget, behavior, method, receiver, PythonUtils.EMPTY_OBJECT_ARRAY);
     }
 
-    public abstract Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object[] extraArguments);
+    public abstract Object execute(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object[] extraArguments)
+                    throws UnsupportedMessageException;
 
     @Specialization(guards = {"behavior.isConstant(method)"})
     static Object getValueConstantBoolean(@SuppressWarnings("unused") Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method,
-                    @SuppressWarnings("unused") PythonAbstractObject receiver, @SuppressWarnings("unused") Object[] extraArguments) {
+                    @SuppressWarnings("unused") PythonAbstractObject receiver, @SuppressWarnings("unused") Object[] extraArguments) throws UnsupportedMessageException {
         assert behavior.isDefined(method) : "interop behavior method is not defined!";
         return behavior.getConstantValue(method);
     }
 
     @Specialization(guards = {"!behavior.isConstant(method)", "method.checkArity(extraArguments)"})
     static Object getValue(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object[] extraArguments,
-                    @Cached SimpleInvokeNodeDispatch invokeNode,
-                    @Cached(inline = false) GilNode gil,
-                    @Cached ConvertJavaStringArguments convertArgs) {
+                    @Cached CallDispatchers.FunctionCachedInvokeNode invokeNode,
+                    @Cached ConvertJavaStringArguments convertArgs,
+                    @Cached IsBuiltinObjectProfile unsupportedMessageProfile,
+                    @Cached GilNode gil) throws UnsupportedMessageException {
         assert behavior.isDefined(method) : "interop behavior method is not defined!";
-        CallTarget callTarget = behavior.getCallTarget(method);
+        PFunction function = behavior.getFunction(method);
         Object[] pArguments = behavior.createArguments(method, receiver, convertArgs.execute(inliningTarget, extraArguments));
         boolean mustRelease = gil.acquire();
         try {
-            return invokeNode.execute(inliningTarget, callTarget, pArguments);
+            return invokeNode.execute(null, inliningTarget, function, pArguments);
+        } catch (PException pe) {
+            pe.expect(inliningTarget, PythonBuiltinClassType.UnsupportedMessage, unsupportedMessageProfile);
+            throw UnsupportedMessageException.create();
         } finally {
             gil.release(mustRelease);
         }
@@ -194,9 +206,9 @@ public abstract class GetInteropBehaviorValueNode extends PNodeWithContext {
     @Specialization(guards = {"!behavior.isConstant(method)", "!method.checkArity(extraArguments)"})
     @SuppressWarnings("unused")
     static Object getValueComputedWrongArity(Node inliningTarget, InteropBehavior behavior, InteropBehaviorMethod method, PythonAbstractObject receiver, Object[] extraArguments,
-                    @Cached PRaiseNode raiseNode) {
+                    @Cached PRaiseNode raiseNode) throws UnsupportedMessageException {
         assert behavior.isDefined(method) : "interop behavior method is not defined!";
-        throw raiseNode.raise(PythonBuiltinClassType.TypeError, FUNC_TAKES_EXACTLY_D_ARGS, method.extraArguments, extraArguments.length);
+        throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, FUNC_TAKES_EXACTLY_D_ARGS, method.extraArguments, extraArguments.length);
     }
 
     @NeverDefault
@@ -206,25 +218,6 @@ public abstract class GetInteropBehaviorValueNode extends PNodeWithContext {
 
     public static GetInteropBehaviorValueNode getUncached() {
         return GetInteropBehaviorValueNodeGen.getUncached();
-    }
-
-    @GenerateUncached
-    @GenerateInline
-    abstract static class SimpleInvokeNodeDispatch extends Node {
-        public abstract Object execute(Node inliningTarget, CallTarget callTarget, Object[] arguments);
-
-        @Specialization(guards = {"cachedCallTarget == callTarget"}, limit = "3")
-        static Object doDirectCall(Node inliningTarget, CallTarget callTarget, Object[] arguments,
-                        @Cached("callTarget") CallTarget cachedCallTarget,
-                        @Cached("create(callTarget)") DirectCallNode directCallNode) {
-            return directCallNode.call(arguments);
-        }
-
-        @Specialization(replaces = "doDirectCall")
-        static Object doIndirectCall(Node inliningTarget, CallTarget callTarget, Object[] arguments,
-                        @Cached IndirectCallNode indirectCallNode) {
-            return indirectCallNode.call(callTarget, arguments);
-        }
     }
 
     @GenerateUncached

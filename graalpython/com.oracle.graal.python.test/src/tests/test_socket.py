@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,9 +37,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import socket
-import sys
 import threading
 import unittest
+
+from tests.util import storage_to_native
 
 
 def test_inet_aton():
@@ -58,6 +59,13 @@ class TestInetAtonErrors(unittest.TestCase):
         self.assertRaises(OSError, lambda : socket.inet_aton('255.255.256.1'))
         self.assertRaises(TypeError, lambda : socket.inet_aton(255))
 
+
+class TestHostLookupErrors(unittest.TestCase):
+    def test_gethostbyname_ex_invalid_host_raises_gaierror(self):
+        with self.assertRaises(socket.gaierror):
+            socket.gethostbyname_ex("nonexistent.invalid")
+
+
 def test_get_name_info():
     import socket
     try :
@@ -68,6 +76,12 @@ def test_get_name_info():
 
 
 def test_recv_into():
+    try:
+        if __graalpython__.posix_module_backend() == "java":
+            return  # transient timeouts
+    except NameError:
+        pass # not graalpy
+
     port = None
     event = threading.Event()
     def server():
@@ -90,11 +104,39 @@ def test_recv_into():
         buffer = memoryview(b)[1:]
         sock.recv_into(buffer, 1)
         assert b == b'12a'
-        if sys.implementation.name == 'graalpy':
-            assert hasattr(__graalpython__, 'storage_to_native'), "Needs to be run with --python.EnableDebuggingBuiltins"
-            __graalpython__.storage_to_native(b)
+        storage_to_native(b)
         # Native buffer, no internal array
         buffer = memoryview(buffer)[1:]
         sock.recv_into(buffer, 1)
         assert b == b'123'
     thread.join()
+
+
+def test_sendto_recvfrom_roundtrip():
+    try:
+        if __graalpython__.posix_module_backend() == "java":
+            return
+    except NameError:
+        pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server_addr = server.getsockname()
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+            client.bind(("127.0.0.1", 0))
+            client_addr = client.getsockname()
+
+            sent = client.sendto(b"phase5", server_addr)
+            assert sent == 6
+
+            data, addr = server.recvfrom(64)
+            assert data == b"phase5"
+            assert addr == client_addr
+
+            sent = server.sendto(b"reply", client_addr)
+            assert sent == 5
+
+            data, addr = client.recvfrom(64)
+            assert data == b"reply"
+            assert addr == server_addr

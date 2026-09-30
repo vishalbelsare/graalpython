@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,12 +40,14 @@
  */
 package com.oracle.graal.python.builtins.objects.common;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.nodes.ErrorMessages.FOREIGN_OBJ_ISNT_REVERSE_ITERABLE;
+
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage.EconomicMapSetStringKey;
-import com.oracle.graal.python.builtins.objects.common.KeywordsStorage.GetKeywordsStorageItemNode;
-import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.PutNode;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.CachedHashingStorageGetItemNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageAddAllToOtherNodeGen;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageAddKeywordsNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageCopyNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageDelItemNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageForEachNodeGen;
@@ -60,10 +62,19 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactor
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageLenNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageSetItemNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodesFactory.HashingStorageSetItemWithHashNodeGen;
+import com.oracle.graal.python.builtins.objects.common.KeywordsStorage.GetKeywordsStorageItemNode;
+import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.PutNode;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.lib.PyObjectHashNode;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
 import com.oracle.graal.python.lib.PyUnicodeCheckExactNode;
 import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.PNodeWithContext;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromPythonObjectNode;
+import com.oracle.graal.python.nodes.interop.PForeignToPTypeNode;
+import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
 import com.oracle.graal.python.nodes.util.CastBuiltinStringToTruffleStringNode;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -81,36 +92,20 @@ import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.InvalidArrayIndexException;
+import com.oracle.truffle.api.interop.StopIterationException;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public class HashingStorageNodes {
-
-    public abstract static class HashingStorageGuards {
-        private HashingStorageGuards() {
-        }
-
-        /**
-         * If the storage may contain keys that may have side-effecting {@code __eq__}
-         * implementation.
-         */
-        public static boolean mayHaveSideEffectingEq(PHashingCollection wrapper) {
-            return wrapper.getDictStorage() instanceof EconomicMapStorage;
-        }
-
-        public static boolean mayHaveSideEffects(PHashingCollection wrapper) {
-            HashingStorage s = wrapper.getDictStorage();
-            return !(s instanceof EconomicMapStorage && ((EconomicMapStorage) s).map.hasSideEffect());
-        }
-    }
 
     @GenerateUncached
     @GenerateInline
@@ -126,7 +121,7 @@ public class HashingStorageNodes {
         @Specialization
         static Object economicMap(Frame frame, Node inliningTarget, EconomicMapStorage self, Object key, long keyHash,
                         @Cached ObjectHashMap.GetNode getNode) {
-            return getNode.execute(frame, inliningTarget, self.map, key, keyHash);
+            return getNode.execute(frame, inliningTarget, self, key, keyHash);
         }
 
         @Specialization
@@ -146,6 +141,52 @@ public class HashingStorageNodes {
         static Object keywords(Frame frame, Node inliningTarget, KeywordsStorage self, Object key, long keyHash,
                         @Cached GetKeywordsStorageItemNode getNode) {
             return getNode.execute(frame, inliningTarget, self, key, keyHash);
+        }
+
+        @Specialization
+        static Object foreign(Node inliningTarget, ForeignHashingStorage self, Object key, long keyHash,
+                        @Cached ForeignHashingStorage.GetNode getNode) {
+            return getNode.execute(inliningTarget, self, key);
+        }
+    }
+
+    @GenerateUncached
+    @GenerateInline
+    @GenerateCached(false)
+    public abstract static class HashingStorageGetItemStringKey extends Node {
+        public abstract Object execute(Node inliningTarget, HashingStorage self, TruffleString key);
+
+        @Specialization
+        static Object economicMap(Node inliningTarget, EconomicMapStorage self, TruffleString key,
+                        @Cached TruffleString.HashCodeNode hashCodeNode,
+                        @Cached ObjectHashMap.GetNode getNode) {
+            return getNode.execute(null, inliningTarget, self, key, PyObjectHashNode.hash(key, hashCodeNode));
+        }
+
+        @Specialization
+        static Object dom(Node inliningTarget, DynamicObjectStorage self, TruffleString key,
+                        @Cached ReadAttributeFromPythonObjectNode readKey,
+                        @Cached InlinedConditionProfile noValueProfile) {
+            return DynamicObjectStorage.GetItemNode.string(inliningTarget, self, key, -1, readKey, noValueProfile);
+        }
+
+        @Specialization
+        @SuppressWarnings("unused")
+        static Object empty(EmptyStorage self, TruffleString key) {
+            return null;
+        }
+
+        @Specialization
+        @InliningCutoff
+        static Object keywords(Node inliningTarget, KeywordsStorage self, TruffleString key,
+                        @Cached GetKeywordsStorageItemNode getNode) {
+            return getNode.execute(null, inliningTarget, self, key, -1);
+        }
+
+        @Specialization
+        static Object foreign(Node inliningTarget, ForeignHashingStorage self, TruffleString key,
+                        @Cached ForeignHashingStorage.GetNode getNode) {
+            return getNode.execute(inliningTarget, self, key);
         }
     }
 
@@ -177,21 +218,17 @@ public class HashingStorageNodes {
             return execute(null, inliningTarget, self, key);
         }
 
-        public final Object execute(Node inliningTarget, HashingStorage self, HiddenKey key) {
-            return execute(null, inliningTarget, self, key);
-        }
-
         public abstract Object execute(Frame frame, Node inliningTarget, HashingStorage self, Object key);
 
         @Specialization(guards = "isEconomicMapOrEmpty(self)")
         static Object economicMap(Frame frame, Node inliningTarget, HashingStorage self, Object key,
-                        @Cached PyObjectHashNode hashNode,
+                        @Exclusive @Cached PyObjectHashNode hashNode,
                         @Cached InlinedConditionProfile isEconomicMapProfile,
                         @Cached ObjectHashMap.GetNode getNode) {
             // We must not omit the potentially side-effecting call to __hash__
             long hash = hashNode.execute(frame, inliningTarget, key);
             if (isEconomicMapProfile.profile(inliningTarget, self instanceof EconomicMapStorage)) {
-                return getNode.execute(frame, inliningTarget, ((EconomicMapStorage) self).map, key, hash);
+                return getNode.execute(frame, inliningTarget, (EconomicMapStorage) self, key, hash);
             } else {
                 return null;
             }
@@ -208,6 +245,12 @@ public class HashingStorageNodes {
         static Object keywords(Frame frame, Node inliningTarget, KeywordsStorage self, Object key,
                         @Cached GetKeywordsStorageItemNode getNode) {
             return getNode.execute(frame, inliningTarget, self, key, -1);
+        }
+
+        @Specialization
+        static Object foreign(Node inliningTarget, ForeignHashingStorage self, Object key,
+                        @Cached ForeignHashingStorage.GetNode getNode) {
+            return getNode.execute(inliningTarget, self, key);
         }
     }
 
@@ -231,17 +274,22 @@ public class HashingStorageNodes {
         public abstract void execute(Node inliningTarget, HashingStorage self, TruffleString key, Object value);
     }
 
-    static EconomicMapStorage dynamicObjectStorageToEconomicMap(Node inliningTarget, DynamicObjectStorage s, DynamicObjectLibrary dylib, PyObjectHashNode hashNode, PutNode putNode) {
-        // TODO: shouldn't we invalidate all MRO assumptions in this case?
+    static EconomicMapStorage dynamicObjectStorageToEconomicMap(Node inliningTarget, DynamicObjectStorage s,
+                    DynamicObject.SetShapeFlagsNode setShapeFlags,
+                    DynamicObject.GetKeyArrayNode getKeyArrayNode, DynamicObject.GetNode getNode,
+                    PyObjectHashNode hashNode, ObjectHashMap.PutNode putNode) {
         DynamicObject store = s.store;
-        EconomicMapStorage result = EconomicMapStorage.create(dylib.getShape(store).getPropertyCount());
-        ObjectHashMap resultMap = result.map;
-        Object[] keys = dylib.getKeyArray(store);
+        if (store instanceof PythonObject pyObj) {
+            setShapeFlags.executeAdd(pyObj, PythonObject.HAS_MATERIALIZED_DICT);
+        }
+        Object[] keys = getKeyArrayNode.execute(store);
+        EconomicMapStorage result = EconomicMapStorage.create(keys.length);
+        ObjectHashMap resultMap = result;
         for (Object k : keys) {
             if (k instanceof TruffleString) {
-                Object v = dylib.getOrDefault(store, k, PNone.NO_VALUE);
+                Object v = getNode.execute(store, k, PNone.NO_VALUE);
                 if (v != PNone.NO_VALUE) {
-                    putNode.execute(null, inliningTarget, resultMap, k, hashNode.execute(null, inliningTarget, k), v);
+                    putNode.put(null, inliningTarget, resultMap, k, hashNode.execute(null, inliningTarget, k), v);
                 }
             }
         }
@@ -266,32 +314,25 @@ public class HashingStorageNodes {
 
         @Specialization
         static HashingStorage economicMap(Frame frame, Node inliningTarget, EconomicMapStorage self, Object key, long keyHash, Object value,
-                        @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
-                        @Exclusive @Cached ObjectHashMap.PutNode putNode) {
-            putNode.execute(frame, inliningTarget, self.map, key, keyHash, value);
-            if (!self.map.hasSideEffect() && !isBuiltinString.execute(inliningTarget, key)) {
-                self.map.setSideEffectingKeysFlag();
-            }
+                        @Exclusive @Cached PutNode putNode) {
+            putNode.execute(frame, inliningTarget, self, key, keyHash, value);
             return self;
         }
 
         @Specialization
         static HashingStorage empty(Frame frame, Node inliningTarget, @SuppressWarnings("unused") EmptyStorage self, Object key, long keyHash, Object value,
-                        @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
-                        @Exclusive @Cached ObjectHashMap.PutNode putNode) {
-            EconomicMapStorage storage = EconomicMapStorage.create(1);
-            putNode.execute(frame, inliningTarget, storage.map, key, keyHash, value);
-            if (!isBuiltinString.execute(inliningTarget, key)) {
-                storage.map.setSideEffectingKeysFlag();
-            }
-            return storage;
+                        @Exclusive @Cached PutNode putNode) {
+            EconomicMapStorage result = EconomicMapStorage.create(1);
+            putNode.execute(frame, inliningTarget, result, key, keyHash, value);
+            return result;
         }
 
         @Specialization(guards = "!self.shouldTransitionOnPut()")
         static HashingStorage domStringKey(Node inliningTarget, DynamicObjectStorage self, TruffleString key, long keyHash, Object value,
-                        @Cached InlinedBranchProfile invalidateMroProfile,
-                        @Shared @CachedLibrary(limit = "3") DynamicObjectLibrary dylib) {
-            self.setStringKey(key, value, dylib, inliningTarget, invalidateMroProfile);
+                        @Cached DynamicObject.PutNode putNode,
+                        @Cached InlinedBranchProfile invalidateLengthProfile,
+                        @Cached DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
+            self.setStringKey(inliningTarget, key, value, putNode, invalidateLengthProfile, setShapeFlagsNode);
             return self;
         }
 
@@ -300,7 +341,6 @@ public class HashingStorageNodes {
         static HashingStorage dom(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, long keyHash, Object value,
                         @Cached InlinedConditionProfile shouldTransitionProfile,
                         @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
-                        @Shared @CachedLibrary(limit = "3") DynamicObjectLibrary dylib,
                         @Cached DOMStorageSetItemWithHash domNode) {
             boolean transition = true;
             if (shouldTransitionProfile.profile(inliningTarget, !self.shouldTransitionOnPut())) {
@@ -308,19 +348,25 @@ public class HashingStorageNodes {
                     transition = false;
                 }
             }
-            return domNode.execute(frame, inliningTarget, self, key, keyHash, value, transition, dylib);
+            return domNode.execute(frame, inliningTarget, self, key, keyHash, value, transition);
         }
 
         @Specialization
         @InliningCutoff
         static HashingStorage keywords(Frame frame, Node inliningTarget, KeywordsStorage self, Object key, long keyHash, Object value,
-                        @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
-                        @Exclusive @Cached ObjectHashMap.PutNode putNode,
+                        @Exclusive @Cached PutNode putNode,
                         @Cached EconomicMapSetStringKey specializedPutNode) {
             // TODO: do we want to try DynamicObjectStorage if the key is a string?
             EconomicMapStorage result = EconomicMapStorage.create(self.length());
             self.addAllTo(inliningTarget, result, specializedPutNode);
-            return economicMap(frame, inliningTarget, result, key, keyHash, value, isBuiltinString, putNode);
+            return economicMap(frame, inliningTarget, result, key, keyHash, value, putNode);
+        }
+
+        @Specialization
+        static HashingStorage foreign(Node inliningTarget, ForeignHashingStorage self, Object key, long keyHash, Object value,
+                        @Cached ForeignHashingStorage.PutNode putNode) {
+            putNode.execute(inliningTarget, self, key, value);
+            return self;
         }
 
         @GenerateUncached
@@ -329,25 +375,29 @@ public class HashingStorageNodes {
         @ImportStatic(PGuards.class)
         abstract static class DOMStorageSetItemWithHash extends Node {
             public abstract HashingStorage execute(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, long keyHash, Object value,
-                            boolean transition, DynamicObjectLibrary dylib);
+                            boolean transition);
 
             @Specialization(guards = {"!transition", "isBuiltinString.execute(inliningTarget, key)"}, limit = "1")
-            static HashingStorage domStringKey(Node inliningTarget, DynamicObjectStorage self, Object key, @SuppressWarnings("unused") long keyHash, Object value,
-                            @SuppressWarnings("unused") boolean transition, DynamicObjectLibrary dylib,
+            static HashingStorage domStringKey(Node inliningTarget, DynamicObjectStorage self, Object key, long keyHash, Object value, boolean transition,
                             @SuppressWarnings("unused") @Cached PyUnicodeCheckExactNode isBuiltinString,
                             @Cached CastBuiltinStringToTruffleStringNode castStr,
-                            @Cached InlinedBranchProfile invalidateMroProfile) {
-                self.setStringKey(castStr.execute(inliningTarget, key), value, dylib, inliningTarget, invalidateMroProfile);
+                            @Cached DynamicObject.PutNode putNode,
+                            @Cached InlinedBranchProfile invalidateLengthProfile,
+                            @Shared("setShapeFlags") @Cached DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
+                self.setStringKey(inliningTarget, castStr.execute(inliningTarget, key), value, putNode, invalidateLengthProfile, setShapeFlagsNode);
                 return self;
             }
 
             @Fallback
-            static HashingStorage domTransition(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, @SuppressWarnings("unused") long keyHash, Object value,
-                            @SuppressWarnings("unused") boolean transition, DynamicObjectLibrary dylib,
+            static HashingStorage domTransition(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, long keyHash, Object value, boolean transition,
                             @Cached PyObjectHashNode hashNode,
-                            @Cached ObjectHashMap.PutNode putNode) {
-                EconomicMapStorage result = dynamicObjectStorageToEconomicMap(inliningTarget, self, dylib, hashNode, putNode);
-                putNode.execute(frame, inliningTarget, result.map, key, keyHash, value);
+                            @Cached ObjectHashMap.PutNode putUnsafeNode,
+                            @Cached PutNode putNode,
+                            @Shared("setShapeFlags") @Cached DynamicObject.SetShapeFlagsNode setShapeFlags,
+                            @Cached DynamicObject.GetKeyArrayNode getKeyArrayNode,
+                            @Cached DynamicObject.GetNode getNode) {
+                EconomicMapStorage result = dynamicObjectStorageToEconomicMap(inliningTarget, self, setShapeFlags, getKeyArrayNode, getNode, hashNode, putUnsafeNode);
+                putNode.execute(frame, inliningTarget, result, key, keyHash, value);
                 return result;
             }
         }
@@ -387,34 +437,31 @@ public class HashingStorageNodes {
 
         @Specialization
         static HashingStorage economicMap(Frame frame, Node inliningTarget, EconomicMapStorage self, Object key, Object value,
-                        @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
                         @Exclusive @Cached PyObjectHashNode hashNode,
-                        @Exclusive @Cached ObjectHashMap.PutNode putNode) {
-            putNode.execute(frame, inliningTarget, self.map, key, hashNode.execute(frame, inliningTarget, key), value);
-            if (!self.map.hasSideEffect() && !isBuiltinString.execute(inliningTarget, key)) {
-                self.map.setSideEffectingKeysFlag();
-            }
+                        @Exclusive @Cached PutNode putNode) {
+            putNode.execute(frame, inliningTarget, self, key, hashNode.execute(frame, inliningTarget, key), value);
             return self;
         }
 
         @Specialization
         static HashingStorage empty(Frame frame, Node inliningTarget, @SuppressWarnings("unused") EmptyStorage self, Object key, Object value,
-                        @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
                         @Exclusive @Cached PyObjectHashNode hashNode,
-                        @Exclusive @Cached ObjectHashMap.PutNode putNode) {
-            // The ObjectHashMap.PutNode is @Exclusive because profiles for a put into a freshly new
-            // allocated map can be quite different to profiles in the other situations when we are
-            // putting into a map that already has or will have some more items in it
-            // It is also @Cached(inline = false) because inlining it triggers GR-44836
+                        @Exclusive @Cached PutNode putNode) {
+            // Route the first insertion through the EconomicMapStorage specialization so the
+            // EmptyStorage fast path keeps sharing the regular EconomicMapStorage setup logic.
+            // The ObjectHashMap.PutNode is @Exclusive because profiles for a put into a freshly
+            // allocated map can differ from puts into a map that already has or will soon have
+            // more entries.
             // TODO: do we want to try DynamicObjectStorage if the key is a string?
-            return economicMap(frame, inliningTarget, EconomicMapStorage.create(1), key, value, isBuiltinString, hashNode, putNode);
+            return economicMap(frame, inliningTarget, EconomicMapStorage.create(1), key, value, hashNode, putNode);
         }
 
         @Specialization(guards = "!self.shouldTransitionOnPut()")
         static HashingStorage domStringKey(Node inliningTarget, DynamicObjectStorage self, TruffleString key, Object value,
-                        @Cached InlinedBranchProfile invalidateMroProfile,
-                        @Shared @CachedLibrary(limit = "3") DynamicObjectLibrary dylib) {
-            self.setStringKey(key, value, dylib, inliningTarget, invalidateMroProfile);
+                        @Cached DynamicObject.PutNode putNode,
+                        @Cached InlinedBranchProfile invalidateLengthProfile,
+                        @Cached DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
+            self.setStringKey(inliningTarget, key, value, putNode, invalidateLengthProfile, setShapeFlagsNode);
             return self;
         }
 
@@ -423,7 +470,6 @@ public class HashingStorageNodes {
         static HashingStorage dom(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, Object value,
                         @Cached InlinedConditionProfile shouldTransitionProfile,
                         @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
-                        @Shared @CachedLibrary(limit = "3") DynamicObjectLibrary dylib,
                         @Cached DOMStorageSetItem domNode) {
             boolean transition = true;
             if (shouldTransitionProfile.profile(inliningTarget, !self.shouldTransitionOnPut())) {
@@ -431,20 +477,30 @@ public class HashingStorageNodes {
                     transition = false;
                 }
             }
-            return domNode.execute(frame, inliningTarget, self, key, value, transition, dylib);
+            return domNode.execute(frame, inliningTarget, self, key, value, transition);
         }
 
         @Specialization
         @InliningCutoff
         static HashingStorage keywords(Frame frame, Node inliningTarget, KeywordsStorage self, Object key, Object value,
                         @Exclusive @Cached PyObjectHashNode hashNode,
-                        @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
-                        @Exclusive @Cached ObjectHashMap.PutNode putNode,
+                        @Exclusive @Cached PutNode putNode,
                         @Cached EconomicMapSetStringKey specializedPutNode) {
             // TODO: do we want to try DynamicObjectStorage if the key is a string?
             EconomicMapStorage result = EconomicMapStorage.create(self.length());
             self.addAllTo(inliningTarget, result, specializedPutNode);
-            return economicMap(frame, inliningTarget, result, key, value, isBuiltinString, hashNode, putNode);
+            return economicMap(frame, inliningTarget, result, key, value, hashNode, putNode);
+        }
+
+        @Specialization
+        static HashingStorage foreign(Node inliningTarget, ForeignHashingStorage self, Object key, Object value,
+                        @Cached ForeignHashingStorage.PutNode putNode) {
+            putNode.execute(inliningTarget, self, key, value);
+            return self;
+        }
+
+        public static HashingStorageSetItem getUncached() {
+            return HashingStorageSetItemNodeGen.getUncached();
         }
 
         @GenerateUncached
@@ -453,25 +509,29 @@ public class HashingStorageNodes {
         @ImportStatic(PGuards.class)
         abstract static class DOMStorageSetItem extends Node {
             public abstract HashingStorage execute(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, Object value,
-                            boolean transition, DynamicObjectLibrary dylib);
+                            boolean transition);
 
             @Specialization(guards = {"!transition", "isBuiltinString.execute(inliningTarget, key)"}, limit = "1")
-            static HashingStorage domStringKey(Node inliningTarget, DynamicObjectStorage self, Object key, Object value,
-                            @SuppressWarnings("unused") boolean transition, DynamicObjectLibrary dylib,
+            static HashingStorage domStringKey(Node inliningTarget, DynamicObjectStorage self, Object key, Object value, boolean transition,
                             @SuppressWarnings("unused") @Cached PyUnicodeCheckExactNode isBuiltinString,
+                            @Cached DynamicObject.PutNode putNode,
                             @Cached CastBuiltinStringToTruffleStringNode castStr,
-                            @Cached InlinedBranchProfile invalidateMroProfile) {
-                self.setStringKey(castStr.execute(inliningTarget, key), value, dylib, inliningTarget, invalidateMroProfile);
+                            @Cached InlinedBranchProfile invalidateLengthProfile,
+                            @Shared("setShapeFlags") @Cached DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
+                self.setStringKey(inliningTarget, castStr.execute(inliningTarget, key), value, putNode, invalidateLengthProfile, setShapeFlagsNode);
                 return self;
             }
 
             @Fallback
-            static HashingStorage domTransition(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, Object value,
-                            @SuppressWarnings("unused") boolean transition, DynamicObjectLibrary dylib,
+            static HashingStorage domTransition(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object key, Object value, boolean transition,
                             @Cached PyObjectHashNode hashNode,
-                            @Cached ObjectHashMap.PutNode putNode) {
-                EconomicMapStorage result = dynamicObjectStorageToEconomicMap(inliningTarget, self, dylib, hashNode, putNode);
-                putNode.execute(frame, inliningTarget, result.map, key, hashNode.execute(frame, inliningTarget, key), value);
+                            @Cached ObjectHashMap.PutNode putUnsafeNode,
+                            @Cached PutNode putNode,
+                            @Shared("setShapeFlags") @Cached DynamicObject.SetShapeFlagsNode setShapeFlags,
+                            @Cached DynamicObject.GetKeyArrayNode getKeyArrayNode,
+                            @Cached DynamicObject.GetNode getNode) {
+                EconomicMapStorage result = dynamicObjectStorageToEconomicMap(inliningTarget, self, setShapeFlags, getKeyArrayNode, getNode, hashNode, putUnsafeNode);
+                putNode.execute(frame, inliningTarget, result, key, hashNode.execute(frame, inliningTarget, key), value);
                 return result;
             }
         }
@@ -482,43 +542,46 @@ public class HashingStorageNodes {
     @GenerateCached(false)
     @ImportStatic({PGuards.class})
     public abstract static class HashingStorageDelItem extends Node {
-        public static void executeUncached(HashingStorage self, Object key, PHashingCollection toUpdate) {
-            HashingStorageDelItemNodeGen.getUncached().executeWithAsserts(null, null, self, key, false, toUpdate);
+        public static boolean executeUncached(HashingStorage self, Object key, Object toUpdate) {
+            return (boolean) HashingStorageDelItemNodeGen.getUncached().executeWithAsserts(null, null, self, key, false, toUpdate);
         }
 
-        public static void executeUncachedWithHash(EconomicMapStorage storage, Object key, long hash) {
-            ObjectHashMapFactory.RemoveNodeGen.getUncached().execute(null, null, storage.map, key, hash);
+        public static Object executePopUncached(HashingStorage self, Object key, Object toUpdate) {
+            return HashingStorageDelItemNodeGen.getUncached().executeWithAsserts(null, null, self, key, true, toUpdate);
         }
 
-        public final void execute(Node inliningTarget, HashingStorage self, TruffleString key, PHashingCollection toUpdate) {
+        public final boolean execute(Node inliningTarget, HashingStorage self, TruffleString key, Object toUpdate) {
             // Shortcut for frequent usage with TruffleString. We do not need a frame in such case,
             // because the string's __hash__ does not need it. Some fast-paths avoid even invoking
             // __hash__ for string keys
-            executeWithAsserts(null, inliningTarget, self, key, false, toUpdate);
+            return (boolean) executeWithAsserts(null, inliningTarget, self, key, false, toUpdate);
         }
 
-        public final void execute(Frame frame, Node inliningTarget, HashingStorage self, Object key, PHashingCollection toUpdate) {
-            executeWithAsserts(frame, inliningTarget, self, key, false, toUpdate);
+        public final boolean execute(Frame frame, Node inliningTarget, HashingStorage self, Object key, Object toUpdate) {
+            return (boolean) executeWithAsserts(frame, inliningTarget, self, key, false, toUpdate);
         }
 
-        public final Object executePop(Node inliningTarget, HashingStorage self, TruffleString key, PHashingCollection toUpdate) {
-            return executeWithAsserts(null, inliningTarget, self, key, true, toUpdate);
-        }
-
-        public final Object executePop(Frame frame, Node inliningTarget, HashingStorage self, Object key, PHashingCollection toUpdate) {
+        public final Object executePop(Frame frame, Node inliningTarget, HashingStorage self, Object key, Object toUpdate) {
             return executeWithAsserts(frame, inliningTarget, self, key, true, toUpdate);
         }
 
-        final Object executeWithAsserts(Frame frame, Node inliningTarget, HashingStorage self, Object key, boolean isPop, PHashingCollection toUpdate) {
-            assert toUpdate != null;
-            CompilerAsserts.partialEvaluationConstant(isPop);
-            return executeImpl(frame, inliningTarget, self, key, isPop, toUpdate);
+        final Object executeWithAsserts(Frame frame, Node inliningTarget, HashingStorage self, Object key, boolean needsValue, Object toUpdate) {
+            assert toUpdate instanceof PHashingCollection || (IsForeignObjectNode.executeUncached(toUpdate) && InteropLibrary.getUncached().hasHashEntries(toUpdate)) : toUpdate;
+            CompilerAsserts.partialEvaluationConstant(needsValue);
+            Object result = executeImpl(frame, inliningTarget, self, key, needsValue, toUpdate);
+            assert needsValue || result instanceof Boolean;
+            return result;
         }
 
-        abstract Object executeImpl(Frame frame, Node inliningTarget, HashingStorage self, Object key, boolean isPop, PHashingCollection toUpdate);
+        /*
+         * When needsValue is true, this node either returns the value which was associated with key
+         * if found, and null otherwise. When needsValue is false, it returns true if it found and
+         * removed the key and false otherwise.
+         */
+        abstract Object executeImpl(Frame frame, Node inliningTarget, HashingStorage self, Object key, boolean needsValue, Object toUpdate);
 
         @Specialization(guards = "isEconomicMapOrEmpty(self)")
-        static Object economicMap(Frame frame, Node inliningTarget, HashingStorage self, Object key, boolean isPop, @SuppressWarnings("unused") PHashingCollection toUpdate,
+        static Object economicMap(Frame frame, Node inliningTarget, HashingStorage self, Object key, boolean needsValue, @SuppressWarnings("unused") Object toUpdate,
                         @Exclusive @Cached InlinedBranchProfile isEconomicMapProfile,
                         @Exclusive @Cached PyObjectHashNode hashNode,
                         @Exclusive @Cached ObjectHashMap.RemoveNode removeNode) {
@@ -526,55 +589,65 @@ public class HashingStorageNodes {
             long hash = hashNode.execute(frame, inliningTarget, key);
             if (self instanceof EconomicMapStorage economicMap) {
                 isEconomicMapProfile.enter(inliningTarget);
-                Object result = removeNode.execute(frame, inliningTarget, economicMap.map, key, hash);
-                return isPop ? result : null;
+                Object result = removeNode.execute(frame, inliningTarget, economicMap, key, hash);
+                return needsValue ? result : result != null;
             }
-            return null;
+            return needsValue ? null : false;
         }
 
         @Specialization
         @InliningCutoff
-        static Object domStringKey(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object keyObj, boolean isPop, @SuppressWarnings("unused") PHashingCollection toUpdate,
+        static Object domStringKey(Frame frame, Node inliningTarget, DynamicObjectStorage self, Object keyObj, boolean needsValue, @SuppressWarnings("unused") Object toUpdate,
                         @Cached PyUnicodeCheckExactNode isBuiltinString,
                         @Cached CastBuiltinStringToTruffleStringNode castStr,
                         @Exclusive @Cached PyObjectHashNode hashNode,
-                        @Exclusive @Cached InlinedBranchProfile invalidateMroProfile,
-                        @CachedLibrary(limit = "3") DynamicObjectLibrary dylib) {
+                        @Cached DynamicObject.GetNode getNode,
+                        @Cached DynamicObject.PutNode putNode,
+                        @Exclusive @Cached InlinedBranchProfile invalidateLengthProfile,
+                        @Cached DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
             if (!isBuiltinString.execute(inliningTarget, keyObj)) {
                 // Just for the potential side effects
                 hashNode.execute(frame, inliningTarget, keyObj);
-                return null;
+                return needsValue ? null : false;
             }
             TruffleString key = castStr.execute(inliningTarget, keyObj);
             DynamicObject store = self.store;
-            if (isPop) {
-                Object val = dylib.getOrDefault(store, key, PNone.NO_VALUE);
+            if (needsValue) {
+                Object val = getNode.execute(store, key, PNone.NO_VALUE);
                 if (val == PNone.NO_VALUE) {
                     return null;
                 } else {
-                    dylib.put(store, key, PNone.NO_VALUE);
-                    self.invalidateAttributeInMROFinalAssumption(key, inliningTarget, invalidateMroProfile);
+                    self.setStringKey(inliningTarget, key, PNone.NO_VALUE, putNode, invalidateLengthProfile, setShapeFlagsNode);
                     return val;
                 }
             } else {
-                if (dylib.putIfPresent(store, key, PNone.NO_VALUE)) {
-                    self.invalidateAttributeInMROFinalAssumption(key, inliningTarget, invalidateMroProfile);
-                }
-                return null;
+                return self.setStringKeyIfPresent(inliningTarget, key, PNone.NO_VALUE, putNode, invalidateLengthProfile, setShapeFlagsNode);
             }
         }
 
         @Specialization
         @InliningCutoff
-        static Object keywords(Frame frame, Node inliningTarget, KeywordsStorage self, Object key, boolean isPop, PHashingCollection toUpdate,
+        static Object keywords(Frame frame, Node inliningTarget, KeywordsStorage self, Object key, boolean needsValue, PHashingCollection toUpdate,
                         @Exclusive @Cached PyObjectHashNode hashNode,
                         @Exclusive @Cached ObjectHashMap.RemoveNode removeNode,
                         @Cached EconomicMapSetStringKey specializedPutNode) {
             EconomicMapStorage newStorage = EconomicMapStorage.create(self.length());
             self.addAllTo(inliningTarget, newStorage, specializedPutNode);
             toUpdate.setDictStorage(newStorage);
-            Object result = removeNode.execute(frame, inliningTarget, newStorage.map, key, hashNode.execute(frame, inliningTarget, key));
-            return isPop ? result : null;
+            Object result = removeNode.execute(frame, inliningTarget, newStorage, key, hashNode.execute(frame, inliningTarget, key));
+            return needsValue ? result : result != null;
+        }
+
+        @Specialization(guards = "!needsValue")
+        static boolean foreignRemove(Node inliningTarget, ForeignHashingStorage self, Object key, boolean needsValue, Object toUpdate,
+                        @Cached ForeignHashingStorage.RemoveNode removeNode) {
+            return removeNode.execute(inliningTarget, self, key);
+        }
+
+        @Specialization(guards = "needsValue")
+        static Object foreignPop(Node inliningTarget, ForeignHashingStorage self, Object key, boolean needsValue, Object toUpdate,
+                        @Cached ForeignHashingStorage.PopNode popNode) {
+            return popNode.execute(inliningTarget, self, key);
         }
     }
 
@@ -603,7 +676,7 @@ public class HashingStorageNodes {
 
         @Specialization
         @InliningCutoff
-        static int dom(Node inliningTarget, DynamicObjectStorage self,
+        static int dom(DynamicObjectStorage self,
                         @Cached(inline = false) DynamicObjectStorage.LengthNode lengthNode) {
             return lengthNode.execute(self);
         }
@@ -617,6 +690,12 @@ public class HashingStorageNodes {
         @Specialization
         static int keywords(KeywordsStorage self) {
             return self.length();
+        }
+
+        @Specialization
+        static int foreign(Node inliningTarget, ForeignHashingStorage self,
+                        @Cached ForeignHashingStorage.LengthNode lengthNode) {
+            return lengthNode.execute(inliningTarget, self);
         }
     }
 
@@ -636,6 +715,13 @@ public class HashingStorageNodes {
         @InliningCutoff
         static HashingStorage dom(Node inliningTarget, DynamicObjectStorage self,
                         @Cached DynamicObjectStorage.ClearNode clearNode) {
+            clearNode.execute(inliningTarget, self);
+            return self;
+        }
+
+        @Specialization
+        static HashingStorage foreign(Node inliningTarget, ForeignHashingStorage self,
+                        @Cached ForeignHashingStorage.ClearNode clearNode) {
             clearNode.execute(inliningTarget, self);
             return self;
         }
@@ -686,6 +772,17 @@ public class HashingStorageNodes {
         static HashingStorage keywords(KeywordsStorage self) {
             return self.copy();
         }
+
+        @Specialization
+        static HashingStorage foreign(Node inliningTarget, ForeignHashingStorage self,
+                        @Cached HashingStorageAddAllToOther addAllToOther) {
+            // We don't know if __eq__ on the keys has side effects and might mutate this dict so
+            // assume yes
+            var copy = EconomicMapStorage.createWithSideEffects();
+            var result = addAllToOther.execute(null, inliningTarget, self, copy);
+            assert result == copy;
+            return copy;
+        }
     }
 
     @ValueType
@@ -693,25 +790,29 @@ public class HashingStorageNodes {
         int index = -1;
         Object currentValue;
         final Object[] domKeys;
-        final DynamicObjectLibrary dylib;
+        final Object foreignHashEntriesIterator;
         final boolean isReverse;
 
         public HashingStorageIterator() {
-            domKeys = null;
-            dylib = null;
-            isReverse = false;
+            this(false);
         }
 
         public HashingStorageIterator(boolean isReverse) {
-            domKeys = null;
-            dylib = null;
+            this.domKeys = null;
+            this.foreignHashEntriesIterator = null;
             this.isReverse = isReverse;
         }
 
-        public HashingStorageIterator(Object[] domKeys, DynamicObjectLibrary dylib, boolean isReverse) {
+        public HashingStorageIterator(Object[] domKeys, boolean isReverse) {
             this.domKeys = domKeys;
-            this.dylib = dylib;
+            this.foreignHashEntriesIterator = null;
             this.isReverse = isReverse;
+        }
+
+        public HashingStorageIterator(Object foreignHashEntriesIterator) {
+            this.domKeys = null;
+            this.foreignHashEntriesIterator = foreignHashEntriesIterator;
+            this.isReverse = false;
         }
 
         /**
@@ -729,8 +830,7 @@ public class HashingStorageNodes {
 
     @GenerateUncached
     @GenerateInline(inlineByDefault = true)
-    @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageGetIterator extends Node {
+    public abstract static class HashingStorageGetIterator extends PNodeWithContext {
         public static HashingStorageIterator executeUncached(HashingStorage storage) {
             return HashingStorageGetIteratorNodeGen.getUncached().execute(null, storage);
         }
@@ -759,8 +859,8 @@ public class HashingStorageNodes {
 
         @Specialization
         static HashingStorageIterator dom(DynamicObjectStorage self,
-                        @CachedLibrary(limit = "3") DynamicObjectLibrary dylib) {
-            return new HashingStorageIterator(dylib.getKeyArray(self.store), dylib, false);
+                        @Cached DynamicObject.GetKeyArrayNode getKeyArrayNode) {
+            return new HashingStorageIterator(getKeyArrayNode.execute(self.store), false);
         }
 
         @Specialization
@@ -772,13 +872,22 @@ public class HashingStorageNodes {
         static HashingStorageIterator keywords(@SuppressWarnings("unused") KeywordsStorage self) {
             return new HashingStorageIterator();
         }
+
+        @Specialization
+        static HashingStorageIterator foreign(ForeignHashingStorage self,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop) {
+            try {
+                return new HashingStorageIterator(interop.getHashEntriesIterator(self.foreignDict));
+            } catch (UnsupportedMessageException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
     }
 
     @GenerateUncached
     @GenerateInline
     @GenerateCached(false)
-    @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageGetReverseIterator extends Node {
+    public abstract static class HashingStorageGetReverseIterator extends PNodeWithContext {
         public static HashingStorageIterator executeUncached(HashingStorage storage) {
             return HashingStorageGetReverseIteratorNodeGen.getUncached().execute(null, storage);
         }
@@ -794,14 +903,14 @@ public class HashingStorageNodes {
         @Specialization
         static HashingStorageIterator economicMap(@SuppressWarnings("unused") EconomicMapStorage self) {
             HashingStorageIterator it = new HashingStorageIterator(true);
-            it.index = self.map.usedHashes;
+            it.index = self.usedHashes;
             return it;
         }
 
         @Specialization
         static HashingStorageIterator dom(DynamicObjectStorage self,
-                        @CachedLibrary(limit = "3") DynamicObjectLibrary dylib) {
-            HashingStorageIterator it = new HashingStorageIterator(dylib.getKeyArray(self.store), dylib, true);
+                        @Cached DynamicObject.GetKeyArrayNode getKeyArrayNode) {
+            HashingStorageIterator it = new HashingStorageIterator(getKeyArrayNode.execute(self.store), true);
             it.index = it.domKeys.length;
             return it;
         }
@@ -817,12 +926,18 @@ public class HashingStorageNodes {
             it.index = self.length();
             return it;
         }
+
+        @Specialization
+        static HashingStorageIterator foreign(@SuppressWarnings("unused") ForeignHashingStorage self,
+                        @Bind Node inliningTarget) {
+            // InteropLibrary does not provide a reverse HashEntriesIterator
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, FOREIGN_OBJ_ISNT_REVERSE_ITERABLE);
+        }
     }
 
     @GenerateUncached
     @GenerateInline(inlineByDefault = true)
-    @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageIteratorNext extends Node {
+    public abstract static class HashingStorageIteratorNext extends PNodeWithContext {
         public static boolean executeUncached(HashingStorage storage, HashingStorageIterator it) {
             return HashingStorageIteratorNextNodeGen.getUncached().execute(null, storage, it);
         }
@@ -844,7 +959,7 @@ public class HashingStorageNodes {
 
         @Specialization(guards = "!it.isReverse")
         static boolean economicMap(EconomicMapStorage self, HashingStorageIterator it) {
-            ObjectHashMap map = self.map;
+            ObjectHashMap map = self;
             it.index++;
             while (it.index < map.usedHashes) {
                 Object val = map.getValue(it.index);
@@ -860,7 +975,7 @@ public class HashingStorageNodes {
 
         @Specialization(guards = "it.isReverse")
         static boolean economicMapReverse(EconomicMapStorage self, HashingStorageIterator it) {
-            ObjectHashMap map = self.map;
+            ObjectHashMap map = self;
             it.index--;
             while (it.index >= 0) {
                 Object val = map.getValue(it.index);
@@ -875,11 +990,12 @@ public class HashingStorageNodes {
         }
 
         @Specialization(guards = "!it.isReverse")
-        static boolean dom(DynamicObjectStorage self, HashingStorageIterator it) {
+        static boolean dom(DynamicObjectStorage self, HashingStorageIterator it,
+                        @Shared @Cached DynamicObject.GetNode getNode) {
             it.index++;
             while (it.index < it.domKeys.length) {
                 if (it.domKeys[it.index] instanceof TruffleString) {
-                    Object val = it.dylib.getOrDefault(self.store, it.domKeys[it.index], PNone.NO_VALUE);
+                    Object val = getNode.execute(self.store, it.domKeys[it.index], PNone.NO_VALUE);
                     if (val != PNone.NO_VALUE) {
                         it.currentValue = val;
                         return true;
@@ -892,11 +1008,12 @@ public class HashingStorageNodes {
         }
 
         @Specialization(guards = "it.isReverse")
-        static boolean domReverse(DynamicObjectStorage self, HashingStorageIterator it) {
+        static boolean domReverse(DynamicObjectStorage self, HashingStorageIterator it,
+                        @Shared @Cached DynamicObject.GetNode getNode) {
             it.index--;
             while (it.index >= 0) {
                 if (it.domKeys[it.index] instanceof TruffleString) {
-                    Object val = it.dylib.getOrDefault(self.store, it.domKeys[it.index], PNone.NO_VALUE);
+                    Object val = getNode.execute(self.store, it.domKeys[it.index], PNone.NO_VALUE);
                     if (val != PNone.NO_VALUE) {
                         it.currentValue = val;
                         return true;
@@ -923,12 +1040,35 @@ public class HashingStorageNodes {
         static boolean keywordsReverse(@SuppressWarnings("unused") KeywordsStorage self, HashingStorageIterator it) {
             return --it.index >= 0;
         }
+
+        @Specialization(guards = "!it.isReverse")
+        static boolean foreign(ForeignHashingStorage self, HashingStorageIterator it,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop) {
+            var iterator = it.foreignHashEntriesIterator;
+            try {
+                if (!interop.hasIteratorNextElement(iterator)) {
+                    return false;
+                }
+
+                var keyValue = interop.getIteratorNextElement(iterator);
+                it.currentValue = keyValue;
+                return true;
+            } catch (UnsupportedMessageException | StopIterationException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
+
+        @Specialization(guards = "it.isReverse")
+        static boolean foreignReverse(@SuppressWarnings("unused") ForeignHashingStorage self, HashingStorageIterator it,
+                        @Bind Node inliningTarget) {
+            // InteropLibrary does not provide a reverse HashEntriesIterator
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, FOREIGN_OBJ_ISNT_REVERSE_ITERABLE);
+        }
     }
 
     @GenerateUncached
     @GenerateInline(inlineByDefault = true)
-    @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageIteratorValue extends Node {
+    public abstract static class HashingStorageIteratorValue extends PNodeWithContext {
         public static Object executeUncached(HashingStorage storage, HashingStorageIterator it) {
             return HashingStorageIteratorValueNodeGen.getUncached().execute(null, storage, it);
         }
@@ -964,12 +1104,24 @@ public class HashingStorageNodes {
         static Object keywords(KeywordsStorage self, HashingStorageIterator it) {
             return self.keywords[it.index].getValue();
         }
+
+        @InliningCutoff
+        @Specialization
+        static Object foreign(ForeignHashingStorage self, HashingStorageIterator it,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop,
+                        @Cached(inline = false) PForeignToPTypeNode toPythonNode) {
+            try {
+                var value = interop.readArrayElement(it.currentValue, 1);
+                return toPythonNode.executeConvert(value);
+            } catch (UnsupportedMessageException | InvalidArrayIndexException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
     }
 
     @GenerateUncached
     @GenerateInline(inlineByDefault = true)
-    @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageIteratorKey extends Node {
+    public abstract static class HashingStorageIteratorKey extends PNodeWithContext {
         public static Object executeUncached(HashingStorage storage, HashingStorageIterator it) {
             return HashingStorageIteratorKeyNodeGen.getUncached().execute(null, storage, it);
         }
@@ -987,7 +1139,7 @@ public class HashingStorageNodes {
 
         @Specialization
         static Object economicMap(EconomicMapStorage self, HashingStorageIterator it) {
-            return self.map.getKey(it.index);
+            return self.getKey(it.index);
         }
 
         @Specialization
@@ -1005,28 +1157,39 @@ public class HashingStorageNodes {
         static Object keywords(KeywordsStorage self, HashingStorageIterator it) {
             return self.keywords[it.index].getName();
         }
+
+        @InliningCutoff
+        @Specialization
+        static Object foreign(ForeignHashingStorage self, HashingStorageIterator it,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop,
+                        @Cached(inline = false) PForeignToPTypeNode toPythonNode) {
+            try {
+                var key = interop.readArrayElement(it.currentValue, 0);
+                return toPythonNode.executeConvert(key);
+            } catch (UnsupportedMessageException | InvalidArrayIndexException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
     }
 
     @GenerateUncached
     @GenerateInline
     @GenerateCached(false)
-    @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageIteratorKeyHash extends Node {
-
+    public abstract static class HashingStorageIteratorKeyHash extends PNodeWithContext {
         public static long executeUncached(HashingStorage storage, HashingStorageIterator it) {
-            return HashingStorageIteratorKeyHashNodeGen.getUncached().execute(null, storage, it);
+            return HashingStorageIteratorKeyHashNodeGen.getUncached().execute(null, null, storage, it);
         }
 
-        public abstract long execute(Node node, HashingStorage storage, HashingStorageIterator it);
+        public abstract long execute(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it);
 
         @Specialization
         static long economicMap(EconomicMapStorage self, HashingStorageIterator it) {
-            return self.map.hashes[it.index];
+            return self.getHash(it.index);
         }
 
         @Specialization
         static long dom(@SuppressWarnings("unused") DynamicObjectStorage self, HashingStorageIterator it,
-                        @Shared("hash") @Cached(inline = false) TruffleString.HashCodeNode hashNode) {
+                        @Shared("hash") @Cached TruffleString.HashCodeNode hashNode) {
             return PyObjectHashNode.hash((TruffleString) it.domKeys[it.index], hashNode);
         }
 
@@ -1038,8 +1201,56 @@ public class HashingStorageNodes {
 
         @Specialization
         static long keywords(KeywordsStorage self, HashingStorageIterator it,
-                        @Shared("hash") @Cached(inline = false) TruffleString.HashCodeNode hashNode) {
+                        @Shared("hash") @Cached TruffleString.HashCodeNode hashNode) {
             return PyObjectHashNode.hash(self.keywords[it.index].getName(), hashNode);
+        }
+
+        @InliningCutoff
+        @Specialization
+        static long foreign(Frame frame, Node inliningTarget, ForeignHashingStorage self, HashingStorageIterator it,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop,
+                        @Cached(inline = false) PForeignToPTypeNode toPythonNode,
+                        @Cached PyObjectHashNode hashNode) {
+            try {
+                var key = interop.readArrayElement(it.currentValue, 0);
+                key = toPythonNode.executeConvert(key);
+                return hashNode.execute(frame, inliningTarget, key);
+            } catch (UnsupportedMessageException | InvalidArrayIndexException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    public abstract static class HashingStoragePop extends Node {
+        /**
+         * Returns {@code null} if there is nothing to pop, otherwise popped [key, value].
+         */
+        public abstract Object[] execute(Node inliningTarget, HashingStorage storage, Object toUpdate);
+
+        @Specialization
+        static Object[] economicMap(Node inliningTarget, EconomicMapStorage self, @SuppressWarnings("unused") Object toUpdate,
+                        @Cached ObjectHashMap.PopNode popNode) {
+            return popNode.execute(inliningTarget, self);
+        }
+
+        // Other storages should not have any side effects, it's OK if they call __eq__
+        @Fallback
+        static Object[] others(Node inliningTarget, HashingStorage storage, Object toUpdate,
+                        @Cached HashingStorageDelItem delItem,
+                        @Cached HashingStorageGetReverseIterator getReverseIterator,
+                        @Cached HashingStorageIteratorNext iterNext,
+                        @Cached HashingStorageIteratorKey iterKey,
+                        @Cached HashingStorageIteratorValue iterValue) {
+            HashingStorageIterator it = getReverseIterator.execute(inliningTarget, storage);
+            if (iterNext.execute(inliningTarget, storage, it)) {
+                Object key = iterKey.execute(inliningTarget, storage, it);
+                var result = new Object[]{key, iterValue.execute(inliningTarget, storage, it)};
+                delItem.execute(null, inliningTarget, storage, key, toUpdate);
+                return result;
+            }
+            return null;
         }
     }
 
@@ -1060,25 +1271,25 @@ public class HashingStorageNodes {
                         @Cached HashingStorageIteratorKey aIterKey,
                         @Cached HashingStorageIteratorValue aIterValue,
                         @Cached HashingStorageIteratorKeyHash aIterHash,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode,
+                        @Cached PyObjectRichCompareBool eqNode,
                         @Cached InlinedLoopConditionProfile loopProfile,
                         @Cached InlinedLoopConditionProfile earlyExitProfile) {
             if (lenANode.execute(inliningTarget, aStorage) != lenBNode.execute(inliningTarget, bStorage)) {
                 return false;
             }
-            int index = 0;
+            int loopCount = 0;
             try {
                 HashingStorageIterator aIter = getAIter.execute(inliningTarget, aStorage);
                 while (loopProfile.profile(inliningTarget, aIterNext.execute(inliningTarget, aStorage, aIter))) {
-                    if (CompilerDirectives.hasNextTier()) {
-                        index++;
+                    if (CompilerDirectives.hasNextTier() && loopCount < Integer.MAX_VALUE) {
+                        loopCount++;
                     }
 
                     Object aKey = aIterKey.execute(inliningTarget, aStorage, aIter);
-                    long aHash = aIterHash.execute(inliningTarget, aStorage, aIter);
+                    long aHash = aIterHash.execute(frame, inliningTarget, aStorage, aIter);
                     Object bValue = getBNode.execute(frame, inliningTarget, bStorage, aKey, aHash);
                     Object aValue = aIterValue.execute(inliningTarget, aStorage, aIter);
-                    if (earlyExitProfile.profile(inliningTarget, !(bValue == null || !eqNode.compare(frame, inliningTarget, bValue, aValue)))) {
+                    if (earlyExitProfile.profile(inliningTarget, !(bValue == null || !eqNode.executeEq(frame, inliningTarget, bValue, aValue)))) {
                         // if->continue such that the "true" count of the profile represents the
                         // loop iterations and the "false" count the early exit
                         continue;
@@ -1086,8 +1297,8 @@ public class HashingStorageNodes {
                     return false;
                 }
             } finally {
-                if (index != 0) {
-                    LoopNode.reportLoopCount(inliningTarget, index);
+                if (loopCount != 0) {
+                    LoopNode.reportLoopCount(inliningTarget, loopCount);
                 }
             }
             return true;
@@ -1133,23 +1344,23 @@ public class HashingStorageNodes {
 
         @Specialization
         static Object doIt(Frame frame, Node callbackInliningTarget, HashingStorage storage, HashingStorageForEachCallback<Object> callback, Object accumulatorIn,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached HashingStorageGetIterator getIter,
                         @Cached HashingStorageIteratorNext iterNext,
                         @Cached InlinedLoopConditionProfile loopProfile) {
-            int index = 0;
+            int loopCount = 0;
             Object accumulator = accumulatorIn;
             try {
                 HashingStorageIterator aIter = getIter.execute(inliningTarget, storage);
                 while (loopProfile.profile(inliningTarget, iterNext.execute(inliningTarget, storage, aIter))) {
-                    if (CompilerDirectives.hasNextTier()) {
-                        index++;
+                    if (CompilerDirectives.hasNextTier() && loopCount < Integer.MAX_VALUE) {
+                        loopCount++;
                     }
                     accumulator = callback.execute(frame, callbackInliningTarget, storage, aIter, accumulator);
                 }
             } finally {
-                if (index != 0) {
-                    LoopNode.reportLoopCount(getIter, index);
+                if (loopCount != 0) {
+                    LoopNode.reportLoopCount(getIter, loopCount);
                 }
             }
             return accumulator;
@@ -1171,23 +1382,23 @@ public class HashingStorageNodes {
     @GenerateInline
     @GenerateCached(false)
     @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageXorCallback extends HashingStorageForEachCallback<ResultAndOther> {
+    public abstract static class HashingStorageXorCallback extends HashingStorageForEachCallback<EconomicMapStorage> {
 
         @Override
-        public abstract ResultAndOther execute(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it, ResultAndOther accumulator);
+        public abstract EconomicMapStorage execute(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it, EconomicMapStorage accumulator);
 
         @Specialization
-        static ResultAndOther doGeneric(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it, ResultAndOther acc,
-                        @Cached ObjectHashMap.PutNode putResultNode,
-                        @Cached HashingStorageGetItemWithHash getFromOther,
+        static EconomicMapStorage doGeneric(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it, EconomicMapStorage acc,
+                        @Cached PutNode putResultNode,
+                        @Cached ObjectHashMap.RemoveNode removeResultNode,
                         @Cached HashingStorageIteratorKey iterKey,
                         @Cached HashingStorageIteratorValue iterValue,
                         @Cached HashingStorageIteratorKeyHash iterHash) {
             Object key = iterKey.execute(inliningTarget, storage, it);
-            long hash = iterHash.execute(inliningTarget, storage, it);
-            Object otherValue = getFromOther.execute(frame, inliningTarget, acc.other, key, hash);
-            if (otherValue == null) {
-                putResultNode.put(frame, inliningTarget, acc.result, key, hash, iterValue.execute(inliningTarget, storage, it));
+            long hash = iterHash.execute(frame, inliningTarget, storage, it);
+            Object removedValue = removeResultNode.execute(frame, inliningTarget, acc, key, hash);
+            if (removedValue == null) {
+                putResultNode.put(frame, inliningTarget, acc, key, hash, iterValue.execute(inliningTarget, storage, it));
             }
             return acc;
         }
@@ -1198,22 +1409,41 @@ public class HashingStorageNodes {
     @GenerateCached(false)
     @ImportStatic({PGuards.class})
     public abstract static class HashingStorageXor extends Node {
-        public abstract HashingStorage execute(Frame frame, Node inliningTarget, HashingStorage a, HashingStorage b);
+        abstract HashingStorage execute(Frame frame, Node inliningTarget, HashingStorage left, HashingStorage right, boolean leftMayBeMutated);
+
+        public final HashingStorage executePreservingLeft(Frame frame, Node inliningTarget, HashingStorage left, HashingStorage right) {
+            return execute(frame, inliningTarget, left, right, false);
+        }
+
+        public final HashingStorage executeMutatingLeft(Frame frame, Node inliningTarget, HashingStorage left, HashingStorage right) {
+            return execute(frame, inliningTarget, left, right, true);
+        }
 
         @Specialization
-        static HashingStorage doIt(Frame frame, Node inliningTarget, HashingStorage aStorage, HashingStorage bStorage,
-                        @Cached HashingStorageForEach forEachA,
-                        @Cached HashingStorageForEach forEachB,
-                        @Cached HashingStorageXorCallback callbackA,
-                        @Cached HashingStorageXorCallback callbackB) {
+        static HashingStorage doEconomicLeft(Frame frame, Node inliningTarget, EconomicMapStorage leftStorage, HashingStorage rightStorage,
+                        boolean leftMayBeMutated,
+                        @Exclusive @Cached HashingStorageForEach forEachRight,
+                        @Exclusive @Cached HashingStorageXorCallback callback) {
+            if (leftStorage == rightStorage) {
+                return EmptyStorage.INSTANCE;
+            }
+            EconomicMapStorage result = leftMayBeMutated ? leftStorage : (EconomicMapStorage) leftStorage.copy();
+            forEachRight.execute(frame, inliningTarget, rightStorage, callback, result);
+            return result;
+        }
+
+        @Specialization(replaces = "doEconomicLeft")
+        static HashingStorage doIt(Frame frame, Node inliningTarget, HashingStorage leftStorage, HashingStorage rightStorage,
+                        @SuppressWarnings("unused") boolean leftMayBeMutated,
+                        @Exclusive @Cached HashingStorageForEach forEachLeft,
+                        @Exclusive @Cached HashingStorageForEach forEachRight,
+                        @Exclusive @Cached HashingStorageTransferItem transferItem,
+                        @Exclusive @Cached HashingStorageXorCallback callback) {
             final EconomicMapStorage result = EconomicMapStorage.createWithSideEffects();
-            ObjectHashMap resultMap = result.map;
 
-            ResultAndOther accA = new ResultAndOther(resultMap, bStorage);
-            forEachA.execute(frame, inliningTarget, aStorage, callbackA, accA);
-
-            ResultAndOther accB = new ResultAndOther(resultMap, aStorage);
-            forEachB.execute(frame, inliningTarget, bStorage, callbackB, accB);
+            HashingStorage copiedLeft = forEachLeft.execute(frame, inliningTarget, leftStorage, transferItem, result);
+            assert copiedLeft == result;
+            forEachRight.execute(frame, inliningTarget, rightStorage, callback, result);
 
             return result;
         }
@@ -1230,12 +1460,12 @@ public class HashingStorageNodes {
 
         @Specialization
         static ResultAndOther doGeneric(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it, ResultAndOther acc,
-                        @Cached ObjectHashMap.PutNode putResultNode,
+                        @Cached PutNode putResultNode,
                         @Cached HashingStorageGetItemWithHash getFromOther,
                         @Cached HashingStorageIteratorKey iterKey,
                         @Cached HashingStorageIteratorKeyHash iterHash) {
             Object key = iterKey.execute(inliningTarget, storage, it);
-            long hash = iterHash.execute(inliningTarget, storage, it);
+            long hash = iterHash.execute(frame, inliningTarget, storage, it);
             Object otherValue = getFromOther.execute(frame, inliningTarget, acc.other, key, hash);
             if (otherValue != null) {
                 putResultNode.put(frame, inliningTarget, acc.result, key, hash, otherValue);
@@ -1259,7 +1489,7 @@ public class HashingStorageNodes {
                         @Cached HashingStorageForEach forEachA,
                         @Cached HashingStorageIntersectCallback callback) {
             final EconomicMapStorage result = EconomicMapStorage.createWithSideEffects();
-            ResultAndOther acc = new ResultAndOther(result.map, bStorage);
+            ResultAndOther acc = new ResultAndOther(result, bStorage);
             forEachA.execute(frame, inliningTarget, aStorage, callback, acc);
             return result;
         }
@@ -1276,13 +1506,13 @@ public class HashingStorageNodes {
 
         @Specialization
         static ResultAndOther doGeneric(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageIterator it, ResultAndOther acc,
-                        @Cached ObjectHashMap.PutNode putResultNode,
+                        @Cached PutNode putResultNode,
                         @Cached HashingStorageGetItemWithHash getFromOther,
                         @Cached HashingStorageIteratorKey iterKey,
                         @Cached HashingStorageIteratorKeyHash iterHash,
                         @Cached HashingStorageIteratorValue iterValue) {
             Object key = iterKey.execute(inliningTarget, storage, it);
-            long hash = iterHash.execute(inliningTarget, storage, it);
+            long hash = iterHash.execute(frame, inliningTarget, storage, it);
             Object otherValue = getFromOther.execute(frame, inliningTarget, acc.other, key, hash);
             if (otherValue == null) {
                 putResultNode.put(frame, inliningTarget, acc.result, key, hash, iterValue.execute(inliningTarget, storage, it));
@@ -1306,7 +1536,7 @@ public class HashingStorageNodes {
                         @Cached HashingStorageForEach forEachA,
                         @Cached HashingStorageDiffCallback callback) {
             final EconomicMapStorage result = EconomicMapStorage.createWithSideEffects();
-            ResultAndOther acc = new ResultAndOther(result.map, bStorage);
+            ResultAndOther acc = new ResultAndOther(result, bStorage);
             forEachA.execute(frame, inliningTarget, aStorage, callback, acc);
             return result;
         }
@@ -1330,7 +1560,7 @@ public class HashingStorageNodes {
                         @Cached HashingStorageIteratorKey iterKey,
                         @Cached HashingStorageIteratorKeyHash iterHash) {
             Object key = iterKey.execute(inliningTarget, aStorage, it);
-            long hash = iterHash.execute(inliningTarget, aStorage, it);
+            long hash = iterHash.execute(frame, inliningTarget, aStorage, it);
             Object otherValue = getFromOther.execute(frame, inliningTarget, bStorage, key, hash);
             if (otherValue == null) {
                 throw AbortIteration.INSTANCE;
@@ -1343,17 +1573,17 @@ public class HashingStorageNodes {
     @GenerateInline
     @GenerateCached(false)
     @ImportStatic({PGuards.class})
-    public abstract static class HashingStorageCompareKeys extends Node {
-        public abstract int execute(Frame frame, Node inliningTarget, HashingStorage a, HashingStorage b);
+    public abstract static class IsKeysSubset extends Node {
+        public abstract boolean execute(Frame frame, Node inliningTarget, HashingStorage a, HashingStorage b);
 
         @Specialization(guards = "aStorage == bStorage")
         @SuppressWarnings("unused")
-        static int doSame(HashingStorage aStorage, HashingStorage bStorage) {
-            return 0;
+        static boolean doSame(HashingStorage aStorage, HashingStorage bStorage) {
+            return true;
         }
 
         @Specialization(guards = "aStorage != bStorage")
-        static int doGeneric(Frame frame, Node inliningTarget, HashingStorage aStorage, HashingStorage bStorage,
+        static boolean doGeneric(Frame frame, Node inliningTarget, HashingStorage aStorage, HashingStorage bStorage,
                         @Cached HashingStorageLen aLenNode,
                         @Cached HashingStorageLen bLenNode,
                         @Cached HashingStorageForEach forEachA,
@@ -1361,18 +1591,14 @@ public class HashingStorageNodes {
             int aLen = aLenNode.execute(inliningTarget, aStorage);
             int bLen = bLenNode.execute(inliningTarget, bStorage);
             if (aLen > bLen) {
-                return 1;
+                return false;
             }
             try {
                 forEachA.execute(frame, inliningTarget, aStorage, callback, bStorage);
             } catch (AbortIteration ignored) {
-                return 1;
+                return false;
             }
-            if (aLen == bLen) {
-                return 0;
-            } else {
-                return -1;
-            }
+            return true;
         }
     }
 
@@ -1394,7 +1620,7 @@ public class HashingStorageNodes {
                         @Cached HashingStorageIteratorKey iterKey,
                         @Cached HashingStorageIteratorKeyHash iterHash) {
             Object key = iterKey.execute(inliningTarget, aStorage, it);
-            long hash = iterHash.execute(inliningTarget, aStorage, it);
+            long hash = iterHash.execute(frame, inliningTarget, aStorage, it);
             Object otherValue = getFromOther.execute(frame, inliningTarget, bStorage, key, hash);
             if (otherValue != null) {
                 throw AbortIteration.INSTANCE;
@@ -1440,20 +1666,20 @@ public class HashingStorageNodes {
 
         @Specialization
         static EconomicMapStorage economic2Economic(Frame frame, Node inliningTarget, EconomicMapStorage src, HashingStorageIterator it, EconomicMapStorage destStorage,
-                        @Cached PutNode putNode) {
-            ObjectHashMap srcMap = src.map;
-            putNode.put(frame, inliningTarget, destStorage.map, srcMap.getKey(it.index), srcMap.hashes[it.index], srcMap.getValue(it.index));
+                        @Exclusive @Cached PutNode putNode) {
+            ObjectHashMap srcMap = src;
+            putNode.put(frame, inliningTarget, destStorage, srcMap.getKey(it.index), srcMap.getHash(it.index), srcMap.getValue(it.index));
             return destStorage;
         }
 
         @Specialization(replaces = "economic2Economic")
         @InliningCutoff
         static HashingStorage economic2Generic(Frame frame, Node inliningTarget, EconomicMapStorage src, HashingStorageIterator it, HashingStorage destStorage,
-                        @Cached HashingStorageSetItemWithHash setItemWithHash) {
+                        @Exclusive @Cached HashingStorageSetItemWithHash setItemWithHash) {
             // Note that the point is to avoid side-effecting __hash__ call. Since the source is
             // economic map, the key may be an arbitrary object.
-            ObjectHashMap srcMap = src.map;
-            return setItemWithHash.execute(frame, inliningTarget, destStorage, srcMap.getKey(it.index), srcMap.hashes[it.index], srcMap.getValue(it.index));
+            ObjectHashMap srcMap = src;
+            return setItemWithHash.execute(frame, inliningTarget, destStorage, srcMap.getKey(it.index), srcMap.getHash(it.index), srcMap.getValue(it.index));
         }
 
         @Fallback
@@ -1473,8 +1699,12 @@ public class HashingStorageNodes {
     @GenerateUncached
     @GenerateInline(inlineByDefault = true)
     public abstract static class HashingStorageAddAllToOther extends Node {
-        public static void executeUncached(HashingStorage source, PHashingCollection dest) {
-            HashingStorageAddAllToOtherNodeGen.getUncached().execute(null, null, source, dest);
+
+        /**
+         * The caller must use dest.setDictStorage(result)
+         */
+        public static HashingStorage executeUncached(HashingStorage source, HashingStorage dest) {
+            return HashingStorageAddAllToOtherNodeGen.getUncached().execute(null, null, source, dest);
         }
 
         @NeverDefault
@@ -1490,6 +1720,9 @@ public class HashingStorageNodes {
             return execute(frame, this, source, dest);
         }
 
+        /**
+         * The caller must use dest.setDictStorage(result) or use DictNodes.UpdateDictStorageNode
+         */
         public abstract HashingStorage execute(Frame frame, Node inliningTarget, HashingStorage source, HashingStorage dest);
 
         @Specialization(guards = "source == dest")
@@ -1503,6 +1736,38 @@ public class HashingStorageNodes {
                         @Cached HashingStorageForEach forEach,
                         @Cached HashingStorageTransferItem transferItem) {
             return forEach.execute(frame, inliningTarget, source, transferItem, dest);
+        }
+    }
+
+    @GenerateUncached
+    @GenerateInline
+    @GenerateCached(false)
+    public abstract static class HashingStorageAddKeywords extends Node {
+
+        /**
+         * The caller must use dest.setDictStorage(result) or use DictNodes.UpdateDictStorageNode.
+         */
+        public abstract HashingStorage execute(Frame frame, Node inliningTarget, PKeyword[] keywords, HashingStorage dest);
+
+        public final void execute(Frame frame, Node inliningTarget, PKeyword[] keywords, PHashingCollection dest) {
+            dest.setDictStorage(execute(frame, inliningTarget, keywords, dest.getDictStorage()));
+        }
+
+        public static HashingStorage executeUncached(PKeyword[] keywords, HashingStorage dest) {
+            return HashingStorageAddKeywordsNodeGen.getUncached().execute(null, null, keywords, dest);
+        }
+
+        @Specialization
+        static HashingStorage doIt(Frame frame, Node inliningTarget, PKeyword[] keywords, HashingStorage dest,
+                        @Cached HashingStorageSetItem setItem,
+                        @Cached InlinedLoopConditionProfile loopProfile) {
+            HashingStorage result = dest;
+            loopProfile.profileCounted(inliningTarget, keywords.length);
+            for (int i = 0; loopProfile.inject(inliningTarget, i < keywords.length); i++) {
+                PKeyword keyword = keywords[i];
+                result = setItem.execute(frame, inliningTarget, result, keyword.getName(), keyword.getValue());
+            }
+            return result;
         }
     }
 }

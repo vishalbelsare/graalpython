@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,74 +41,42 @@
 package com.oracle.graal.python.nodes.classes;
 
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___BASES__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GETATTRIBUTE__;
 
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.lib.PyObjectLookupAttr;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.SpecialMethodNames;
-import com.oracle.graal.python.nodes.attributes.LookupInheritedAttributeNode;
-import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.nodes.call.special.LookupAndCallBinaryNode;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
-import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.truffle.api.dsl.Bind;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.ConstructTupleNode;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
-import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeInfo;
 
-@NodeInfo(shortName = "cpython://Objects/abstract.c/abstract_get_bases")
+@GenerateInline
+@GenerateCached(false)
 @GenerateUncached
-@ImportStatic({SpecialMethodNames.class})
-@SuppressWarnings("truffle-inlining")       // footprint reduction 44 -> 26
 public abstract class AbstractObjectGetBasesNode extends PNodeWithContext {
-    @NeverDefault
-    public static AbstractObjectGetBasesNode create() {
-        return AbstractObjectGetBasesNodeGen.create();
+
+    public abstract PTuple execute(Frame frame, Node inliningTarget, Object cls);
+
+    public static AbstractObjectGetBasesNode getUncached() {
+        return AbstractObjectGetBasesNodeGen.getUncached();
     }
 
-    protected abstract PTuple executeInternal(Frame frame, Object cls);
-
-    public final PTuple execute(VirtualFrame frame, Object cls) {
-        return executeInternal(frame, cls);
-    }
-
-    @Specialization(guards = "!isUncached()")
-    static PTuple getBasesCached(VirtualFrame frame, Object cls,
-                    @Bind("this") Node inliningTarget,
-                    @Cached("create(GetAttribute)") LookupAndCallBinaryNode getAttributeNode,
-                    @Exclusive @Cached IsBuiltinObjectProfile exceptionMaskProfile) {
-        try {
-            Object bases = getAttributeNode.executeObject(frame, cls, T___BASES__);
-            if (bases instanceof PTuple) {
-                return (PTuple) bases;
-            }
-        } catch (PException pe) {
-            pe.expectAttributeError(inliningTarget, exceptionMaskProfile);
-        }
-        return null;
-    }
-
-    @Specialization(replaces = "getBasesCached")
-    static PTuple getBasesUncached(VirtualFrame frame, Object cls,
-                    @Bind("this") Node inliningTarget,
-                    @Cached LookupInheritedAttributeNode.Dynamic lookupGetattributeNode,
-                    @Cached CallNode callGetattributeNode,
-                    @Exclusive @Cached IsBuiltinObjectProfile exceptionMaskProfile) {
-        Object getattr = lookupGetattributeNode.execute(inliningTarget, cls, T___GETATTRIBUTE__);
-        try {
-            Object bases = callGetattributeNode.execute(frame, getattr, cls, T___BASES__);
-            if (bases instanceof PTuple) {
-                return (PTuple) bases;
-            }
-        } catch (PException pe) {
-            pe.expectAttributeError(inliningTarget, exceptionMaskProfile);
+    @Specialization
+    static PTuple getBasesCached(VirtualFrame frame, Node inliningTarget, Object cls,
+                    @Cached PyObjectLookupAttr lookupAttr,
+                    @Cached PyTupleCheckNode tupleCheckNode,
+                    @Cached ConstructTupleNode constructTupleNode) {
+        Object bases = lookupAttr.execute(frame, inliningTarget, cls, T___BASES__);
+        if (bases instanceof PTuple) {
+            return (PTuple) bases;
+        } else if (tupleCheckNode.execute(inliningTarget, bases)) {
+            return constructTupleNode.execute(frame, bases);
         }
         return null;
     }

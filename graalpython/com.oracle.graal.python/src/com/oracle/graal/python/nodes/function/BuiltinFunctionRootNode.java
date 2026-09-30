@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -26,16 +26,15 @@
 package com.oracle.graal.python.nodes.function;
 
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.toTruffleStringArrayUncached;
-import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
+import static com.oracle.graal.python.util.PythonUtils.toInternedTruffleStringArrayUncached;
+import static com.oracle.graal.python.util.PythonUtils.toInternedTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.nodes.PRootNode;
@@ -57,17 +56,14 @@ import com.oracle.graal.python.nodes.function.builtins.PythonSenaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.WrapBinaryfuncR;
 import com.oracle.graal.python.nodes.function.builtins.WrapTpNew;
+import com.oracle.graal.python.nodes.function.builtins.WrapperDescrCall;
 import com.oracle.graal.python.runtime.ExecutionContext.CalleeContext;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -82,9 +78,9 @@ import com.oracle.truffle.api.strings.TruffleString;
  * execute method we want and cares about swapping arguments back if needed.
  */
 public final class BuiltinFunctionRootNode extends PRootNode {
+    public static final TruffleString T_DOLLAR_SELF = tsLiteral("$self");
     public static final TruffleString T_DOLLAR_DECL_TYPE = tsLiteral("$decl_type");
     private static final TruffleString T_DOLLAR_CLS = tsLiteral("$cls");
-    private static final TruffleString T_DOLLAR_SELF = tsLiteral("$self");
 
     private final Signature signature;
     private final Builtin builtin;
@@ -93,10 +89,10 @@ public final class BuiltinFunctionRootNode extends PRootNode {
     private final boolean declaresExplicitSelf;
     @Child private BuiltinCallNode body;
     @Child private CalleeContext calleeContext = CalleeContext.create();
-    private final PythonBuiltinClassType constructsClass;
+    private final PythonBuiltinClassType wrapsSlotForClass;
 
     public BuiltinFunctionRootNode(PythonLanguage language, Signature signature, Builtin builtin, NodeFactory<? extends PythonBuiltinBaseNode> factory, boolean declaresExplicitSelf,
-                    PythonBuiltinClassType constructsClass) {
+                    PythonBuiltinClassType wrapsSlotForClass) {
         super(language);
         CompilerAsserts.neverPartOfCompilation();
         this.signature = signature;
@@ -104,66 +100,26 @@ public final class BuiltinFunctionRootNode extends PRootNode {
         this.name = builtin.name();
         this.factory = factory;
         this.declaresExplicitSelf = declaresExplicitSelf;
-        this.constructsClass = constructsClass;
-        if (builtin.alwaysNeedsCallerFrame()) {
-            setNeedsCallerFrame();
+        this.wrapsSlotForClass = wrapsSlotForClass;
+        if (builtin.callerFlags() != 0) {
+            updateCallerFlags(builtin.callerFlags());
         }
-    }
-
-    public BuiltinFunctionRootNode(PythonLanguage language, Builtin builtin, NodeFactory<? extends PythonBuiltinBaseNode> factory, boolean declaresExplicitSelf,
-                    PythonBuiltinClassType constructsClass) {
-        this(language, createSignature(factory, builtin, declaresExplicitSelf, constructsClass != PythonBuiltinClassType.nil), builtin, factory, declaresExplicitSelf, constructsClass);
     }
 
     public BuiltinFunctionRootNode(PythonLanguage language, Builtin builtin, NodeFactory<? extends PythonBuiltinBaseNode> factory, boolean declaresExplicitSelf) {
-        this(language, builtin, factory, declaresExplicitSelf, builtin.constructsClass());
+        this(language, createSignature(factory, builtin, declaresExplicitSelf, false), builtin, factory, declaresExplicitSelf, null);
     }
 
-    public static class StandaloneBuiltinFactory<T extends PythonBuiltinBaseNode> implements NodeFactory<T> {
-        private final T node;
-
-        public StandaloneBuiltinFactory(T node) {
-            this.node = node;
-        }
-
-        @Override
-        public T createNode(Object... arguments) {
-            return NodeUtil.cloneNode(node);
-        }
-
-        @Override
-        public Class<T> getNodeClass() {
-            return determineNodeClass(node);
-        }
-
-        @SuppressWarnings("unchecked")
-        private static <T> Class<T> determineNodeClass(T node) {
-            CompilerAsserts.neverPartOfCompilation();
-            Class<T> nodeClass = (Class<T>) node.getClass();
-            GeneratedBy genBy = nodeClass.getAnnotation(GeneratedBy.class);
-            if (genBy != null) {
-                nodeClass = (Class<T>) genBy.value();
-                assert nodeClass.isAssignableFrom(node.getClass());
-            }
-            return nodeClass;
-        }
-
-        @Override
-        public List<List<Class<?>>> getNodeSignatures() {
-            throw new IllegalAccessError();
-        }
-
-        @Override
-        public List<Class<? extends Node>> getExecutionSignature() {
-            throw new IllegalAccessError();
-        }
+    public BuiltinFunctionRootNode(PythonLanguage language, Builtin builtin, NodeFactory<? extends PythonBuiltinBaseNode> factory, boolean declaresExplicitSelf,
+                    PythonBuiltinClassType wrapsSlotForClass) {
+        this(language, createSignature(factory, builtin, declaresExplicitSelf, false), builtin, factory, declaresExplicitSelf, wrapsSlotForClass);
     }
 
     /**
      * Should return a signature compatible with {@link #createArgumentsList(Builtin, boolean)}
      */
-    private static Signature createSignature(NodeFactory<? extends PythonBuiltinBaseNode> factory, Builtin builtin, boolean declaresExplicitSelf, boolean constructsClass) {
-        TruffleString[] parameterNames = toTruffleStringArrayUncached(builtin.parameterNames());
+    public static Signature createSignature(NodeFactory<? extends PythonBuiltinBaseNode> factory, Builtin builtin, boolean declaresExplicitSelf, boolean constructsClass) {
+        TruffleString[] parameterNames = toInternedTruffleStringArrayUncached(builtin.parameterNames());
         int maxNumPosArgs = Math.max(builtin.minNumOfPositionalArgs(), parameterNames.length);
 
         if (builtin.maxNumOfPositionalArgs() >= 0) {
@@ -197,9 +153,6 @@ public final class BuiltinFunctionRootNode extends PRootNode {
                 parameterNames = new TruffleString[maxNumPosArgs];
                 int i = 0;
                 if (constructsClass) {
-                    if (!declaresExplicitSelf) {
-                        parameterNames[i++] = T_DOLLAR_DECL_TYPE;
-                    }
                     parameterNames[i++] = T_DOLLAR_CLS;
                 } else {
                     parameterNames[i++] = T_DOLLAR_SELF;
@@ -217,12 +170,15 @@ public final class BuiltinFunctionRootNode extends PRootNode {
                     PythonUtils.arraycopy(parameterNames, 0, parameterNames, 1, parameterNames.length - 1);
                     parameterNames[0] = constructsClass ? T_DOLLAR_DECL_TYPE : T_DOLLAR_SELF;
                 }
+                for (TruffleString name : parameterNames) {
+                    assert !name.isEmpty() : "empty parameter name not allowed on " + factory;
+                }
             }
         }
         assert canUseSpecialBuiltinNode(builtin) || !usesSpecialBuiltinNode(factory.getNodeClass()) : factory.getNodeClass().getName() +
                         " must not use PythonUnary/Binary/Ternary/QuaternaryBultinNode";
         return new Signature(posOnlyArgs, builtin.takesVarKeywordArgs(), builtin.takesVarArgs() ? parameterNames.length : -1,
-                        builtin.varArgsMarker(), parameterNames, toTruffleStringArrayUncached(builtin.keywordOnlyNames()), false, toTruffleStringUncached(builtin.raiseErrorName()));
+                        parameterNames, toInternedTruffleStringArrayUncached(builtin.keywordOnlyNames()), false, toInternedTruffleStringUncached(builtin.raiseErrorName()));
     }
 
     private static boolean validateBuiltin(NodeFactory<? extends PythonBuiltinBaseNode> factory, Builtin builtin) {
@@ -238,6 +194,9 @@ public final class BuiltinFunctionRootNode extends PRootNode {
         } else if (PythonVarargsBuiltinNode.class.isAssignableFrom(nodeClass)) {
             assert builtin.takesVarArgs() : "PythonVararagsBuiltin subclass must take varargs, builtin " + nodeClass.getName();
             assert builtin.takesVarKeywordArgs() : "PythonVararagsBuiltin subclass must take varkwargs, builtin " + nodeClass.getName();
+            assert builtin.minNumOfPositionalArgs() != 0 || builtin.maxNumOfPositionalArgs() != -1 || builtin.numOfPositionalOnlyArgs() != 0 || builtin.parameterNames().length > 0 ||
+                            builtin.keywordOnlyNames().length > 0 : "PythonVararagsBuiltin subclass must not define any parameters on the @Builtin annotation, it must do all parameter parsing and validation themselves, builtin" +
+                                            nodeClass.getName();
         }
         return true;
     }
@@ -246,13 +205,12 @@ public final class BuiltinFunctionRootNode extends PRootNode {
         int minNumPosArgs = builtin.minNumOfPositionalArgs();
         int maxNumPosArgs = builtin.maxNumOfPositionalArgs();
         if (builtin.parameterNames().length > 0) {
-            assert builtin.parameterNames().length == arity : "Mismatch in parameter list length and arity for n-ary builtin " + nodeClass.getName();
             maxNumPosArgs = builtin.parameterNames().length;
         } else if (maxNumPosArgs == -1) {
             maxNumPosArgs = minNumPosArgs;
         }
         assert minNumPosArgs <= arity && minNumPosArgs <= maxNumPosArgs : "Invalid number of min arguments for a n-ary builtin " + nodeClass.getName();
-        assert maxNumPosArgs == arity : "Invalid number of max arguments for a n-ary builtin " + nodeClass.getName();
+        assert maxNumPosArgs + builtin.keywordOnlyNames().length == arity : "Invalid number of max arguments for a n-ary builtin " + nodeClass.getName();
         assert !builtin.takesVarArgs() && !builtin.takesVarKeywordArgs() : "Invalid varargs declaration for a n-ary builtin " + nodeClass.getName();
     }
 
@@ -261,7 +219,7 @@ public final class BuiltinFunctionRootNode extends PRootNode {
     // (Note that this does not apply to PythonVarargsBuiltinNode which can be used with
     // varargs/kwargs builtins.)
     private static boolean canUseSpecialBuiltinNode(Builtin builtin) {
-        return !builtin.takesVarArgs() && !builtin.takesVarKeywordArgs() && !builtin.varArgsMarker() && builtin.keywordOnlyNames().length == 0;
+        return !builtin.takesVarArgs() && !builtin.takesVarKeywordArgs();
     }
 
     private static boolean usesSpecialBuiltinNode(Class<? extends PythonBuiltinBaseNode> clazz) {
@@ -286,6 +244,7 @@ public final class BuiltinFunctionRootNode extends PRootNode {
 
         // if we don't declare the explicit self, we just ignore it
         int skip = needsExplicitSelf ? 0 : 1;
+        int keywordCount = builtin.keywordOnlyNames().length;
 
         // read those arguments that only come positionally
         for (int i = 0; i < maxNumPosArgs; i++) {
@@ -293,17 +252,17 @@ public final class BuiltinFunctionRootNode extends PRootNode {
         }
 
         // read splat args if any
+        int varArgsIndex = skip + maxNumPosArgs + keywordCount;
         if (builtin.takesVarArgs()) {
-            args.add(ReadVarArgsNode.create(true));
+            args.add(ReadVarArgsNode.create(varArgsIndex++));
         }
 
-        int keywordCount = builtin.keywordOnlyNames().length;
         for (int i = 0; i < keywordCount; i++) {
             args.add(ReadIndexedArgumentNode.create(i + maxNumPosArgs + skip));
         }
 
         if (builtin.takesVarKeywordArgs()) {
-            args.add(ReadVarKeywordsNode.create());
+            args.add(ReadVarKeywordsNode.create(varArgsIndex));
         }
 
         return args.toArray(new ReadArgumentNode[args.size()]);
@@ -315,7 +274,7 @@ public final class BuiltinFunctionRootNode extends PRootNode {
     }
 
     @Override
-    public boolean isCaptureFramesForTrace() {
+    public boolean isCaptureFramesForTrace(boolean compiledFrame) {
         return false;
     }
 
@@ -363,15 +322,17 @@ public final class BuiltinFunctionRootNode extends PRootNode {
                 }
             }
 
-            if (builtin.reverseOperation()) {
-                body = insert(new WrapBinaryfuncR(newBody));
-            } else if (constructsClass != PythonBuiltinClassType.nil) {
-                body = insert(new WrapTpNew(newBody, constructsClass));
+            if (wrapsSlotForClass != null) {
+                if (declaresExplicitSelf) {
+                    body = insert(new WrapperDescrCall(newBody, name, wrapsSlotForClass));
+                } else {
+                    body = insert(new WrapTpNew(newBody, wrapsSlotForClass));
+                }
             } else {
                 body = insert(newBody);
             }
         }
-        calleeContext.enter(frame);
+        calleeContext.enter(frame, this);
         try {
             return body.execute(frame);
         } finally {
@@ -425,6 +386,6 @@ public final class BuiltinFunctionRootNode extends PRootNode {
 
     @Override
     protected RootNode cloneUninitialized() {
-        return new BuiltinFunctionRootNode(getLanguage(PythonLanguage.class), signature, builtin, factory, declaresExplicitSelf, constructsClass);
+        return new BuiltinFunctionRootNode(getLanguage(PythonLanguage.class), signature, builtin, factory, declaresExplicitSelf, wrapsSlotForClass);
     }
 }

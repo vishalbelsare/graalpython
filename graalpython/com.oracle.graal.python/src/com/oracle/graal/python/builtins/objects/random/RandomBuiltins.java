@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,34 +42,46 @@ package com.oracle.graal.python.builtins.objects.random;
 
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueError;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.security.SecureRandom;
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetObjectArrayNode;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.GetInternalObjectArrayNode;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyObjectHashNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.GetTupleStorage;
+import com.oracle.graal.python.nodes.call.special.LookupAndCallBinaryNode;
+import com.oracle.graal.python.nodes.call.special.SpecialMethodNotFound;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
+import com.oracle.graal.python.nodes.truffle.PythonIntegerTypes;
 import com.oracle.graal.python.nodes.util.CastToJavaUnsignedLongNode;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -80,26 +92,52 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PRandom)
 public final class RandomBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = RandomBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return RandomBuiltinsFactory.getFactories();
     }
 
+    // _random.Random([seed])
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "Random", minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    abstract static class PRandomNode extends PythonBuiltinNode {
+        private static final TruffleString T_SEED = tsLiteral("seed");
+
+        @Child LookupAndCallBinaryNode setSeed = LookupAndCallBinaryNode.create(T_SEED);
+
+        @Specialization
+        PRandom random(VirtualFrame frame, Object cls, Object seed,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            PRandom random = PFactory.createRandom(cls, getInstanceShape.execute(cls));
+            try {
+                setSeed.executeObject(frame, random, seed != PNone.NO_VALUE ? seed : PNone.NONE);
+            } catch (SpecialMethodNotFound ignore) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw PRaiseNode.raiseStatic(this, PythonBuiltinClassType.SystemError);
+            }
+            return random;
+        }
+    }
+
     @Builtin(name = "seed", minNumOfPositionalArgs = 1, parameterNames = {"$self", "seed"})
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @TypeSystemReference(PythonIntegerTypes.class)
     public abstract static class SeedNode extends PythonBuiltinNode {
         @Specialization
         @TruffleBoundary
         PNone seedNone(PRandom random, @SuppressWarnings("unused") PNone none) {
-            SecureRandom secureRandom = getContext().getSecureRandom();
             int[] seed = new int[PRandom.N];
-            for (int i = 0; i < seed.length; ++i) {
-                seed[i] = secureRandom.nextInt();
-            }
+            byte[] seedBytes = new byte[seed.length * Integer.BYTES];
+            getContext().fillInitializationEntropyBytes(seedBytes);
+            ByteBuffer.wrap(seedBytes).order(ByteOrder.BIG_ENDIAN).asIntBuffer().get(seed);
             random.seed(seed);
             return PNone.NONE;
         }
@@ -144,7 +182,7 @@ public final class RandomBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!canBeInteger(inputSeed)", "!isPNone(inputSeed)"})
         static PNone seedGeneric(VirtualFrame frame, PRandom random, Object inputSeed,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectHashNode hash) {
             return seedLong(random, hash.execute(frame, inliningTarget, inputSeed));
         }
@@ -155,15 +193,21 @@ public final class RandomBuiltins extends PythonBuiltins {
     public abstract static class SetStateNode extends PythonBuiltinNode {
 
         @Specialization
-        static PNone setstate(PRandom random, PTuple tuple,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetObjectArrayNode getObjectArrayNode,
+        static PNone setstate(PRandom random, Object tuple,
+                        @Bind Node inliningTarget,
+                        @Cached GetTupleStorage getTupleStorage,
+                        @Cached GetInternalObjectArrayNode getArray,
                         @Cached CastToJavaUnsignedLongNode castNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            Object[] arr = getObjectArrayNode.execute(inliningTarget, tuple);
-            if (arr.length != PRandom.N + 1) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.ValueError, ErrorMessages.STATE_VECTOR_INVALID);
+                        @Cached PyTupleCheckNode tupleCheckNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (!tupleCheckNode.execute(inliningTarget, tuple)) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.STATE_VECTOR_MUST_BE_A_TUPLE);
             }
+            SequenceStorage storage = getTupleStorage.execute(inliningTarget, tuple);
+            if (storage.length() != PRandom.N + 1) {
+                throw raiseNode.raise(inliningTarget, PythonErrorType.ValueError, ErrorMessages.STATE_VECTOR_INVALID);
+            }
+            Object[] arr = getArray.execute(inliningTarget, storage);
             int[] state = new int[PRandom.N];
             for (int i = 0; i < PRandom.N; ++i) {
                 long l = castNode.execute(inliningTarget, arr[i]);
@@ -171,7 +215,7 @@ public final class RandomBuiltins extends PythonBuiltins {
             }
             long index = castNode.execute(inliningTarget, arr[PRandom.N]);
             if (index < 0 || index > PRandom.N) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.ValueError, ErrorMessages.STATE_VECTOR_INVALID);
+                throw raiseNode.raise(inliningTarget, PythonErrorType.ValueError, ErrorMessages.STATE_VECTOR_INVALID);
             }
             random.restore(state, (int) index);
             return PNone.NONE;
@@ -180,8 +224,8 @@ public final class RandomBuiltins extends PythonBuiltins {
         @Fallback
         @SuppressWarnings("unused")
         static Object setstate(Object random, Object state,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.STATE_VECTOR_MUST_BE_A_TUPLE);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.STATE_VECTOR_MUST_BE_A_TUPLE);
         }
     }
 
@@ -191,8 +235,8 @@ public final class RandomBuiltins extends PythonBuiltins {
 
         @Specialization
         static PTuple getstate(PRandom random,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createTuple(encodeState(random));
+                        @Bind PythonLanguage language) {
+            return PFactory.createTuple(language, encodeState(random));
         }
 
         @TruffleBoundary
@@ -235,8 +279,8 @@ public final class RandomBuiltins extends PythonBuiltins {
         @Specialization(guards = "k < 0")
         @SuppressWarnings("unused")
         static int negative(PRandom random, int k,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.NUMBER_OF_BITS_MUST_BE_NON_NEGATIVE);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.NUMBER_OF_BITS_MUST_BE_NON_NEGATIVE);
         }
 
         @Specialization(guards = "k == 0")
@@ -275,7 +319,7 @@ public final class RandomBuiltins extends PythonBuiltins {
                 bb.putInt(4 * i, x);
             }
             bb.putInt(0, random.nextInt() >>> (32 - (k % 32)));
-            return PythonObjectFactory.getUncached().createInt(new BigInteger(1, bb.array()));
+            return PFactory.createInt(PythonLanguage.get(null), new BigInteger(1, bb.array()));
         }
     }
 }

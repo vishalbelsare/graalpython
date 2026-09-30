@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -32,18 +32,7 @@ import static com.oracle.graal.python.nodes.SpecialMethodNames.J_ITEMS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_KEYS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_VALUES;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CONTAINS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EQ__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___IOR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LEN__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REVERSED__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ROR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_COPY;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_GET;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_ITEMS;
@@ -53,32 +42,47 @@ import static com.oracle.graal.python.nodes.SpecialMethodNames.T___REVERSED__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryFunc.MpSubscriptBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotLen.LenBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSqContains.SqContainsBuiltinNode;
+import com.oracle.graal.python.lib.PyMappingCheckNode;
+import com.oracle.graal.python.lib.PyNumberOrNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetItem;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
-import com.oracle.graal.python.lib.PyObjectRichCompareBool;
+import com.oracle.graal.python.lib.PyObjectRichCompare;
 import com.oracle.graal.python.lib.PyObjectSizeNode;
 import com.oracle.graal.python.lib.PyObjectStrAsObjectNode;
+import com.oracle.graal.python.lib.PySequenceContainsNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.expression.BinaryArithmetic;
-import com.oracle.graal.python.nodes.expression.BinaryOpNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.exception.PythonErrorType;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
@@ -86,13 +90,41 @@ import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PMappingproxy)
 public final class MappingproxyBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = MappingproxyBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<com.oracle.truffle.api.dsl.NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return MappingproxyBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "mappingproxy", minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2)
+    @GenerateNodeFactory
+    public abstract static class MappingproxyNode extends PythonBinaryBuiltinNode {
+        @Specialization(guards = "!isNoValue(obj)")
+        static Object doMapping(@SuppressWarnings("unused") Object cls, Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyMappingCheckNode mappingCheckNode,
+                        @Cached PyTupleCheckNode tupleCheckNode,
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
+            // descrobject.c mappingproxy_check_mapping()
+            if (!tupleCheckNode.isTupleOrList(inliningTarget, obj) && mappingCheckNode.execute(inliningTarget, obj)) {
+                return PFactory.createMappingproxy(language, obj);
+            }
+            throw raiseNode.raise(inliningTarget, PythonErrorType.TypeError, ErrorMessages.S_ARG_MUST_BE_S_NOT_P, "mappingproxy()", "mapping", obj);
+        }
+
+        @Specialization(guards = "isNoValue(none)")
+        @SuppressWarnings("unused")
+        static Object doMissing(Object klass, PNone none,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonErrorType.TypeError, ErrorMessages.MISSING_D_REQUIRED_S_ARGUMENT_S_POS, "mappingproxy()", "mapping", 1);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "mappingproxy", minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonBinaryBuiltinNode {
 
@@ -104,12 +136,12 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object iter(VirtualFrame frame, @SuppressWarnings("unused") PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetIter getIter) {
             return getIter.execute(frame, inliningTarget, self.getMapping());
         }
@@ -121,7 +153,7 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     public abstract static class KeysNode extends PythonUnaryBuiltinNode {
         @Specialization
         public Object items(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T_KEYS);
         }
@@ -133,7 +165,7 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     public abstract static class ItemsNode extends PythonUnaryBuiltinNode {
         @Specialization
         public Object items(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T_ITEMS);
         }
@@ -145,7 +177,7 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     public abstract static class ValuesNode extends PythonUnaryBuiltinNode {
         @Specialization
         public Object values(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T_VALUES);
         }
@@ -157,46 +189,48 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     public abstract static class GetNode extends PythonBuiltinNode {
         @Specialization(guards = "isNoValue(defaultValue)")
         public Object get(VirtualFrame frame, PMappingproxy self, Object key, @SuppressWarnings("unused") PNone defaultValue,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("callMethod") @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T_GET, key);
         }
 
         @Specialization(guards = "!isNoValue(defaultValue)")
         public Object get(VirtualFrame frame, PMappingproxy self, Object key, Object defaultValue,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("callMethod") @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T_GET, key, defaultValue);
         }
     }
 
-    @Builtin(name = J___GETITEM__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.mp_subscript, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class GetItemNode extends PythonBinaryBuiltinNode {
+    public abstract static class GetItemNode extends MpSubscriptBuiltinNode {
         @Specialization
         Object getItem(VirtualFrame frame, PMappingproxy self, Object key,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetItem getItemNode) {
             return getItemNode.execute(frame, inliningTarget, self.getMapping(), key);
         }
     }
 
-    @Builtin(name = J___CONTAINS__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.sq_contains, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class ContainsNode extends PythonBuiltinNode {
+    public abstract static class ContainsNode extends SqContainsBuiltinNode {
         @Specialization
-        Object run(VirtualFrame frame, PMappingproxy self, Object key,
-                        @Cached com.oracle.graal.python.nodes.expression.ContainsNode containsNode) {
-            return containsNode.executeObject(frame, key, self.getMapping());
+        boolean run(VirtualFrame frame, PMappingproxy self, Object key,
+                        @Bind Node inliningTarget,
+                        @Cached PySequenceContainsNode containsNode) {
+            return containsNode.execute(frame, inliningTarget, self.getMapping(), key);
         }
     }
 
-    @Builtin(name = J___LEN__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.mp_length, isComplex = true)
+    @GenerateUncached
     @GenerateNodeFactory
-    public abstract static class LenNode extends PythonUnaryBuiltinNode {
+    public abstract static class LenNode extends LenBuiltinNode {
         @Specialization
         public int len(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectSizeNode sizeNode) {
             return sizeNode.execute(frame, inliningTarget, self.getMapping());
         }
@@ -208,40 +242,40 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     public abstract static class CopyNode extends PythonUnaryBuiltinNode {
         @Specialization
         public Object copy(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T_COPY);
         }
     }
 
-    @Builtin(name = J___EQ__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class EqNode extends PythonBinaryBuiltinNode {
+    public abstract static class MappingproxyRichCmpNode extends TpSlotRichCompare.RichCmpBuiltinNode {
         @Specialization
-        Object eq(VirtualFrame frame, PMappingproxy self, Object other,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode) {
-            return eqNode.compare(frame, inliningTarget, self.getMapping(), other);
+        Object doIt(VirtualFrame frame, PMappingproxy self, Object other, RichCmpOp op,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectRichCompare cmpNode) {
+            return cmpNode.execute(frame, inliningTarget, self.getMapping(), other, op);
         }
     }
 
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     abstract static class StrNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object str(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectStrAsObjectNode strNode) {
             return strNode.execute(frame, inliningTarget, self.getMapping());
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         static TruffleString repr(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectReprAsTruffleStringNode reprNode,
                         @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             TruffleString mappingRepr = reprNode.execute(frame, inliningTarget, self.getMapping());
@@ -254,36 +288,35 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object classGetItem(Object cls, Object key,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createGenericAlias(cls, key);
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 
-    @Builtin(name = J___OR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___ROR__, minNumOfPositionalArgs = 2, reverseOperation = true)
+    @Slot(value = SlotKind.nb_or, isComplex = true)
     @GenerateNodeFactory
-    abstract static class OrNode extends PythonBinaryBuiltinNode {
-        @Child BinaryOpNode orNode = BinaryArithmetic.Or.create();
+    abstract static class OrNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        Object or(VirtualFrame frame, Object self, Object other) {
+        static Object or(VirtualFrame frame, Object self, Object other,
+                        @Cached PyNumberOrNode orNode) {
             if (self instanceof PMappingproxy) {
                 self = ((PMappingproxy) self).getMapping();
             }
             if (other instanceof PMappingproxy) {
                 other = ((PMappingproxy) other).getMapping();
             }
-            return orNode.executeObject(frame, self, other);
+            return orNode.execute(frame, self, other);
         }
     }
 
-    @Builtin(name = J___IOR__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.nb_inplace_or, isComplex = true)
     @GenerateNodeFactory
     abstract static class IOrNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object or(Object self, @SuppressWarnings("unused") Object other,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.IOR_IS_NOT_SUPPORTED_BY_P_USE_INSTEAD, self);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.IOR_IS_NOT_SUPPORTED_BY_P_USE_INSTEAD, self);
         }
     }
 
@@ -292,7 +325,7 @@ public final class MappingproxyBuiltins extends PythonBuiltins {
     abstract static class ReversedNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object reversed(VirtualFrame frame, PMappingproxy self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getMapping(), T___REVERSED__);
         }

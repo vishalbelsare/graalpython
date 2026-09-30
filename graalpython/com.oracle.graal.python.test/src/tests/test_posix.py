@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,6 +36,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import errno
 
 try:
     __graalpython__.posix_module_backend()
@@ -54,6 +55,9 @@ import posix
 import stat
 import tempfile
 import io
+import glob
+import shutil
+import socket
 from contextlib import contextmanager
 
 
@@ -172,6 +176,31 @@ class PosixTests(unittest.TestCase):
             os.close(fd1)
             os.close(fd2)
 
+    @unittest.skipIf(sys.platform != 'linux', 'mkfifo is a linux command')
+    def test_seek_pipe(self):
+        new_file_path = './myscript.sh'
+        with io.open(new_file_path, 'w') as script:
+            script.write("""#!/bin/sh
+            mkfifo testpipe
+            echo "4" > testpipe &
+            """)
+        try:
+            st = os.stat(new_file_path)
+            os.chmod(new_file_path, st.st_mode | stat.S_IEXEC)
+            os.system(new_file_path)
+            with io.open("testpipe", "rb") as r:
+                out = r.read(1)
+            assert out == b"4", out
+        finally:
+            try:
+                os.remove(new_file_path)
+            except:
+                pass
+            try:
+                os.remove("testpipe")
+            except:
+                pass
+
     def test_mkdir_rmdir(self):
         os.mkdir(TEST_FULL_PATH1)
         try:
@@ -213,14 +242,247 @@ class PosixTests(unittest.TestCase):
             with self.assertRaisesRegex(TypeError, r"expected Wrap.__fspath__\(\) to return str or bytes, not " + type(x).__name__):
                 os.fspath(Wrap(x))
 
+        class MissingFspath:
+            def __getattr__(self, name):
+                if name == "__fspath__":
+                    return lambda: "abc"
+                raise AttributeError(name)
+
+        with self.assertRaisesRegex(TypeError, "expected str, bytes or os.PathLike object"):
+            os.fspath(MissingFspath())
+
     def test_path_convertor(self):
         class C:
             def __fspath__(self):
                 return bytearray(b'.')
 
-        os.close(os.open(bytearray(b'.'), 0))
+        with self.assertRaisesRegex(TypeError, r"path should be string, bytes or os.PathLike, not bytearray"):
+            os.open(bytearray(b'.'), 0)
         with self.assertRaisesRegex(TypeError, r"expected C.__fspath__\(\) to return str or bytes, not bytearray"):
             os.open(C(), 0)
+
+    @unittest.skipIf(sys.platform == 'win32', 'Windows uses surrogatepass for filesystem paths')
+    def test_path_converter_surrogateescape(self):
+        with self.assertRaises(UnicodeEncodeError):
+            os.stat('invalid-\udc74')
+        with self.assertRaises(OSError):
+            os.stat('valid-\udc80')
+
+    def test_open_bytes_path(self):
+        try:
+            with open(os.fsencode(TEST_FULL_PATH1), os.O_WRONLY | os.O_CREAT) as fd:
+                os.write(fd, b'hello')
+            with open(os.fsencode(TEST_FULL_PATH1), os.O_RDONLY) as fd:
+                self.assertEqual(b'hello', os.read(fd, 5))
+        finally:
+            try:
+                os.unlink(TEST_FULL_PATH1)
+            except Exception:
+                pass
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_lone_surrogate_paths(self):
+        root = tempfile.mkdtemp()
+        old_cwd = os.getcwd()
+        filenames = ['suffix-\udc80', 'middle-\udc80-name', 'non-bmp-\U0001f600-\udc80']
+        dirname = 'directory-\udc80'
+        try:
+            for filename in filenames:
+                path = os.path.join(root, filename)
+                fd = os.open(path, os.O_CREAT | os.O_WRONLY)
+                os.write(fd, b'content')
+                os.close(fd)
+                self.assertTrue(os.path.isfile(path))
+                os.stat(path)
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                os.utime(path, (1, 2))
+                self.assertIn(filename, os.listdir(root))
+                self.assertIn(filename.encode('utf-8', 'surrogatepass'), os.listdir(os.fsencode(root)))
+                self.assertEqual([path], glob.glob(path))
+                with os.scandir(root) as entries:
+                    self.assertIn(filename, [entry.name for entry in entries])
+
+                copied = path + '.copy'
+                shutil.copyfile(path, copied)
+                with open(copied, 'rb') as copied_file:
+                    self.assertEqual(b'content', copied_file.read())
+                os.unlink(copied)
+
+                renamed = path + '.new'
+                os.rename(path, renamed)
+                self.assertTrue(os.path.isfile(renamed))
+                os.unlink(renamed)
+
+                encoded_path = path.encode('utf-8', 'surrogatepass')
+                fd = os.open(encoded_path, os.O_CREAT | os.O_WRONLY)
+                os.close(fd)
+                self.assertTrue(os.path.isfile(path))
+                os.unlink(encoded_path)
+
+            directory_path = os.path.join(root, dirname)
+            os.mkdir(directory_path)
+            os.chdir(directory_path)
+            self.assertEqual(dirname, os.path.basename(os.getcwd()))
+            os.chdir(old_cwd)
+            os.rmdir(directory_path)
+
+            with self.assertRaises(UnicodeDecodeError):
+                os.stat(os.fsencode(root) + b'\\malformed-\xff')
+        finally:
+            os.chdir(old_cwd)
+            os.rmdir(root)
+
+    def test_failed_read_write_errno(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            with self.assertRaises(OSError) as read_error:
+                os.read(write_fd, 1)
+            self.assertEqual(errno.EBADF, read_error.exception.errno)
+
+            with self.assertRaises(OSError) as write_error:
+                os.write(read_fd, b'x')
+            self.assertEqual(errno.EBADF, write_error.exception.errno)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() != 'java',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_error_codes(self):
+        missing_path = os.path.join(TEMP_DIR, 'graalpython_missing_path_for_winerror')
+        try:
+            os.unlink(missing_path)
+        except FileNotFoundError:
+            pass
+
+        with self.assertRaises(OSError) as missing_error:
+            os.stat(missing_path)
+        self.assertEqual(errno.ENOENT, missing_error.exception.errno)
+        self.assertEqual(2, missing_error.exception.winerror)  # ERROR_FILE_NOT_FOUND
+
+        # A CRT failure following a WinAPI failure must not reuse the earlier winerror.
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)
+        os.close(write_fd)
+        with self.assertRaises(OSError) as crt_error:
+            os.read(read_fd, 1)
+        self.assertEqual(errno.EBADF, crt_error.exception.errno)
+        self.assertIsNone(crt_error.exception.winerror)
+
+        def assert_crt_error(operation, expected_errno):
+            # Seed the native last-error state before every CRT failure.
+            with self.assertRaises(OSError) as winapi_error:
+                os.stat(missing_path)
+            self.assertEqual(2, winapi_error.exception.winerror)
+            with self.assertRaises(OSError) as error:
+                operation()
+            self.assertEqual(expected_errno, error.exception.errno)
+            self.assertIsNone(error.exception.winerror)
+
+        assert_crt_error(lambda: os.rename(missing_path, missing_path + '.renamed'), errno.ENOENT)
+        assert_crt_error(lambda: os.chmod(missing_path, 0o600), errno.ENOENT)
+        assert_crt_error(lambda: os.listdir(''), errno.ENOENT)
+
+        import socket
+        first = socket.socket()
+        second = socket.socket()
+        try:
+            first.bind(('127.0.0.1', 0))
+            with self.assertRaises(OSError) as socket_error:
+                second.bind(first.getsockname())
+            self.assertEqual(errno.EADDRINUSE, socket_error.exception.errno)
+            self.assertEqual(10048, socket_error.exception.winerror)  # WSAEADDRINUSE
+        finally:
+            first.close()
+            second.close()
+
+        # Winsock reports WSAEWOULDBLOCK while a timed connect is in progress. The socket layer
+        # must treat that as EINPROGRESS and wait for completion instead of raising immediately.
+        server = socket.socket()
+        try:
+            server.bind(('127.0.0.1', 0))
+            server.listen()
+            with socket.create_connection(server.getsockname(), timeout=10) as client:
+                accepted, _ = server.accept()
+                accepted.close()
+        finally:
+            server.close()
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_dup2_socket(self):
+        source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        target = os.open(os.devnull, os.O_RDONLY)
+        try:
+            source.bind(('127.0.0.1', 0))
+            self.assertEqual(target, os.dup2(source.fileno(), target))
+            duplicate = socket.socket(fileno=target)
+            target = -1
+            with duplicate:
+                self.assertEqual(source.getsockname(), duplicate.getsockname())
+        finally:
+            source.close()
+            if target >= 0:
+                os.close(target)
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_dup2_file_over_socket(self):
+        read_fd, write_fd = os.pipe()
+        target = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        target_fd = target.detach()
+        try:
+            self.assertEqual(target_fd, os.dup2(read_fd, target_fd))
+            os.close(read_fd)
+            read_fd = -1
+            os.write(write_fd, b'x')
+            self.assertEqual(b'x', os.read(target_fd, 1))
+        finally:
+            if read_fd >= 0:
+                os.close(read_fd)
+            os.close(write_fd)
+            os.close(target_fd)
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_dup2_socket_over_socket(self):
+        source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        target = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        target.bind(('127.0.0.1', 0))
+        target_fd = target.detach()
+        try:
+            source.bind(('127.0.0.1', 0))
+            self.assertEqual(target_fd, os.dup2(source.fileno(), target_fd))
+            duplicate = socket.socket(fileno=target_fd)
+            target_fd = -1
+            with duplicate:
+                self.assertEqual(source.getsockname(), duplicate.getsockname())
+        finally:
+            source.close()
+            if target_fd >= 0:
+                os.close(target_fd)
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_dup2_socket_to_self_non_inheritable(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            fd = sock.fileno()
+            os.set_inheritable(fd, True)
+            self.assertEqual(fd, os.dup2(fd, fd, inheritable=False))
+            self.assertFalse(os.get_inheritable(fd))
+            sock.getsockname()
+
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'requires the Windows native POSIX backend')
+    def test_windows_native_dup_nonblocking_socket(self):
+        source = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        source.setblocking(False)
+        try:
+            with socket.socket(fileno=os.dup(source.fileno())) as duplicate:
+                self.assertFalse(duplicate.getblocking())
+        finally:
+            source.close()
 
     def test_fd_converter(self):
         class MyInt(int):
@@ -251,6 +513,19 @@ class PosixTests(unittest.TestCase):
         self.assertEqual(42, os.waitstatus_to_exitcode(0x2A80))
         self.assertEqual(-12, os.waitstatus_to_exitcode(0x428C))
         self.assertRaises(ValueError, os.waitstatus_to_exitcode, 0xFF)
+
+    def test_truncate(self):
+        try:
+            with open(TEST_FULL_PATH1, os.O_WRONLY | os.O_CREAT) as fd:
+                os.write(fd, b'hello world')
+            os.truncate(TEST_FULL_PATH1, 5)
+            with open(TEST_FULL_PATH1, os.O_RDONLY) as fd:
+                self.assertEqual(b'hello', os.read(fd, 100))
+        finally:
+            try:
+                os.unlink(TEST_FULL_PATH1)
+            except Exception:
+                pass
 
 
 class WithCurdirFdTests(unittest.TestCase):
@@ -365,7 +640,15 @@ class WithTempFilesTests(unittest.TestCase):
         with open(TEST_FULL_PATH2, 0) as fd:           # follows symlink
             self.assertEqual(inode, os.fstat(fd).st_ino)
 
-    @unittest.skipIf(__graalpython__.posix_module_backend() == 'java', 'statvfs emulation is not supported')
+    @unittest.skipUnless(sys.platform == 'win32' and __graalpython__.posix_module_backend() == 'native',
+                         'test requires the Windows native POSIX backend')
+    def test_windows_native_stat_uses_utc_timestamps(self):
+        timestamp = 1700000000
+        os.utime(TEST_FULL_PATH1, (timestamp, timestamp))
+        self.assertEqual(timestamp, int(os.stat(TEST_FULL_PATH1).st_mtime))
+        with open(TEST_FULL_PATH1, 0) as fd:
+            self.assertEqual(timestamp, int(os.fstat(fd).st_mtime))
+
     def test_statvfs(self):
         res = os.statvfs(TEST_FULL_PATH1)
         with open(TEST_FULL_PATH1, 0) as fd:
@@ -389,17 +672,27 @@ class WithTempFilesTests(unittest.TestCase):
         self.assertTrue(os.stat(TEST_FULL_PATH2, follow_symlinks=False).st_atime > 900000000)
 
     def test_utimensat(self):
-        if sys.platform == 'darwin':
-            with self.assertRaises(NotImplementedError):
-                os.utime(TEST_FILENAME2, dir_fd=self.tmp_fd, ns=(952468575678901234, 1579569825123456789))
+        timestamps = (952468575678901234, 1579569825123456789)
+        os.utime(TEST_FILENAME2, dir_fd=self.tmp_fd, ns=timestamps)
+        stat_result = os.stat(TEST_FULL_PATH2)
+        if __graalpython__.posix_module_backend() == 'java':
+            self.assertEqual(timestamps[0] // 1_000_000_000, stat_result.st_atime_ns // 1_000_000_000)
+            self.assertEqual(timestamps[1] // 1_000_000_000, stat_result.st_mtime_ns // 1_000_000_000)
         else:
-            os.utime(TEST_FILENAME2, dir_fd=self.tmp_fd, ns=(952468575678901234, 1579569825123456789))
-            self.assertTrue(os.stat(TEST_FULL_PATH2).st_atime > 900000000)
+            self.assertEqual(timestamps[0], stat_result.st_atime_ns)
+            self.assertEqual(timestamps[1], stat_result.st_mtime_ns)
 
     def test_futimes_and_futimens(self):
         with open(TEST_FULL_PATH2, os.O_RDWR) as fd:
-            os.utime(fd, times=(12345, 67890))
-            self.assertTrue(abs(os.stat(TEST_FULL_PATH1).st_atime_ns - 12345000000000) < 10000000000)
+            timestamps = (12345678901234, 67890123456789)
+            os.utime(fd, ns=timestamps)
+            stat_result = os.stat(TEST_FULL_PATH1)
+            if __graalpython__.posix_module_backend() == 'java':
+                self.assertEqual(timestamps[0] // 1_000_000_000, stat_result.st_atime_ns // 1_000_000_000)
+                self.assertEqual(timestamps[1] // 1_000_000_000, stat_result.st_mtime_ns // 1_000_000_000)
+            else:
+                self.assertEqual(timestamps[0], stat_result.st_atime_ns)
+                self.assertEqual(timestamps[1], stat_result.st_mtime_ns)
 
     @unittest.skipUnless(sys.platform != 'darwin', 'faccessat on MacOSX does not support follow_symlinks')
     def test_access(self):
@@ -494,6 +787,11 @@ class ScandirEmptyTests(unittest.TestCase):
         with os.scandir(TEST_FULL_PATH1) as dir:
             self.assertEqual(0, len([entry for entry in dir]))
 
+    def test_scandir_empty_repeated_eof(self):
+        with os.scandir(TEST_FULL_PATH1) as dir:
+            self.assertRaises(StopIteration, next, dir)
+            self.assertRaises(StopIteration, next, dir)
+
     def test_listdir_empty(self):
         self.assertEqual([], os.listdir(TEST_FULL_PATH1))
 
@@ -587,13 +885,9 @@ class ScandirTests(unittest.TestCase):
         with os.scandir(os.fsencode(TEST_FULL_PATH1 + '/')) as dir:
             self.assertEqual(os.fsencode(self.abc_path), next(dir).path)
 
-    def test_scandir_entry_path_bufferlike(self):
-        with os.scandir(array.array('B', os.fsencode(TEST_FULL_PATH1))) as dir:
-            entry = next(dir)
-        self.assertEqual("<DirEntry b'.abc'>", repr(entry))
-        self.assertEqual(b'.abc', entry.name)
-        self.assertEqual(os.fsencode(self.abc_path), entry.path)
-        self.assertEqual(os.fsencode(self.abc_path), os.fspath(entry))
+    def test_scandir_invalid_type(self):
+        with self.assertRaisesRegex(TypeError, r"path should be string, bytes, os.PathLike, integer or None, not array"):
+            os.scandir(array.array('B', os.fsencode(TEST_FULL_PATH1)))
 
     def test_scandir_entry_path_fd(self):
         with open(TEST_FULL_PATH1, 0) as fd:
@@ -858,6 +1152,50 @@ class RenameTests(unittest.TestCase):
             os.rename(3.14, TEST_FILENAME1)
         with self.assertRaisesRegex(TypeError, 'replace'):
             os.replace(TEST_FILENAME1, 3.14)
+
+
+class SysconfTests(unittest.TestCase):
+    def test_sysconf_names(self):
+        self.assertIn('SC_CLK_TCK', os.sysconf_names)
+
+    def test_sysconf(self):
+        with self.assertRaisesRegex(TypeError, 'strings or integers'):
+            os.sysconf(object())
+        with self.assertRaisesRegex(ValueError, 'unrecognized'):
+            os.sysconf("nonexistent")
+        try:
+            os.sysconf(123456)
+        except OSError as e:
+            # We used to have a bug that the args would contain Java null for the filename in the args
+            assert e.args == (errno.EINVAL, "Invalid argument")
+        else:
+            assert False
+
+        def sysconf_max(name):
+            value = os.sysconf(name)
+            return sys.maxsize - value if value < 0 else value
+
+        # constants taken from POSIX where defined
+        self.assertGreaterEqual(sysconf_max('SC_ARG_MAX'), 4096)
+        self.assertGreaterEqual(sysconf_max('SC_CHILD_MAX'), 25)
+        self.assertGreaterEqual(sysconf_max('SC_LOGIN_NAME_MAX'), 9)
+        self.assertGreaterEqual(os.sysconf('SC_CLK_TCK'), 0)
+        self.assertGreaterEqual(sysconf_max('SC_OPEN_MAX'), 20)
+        self.assertGreaterEqual(os.sysconf('SC_PAGESIZE'), 1)
+        self.assertGreaterEqual(sysconf_max('SC_SEM_NSEMS_MAX'), 32)
+        self.assertGreaterEqual(os.sysconf('SC_PHYS_PAGES'), 1)
+        self.assertGreaterEqual(os.sysconf('SC_NPROCESSORS_CONF'), 1)
+
+    def test_sysconf_valid_minus_one(self):
+        for name in os.sysconf_names:
+            try:
+                value = os.sysconf(name)
+            except OSError:
+                continue
+            if value == -1:
+                self.assertEqual(-1, os.sysconf(name))
+                return
+        raise unittest.SkipTest("platform has no sysconf name returning valid -1")
 
 
 if __name__ == '__main__':

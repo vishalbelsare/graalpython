@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,30 +40,44 @@
  */
 package com.oracle.graal.python.builtins.objects.itertools;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.nodes.ErrorMessages.NUMBER_IS_REQUIRED;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.ArgumentClinic;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.objects.itertools.CountBuiltinsClinicProviders.CountNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyNumberAddNode;
+import com.oracle.graal.python.lib.PyNumberCheckNode;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
 import com.oracle.graal.python.lib.PyObjectTypeCheck;
-import com.oracle.graal.python.nodes.expression.BinaryArithmetic;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -72,18 +86,54 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PCount})
 public final class CountBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = CountBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return CountBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "count", minNumOfPositionalArgs = 1, parameterNames = {"cls", "start", "step"})
+    @ArgumentClinic(name = "start", defaultValue = "0", useDefaultForNone = true)
+    @ArgumentClinic(name = "step", defaultValue = "1", useDefaultForNone = true)
+    @GenerateNodeFactory
+    public abstract static class CountNode extends PythonTernaryClinicBuiltinNode {
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return CountNodeClinicProviderGen.INSTANCE;
+        }
+
+        @Specialization
+        static Object construct(Object cls, Object start, Object step,
+                        @Bind Node inliningTarget,
+                        @Cached PyNumberCheckNode checkNode,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
+            if (!isTypeNode.execute(inliningTarget, cls)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+            }
+            if (!checkNode.execute(inliningTarget, start)) {
+                throw raiseNode.raise(inliningTarget, TypeError, NUMBER_IS_REQUIRED);
+            }
+            if (!checkNode.execute(inliningTarget, step)) {
+                throw raiseNode.raise(inliningTarget, TypeError, NUMBER_IS_REQUIRED);
+            }
+            PCount self = PFactory.createCount(cls, getInstanceShape.execute(cls));
+            self.setCnt(start);
+            self.setStep(step);
+            return self;
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -92,24 +142,24 @@ public final class CountBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object next(VirtualFrame frame, PCount self,
-                        @Cached BinaryArithmetic.AddNode addNode) {
+                        @Cached PyNumberAddNode addNode) {
             Object cnt = self.getCnt();
-            self.setCnt(addNode.executeObject(frame, self.getCnt(), self.getStep()));
+            self.setCnt(addNode.execute(frame, self.getCnt(), self.getStep()));
             return cnt;
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         static TruffleString reprPos(VirtualFrame frame, PCount self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached PyObjectGetAttr getAttrNode,
                         @Cached PyObjectReprAsObjectNode reprNode,
@@ -131,24 +181,18 @@ public final class CountBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         @Specialization
-        static Object reducePos(PCount self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClassNode,
-                        @Cached CastToJavaLongExactNode castLongNode,
-                        @Cached PyObjectTypeCheck typeCheckNode,
-                        @Cached InlinedConditionProfile hasDefaultStep,
-                        @Cached PythonObjectFactory factory) {
-            Object type = getClassNode.execute(inliningTarget, self);
+        static Object reducePos(PCount self) {
+            Object type = GetClassNode.executeUncached(self);
+            PythonLanguage language = PythonLanguage.get(null);
             PTuple tuple;
-            if (hasDefaultStep.profile(inliningTarget,
-                            !typeCheckNode.execute(inliningTarget, self.getStep(), PythonBuiltinClassType.PInt) || castLongNode.execute(inliningTarget, self.getStep()) != 1)) {
-                tuple = factory.createTuple(new Object[]{self.getCnt(), self.getStep()});
+            if (!PyObjectTypeCheck.executeUncached(self.getStep(), PythonBuiltinClassType.PInt) || CastToJavaLongExactNode.executeUncached(self.getStep()) != 1) {
+                tuple = PFactory.createTuple(language, new Object[]{self.getCnt(), self.getStep()});
             } else {
-                tuple = factory.createTuple(new Object[]{self.getCnt()});
+                tuple = PFactory.createTuple(language, new Object[]{self.getCnt()});
             }
-            return factory.createTuple(new Object[]{type, tuple});
+            return PFactory.createTuple(language, new Object[]{type, tuple});
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,11 +43,10 @@ import java.util.stream.Stream;
 
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.ProcessProperties;
-import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.io.IOAccess;
-import org.graalvm.python.embedding.utils.VirtualFileSystem;
+import org.graalvm.polyglot.Context.Builder;
+import org.graalvm.python.embedding.GraalPyResources;
 
 /**
  * A simple launcher for Python. The launcher sets the filesystem up to read the Python core,
@@ -61,41 +60,19 @@ import org.graalvm.python.embedding.utils.VirtualFileSystem;
  * filesystem, as well as showing how to embed Python code into a single native image binary.
  */
 public class Py2BinLauncher {
-    private static final String HOME_PREFIX = "/{vfs-home-prefix}";
-    private static final String VENV_PREFIX = "/{vfs-venv-prefix}";
-    private static final String PROJ_PREFIX = "/{vfs-proj-prefix}";
 
     public static void main(String[] args) throws IOException {
-        VirtualFileSystem vfs = VirtualFileSystem.newBuilder()
-            .extractFilter(p -> {
-                String s = p.toString();
-                return s.endsWith(".ttf");
-            })
-            .build();
-        IOAccess ioAccess = IOAccess.newBuilder().fileSystem(vfs).allowHostSocketAccess(true).build();
-        var builder = Context.newBuilder()
-                .allowExperimentalOptions(true)
-                .allowAllAccess(true)
-                .allowIO(ioAccess)
-                .arguments("python", Stream.concat(Stream.of(getProgramName()), Stream.of(args)).toArray(String[]::new))
-                .option("python.PosixModuleBackend", "java")
-                .option("python.DontWriteBytecodeFlag", "true")
-                .option("python.VerboseFlag", System.getenv("PYTHONVERBOSE") != null ? "true" : "false")
-                .option("log.python.level", System.getenv("PYTHONVERBOSE") != null ? "FINE" : "SEVERE")
-                .option("python.WarnOptions", System.getenv("PYTHONWARNINGS") == null ? "" : System.getenv("PYTHONWARNINGS"))
-                .option("python.AlwaysRunExcepthook", "true")
-                .option("python.ForceImportSite", "true")
-                .option("python.RunViaLauncher", "true")
-                .option("python.Executable", vfs.resourcePathToPlatformPath(VENV_PREFIX) + (VirtualFileSystem.isWindows() ? "\\Scripts\\python.cmd" : "/bin/python"))
-                .option("python.InputFilePath", vfs.resourcePathToPlatformPath(PROJ_PREFIX))
-                .option("python.PythonHome", vfs.resourcePathToPlatformPath(HOME_PREFIX))
-                .option("python.CheckHashPycsMode", "never");
-        if(ImageInfo.inImageRuntimeCode()) {
+        Builder builder = GraalPyResources.contextBuilder()
+            .allowExperimentalOptions(true)
+            .allowAllAccess(true)
+            .arguments("python", Stream.concat(Stream.of(getProgramName()), Stream.of(args)).toArray(String[]::new))
+            .option("python.RunViaLauncher", "true");
+        if (ImageInfo.inImageRuntimeCode()) {
             builder.option("engine.WarnInterpreterOnly", "false");
         }
         try (var context = builder.build()) {
             try {
-                var src = Source.newBuilder("python", "__graalpython__.run_path()", "<internal>").internal(true).build();
+                var src = Source.newBuilder("python", "__graalpython__.run_path()", "<internal>").internal(true).option("python.NoPythonFrame", "true").build();
                 context.eval(src);
             } catch (PolyglotException e) {
                 if (e.isExit()) {
@@ -104,8 +81,6 @@ public class Py2BinLauncher {
                     throw e;
                 }
             }
-        } finally {
-            vfs.close();
         }
     }
 

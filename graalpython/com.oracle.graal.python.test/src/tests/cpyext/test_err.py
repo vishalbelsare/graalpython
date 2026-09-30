@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,12 +38,11 @@
 # SOFTWARE.
 
 import sys
+import unittest
 import warnings
 
 from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionVoid, unhandled_error_compare, \
-    CPyExtType, is_native_object
-
-__dir__ = __file__.rpartition("/")[0]
+    CPyExtHeapType, CPyExtType, is_native_object
 
 
 def _reference_setstring(args):
@@ -187,12 +186,12 @@ class Dummy:
     pass
 
 
-def raise_erorr():
+def raise_error():
     raise NameError
 
 
 try:
-    raise_erorr()
+    raise_error()
 except NameError as e:
     example_traceback = e.__traceback__
 else:
@@ -204,18 +203,14 @@ ExceptionSubclass = CPyExtType(
     "ExceptionSubclass",
     '',
     struct_base='PyBaseExceptionObject base;',
+    tp_base='(PyTypeObject*)PyExc_Exception',
     tp_new='0',
     tp_alloc='0',
     tp_free='0',
-    ready_code='ExceptionSubclassType.tp_base = (PyTypeObject*)PyExc_Exception;'
 )
 
 
 class TestPyErr(CPyExtTestCase):
-
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyErr, self).compile_module(name)
 
     test_PyErr_SetString = CPyExtFunctionVoid(
         _reference_setstring,
@@ -342,17 +337,21 @@ class TestPyErr(CPyExtTestCase):
     test_PyErr_GivenExceptionMatches = CPyExtFunction(
         _reference_givenexceptionmatches,
         lambda: (
+            (ValueError(), ValueError),
             (ValueError, ValueError),
+            (ValueError(), BaseException),
             (ValueError, BaseException),
-            (ValueError, KeyError),
-            (ValueError, (KeyError, SystemError, OverflowError)),
+            (ValueError(), KeyError),
+            (ValueError(), (KeyError, SystemError, OverflowError)),
+            (ValueError(), (KeyError, SystemError, ValueError)),
             (ValueError, (KeyError, SystemError, ValueError)),
-            (ValueError, Dummy),
-            (ValueError, Dummy()),
-            (ValueError, ExceptionSubclass),
+            (ValueError(), Dummy),
+            (ValueError(), Dummy()),
+            (ValueError(), ExceptionSubclass),
+            (ExceptionSubclass(), ExceptionSubclass),
             (ExceptionSubclass, ExceptionSubclass),
-            (ExceptionSubclass, Exception),
-            (ExceptionSubclass, ValueError),
+            (ExceptionSubclass(), Exception),
+            (ExceptionSubclass(), ValueError),
         ),
         resultspec="i",
         argspec='OO',
@@ -513,26 +512,59 @@ class TestPyErr(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
-    test_PyErr_WriteUnraisableMsg = CPyExtFunctionVoid(
+    def test_PyErr_WriteUnraisable_hook_args(self):
+        import _testcapi
+
+        captured = []
+        old_hook = sys.unraisablehook
+        try:
+            sys.unraisablehook = captured.append
+            exception = ValueError("oops")
+            obj = object()
+            _testcapi.err_writeunraisable(exception, obj)
+        finally:
+            sys.unraisablehook = old_hook
+
+        self.assertEqual(len(captured), 1)
+        self.assertIs(captured[0].exc_value, exception)
+        self.assertIsNone(captured[0].err_msg)
+        self.assertIs(captured[0].object, obj)
+
+    test_PyErr_FormatUnraisable = CPyExtFunctionVoid(
         lambda args: None,
         lambda: (
             (None,),
             ("hello",),
         ),
-        code="""void wrap_PyErr_WriteUnraisableMsg(PyObject* object) {
+        code="""void wrap_PyErr_FormatUnraisable(PyObject* object) {
                 PyErr_SetString(PyExc_RuntimeError, "unraisable_exception");
-                if (object == Py_None)
-                    object = NULL;
-                _PyErr_WriteUnraisableMsg("in my function", object);
+                PyErr_FormatUnraisable("Exception ignored in my function: %R", object);
              }
              """,
         argspec='O',
         arguments=["PyObject* obj"],
-        callfunction="wrap_PyErr_WriteUnraisableMsg",
+        callfunction="wrap_PyErr_FormatUnraisable",
         stderr_validator=lambda args,
                                 stderr: "RuntimeError: unraisable_exception" in stderr and "Exception ignored in my function:" in stderr,
         cmpfunc=unhandled_error_compare
     )
+
+    def test_PyErr_FormatUnraisable_hook_args(self):
+        import _testcapi
+
+        captured = []
+        old_hook = sys.unraisablehook
+        try:
+            sys.unraisablehook = captured.append
+            exception = ValueError("oops")
+            _testcapi.err_formatunraisable(exception, b"Error in %R", [])
+        finally:
+            sys.unraisablehook = old_hook
+
+        self.assertEqual(len(captured), 1)
+        self.assertIs(captured[0].exc_value, exception)
+        self.assertEqual(captured[0].err_msg, "Error in []")
+        self.assertIsNone(captured[0].object)
 
     test_PyErr_Restore = CPyExtFunctionVoid(
         _reference_restore,
@@ -655,16 +687,126 @@ class TestPyErr(CPyExtTestCase):
     # )
 
 
+class TestCaughtException(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tester = CPyExtType(
+            "CaughtExceptionTester",
+            """
+            PyObject* TestPyErr_GetHandledException(PyObject* self) {
+                PyObject* result = PyErr_GetHandledException();
+                if (result == NULL)
+                    Py_RETURN_NONE;
+                return result;
+            }
+            PyObject* TestPyErr_GetExcInfo(PyObject* self) {
+                PyObject* typ;
+                PyObject* val;
+                PyObject* tb;
+                PyErr_GetExcInfo(&typ, &val, &tb);
+                PyObject* result = PyTuple_Pack(3,
+                    typ != NULL ? typ : Py_None,
+                    val != NULL ? val : Py_None,
+                    tb != NULL ? tb : Py_None);
+                Py_XDECREF(typ);
+                Py_XDECREF(val);
+                Py_XDECREF(tb);
+                return result;
+            }
+            PyObject* TestPyErr_SetHandledException(PyObject* self, PyObject* arg) {
+                PyErr_SetHandledException(arg != Py_None? arg : NULL);
+                return TestPyErr_GetHandledException(NULL);
+            }
+            PyObject* TestPyErr_SetExcInfo(PyObject* self, PyObject* arg) {
+                PyErr_SetExcInfo(Py_NewRef(Py_None), Py_NewRef(arg), Py_NewRef(Py_None));
+                return TestPyErr_GetHandledException(NULL);
+            }
+            """,
+            tp_methods='''
+            {"PyErr_GetHandledException", (PyCFunction)TestPyErr_GetHandledException, METH_NOARGS | METH_STATIC, ""},
+            {"PyErr_GetExcInfo", (PyCFunction)TestPyErr_GetExcInfo, METH_NOARGS | METH_STATIC, ""},
+            {"PyErr_SetHandledException", (PyCFunction)TestPyErr_SetHandledException, METH_O | METH_STATIC, ""},
+            {"PyErr_SetExcInfo", (PyCFunction)TestPyErr_SetExcInfo, METH_O | METH_STATIC, ""}
+            '''
+        )
+
+    def test_PyErr_GetHandledException(self):
+        try:
+            raise IndexError
+        except IndexError as e:
+            self.assertIs(self.tester.PyErr_GetHandledException(), e)
+            # do a second time because this time we won't do a stack walk
+            self.assertIs(self.tester.PyErr_GetHandledException(), e)
+
+    def test_PyErr_GetHandledException_no_exception(self):
+        self.assertIsNone(self.tester.PyErr_GetHandledException())
+        self.assertIsNone(self.tester.PyErr_GetHandledException())
+
+    def test_PyErr_GetExcInfo(self):
+        try:
+            raise IndexError
+        except IndexError as e:
+            self.assertEqual(self.tester.PyErr_GetExcInfo(), (type(e), e, e.__traceback__))
+            # do a second time because this time we won't do a stack walk
+            self.assertEqual(self.tester.PyErr_GetExcInfo(), (type(e), e, e.__traceback__))
+
+    def test_PyErr_GetExcInfo_no_exception(self):
+        self.assertEqual(self.tester.PyErr_GetExcInfo(), (None, None, None))
+        self.assertEqual(self.tester.PyErr_GetExcInfo(), (None, None, None))
+
+    def test_TestPyErr_SetHandledException(self):
+        e = IndexError()
+        # TODO on GraalPy the exception doesn't propagate to the function frame, so we can't use sys.exc_info() here
+        self.assertIs(self.tester.PyErr_SetHandledException(e), e)
+        self.assertIsNone(self.tester.PyErr_SetHandledException(None))
+
+    def test_TestPyErr_SetExcInfo(self):
+        e = IndexError()
+        self.assertIs(self.tester.PyErr_SetExcInfo(e), e)
+        self.assertIsNone(self.tester.PyErr_SetExcInfo(None))
+
+
 def raise_native_exception():
     raise ExceptionSubclass(1)
 
 
-class TestNativeExceptionSubclass:
+class TestNativeExceptionSubclass(unittest.TestCase):
     def test_init(self):
         e = ExceptionSubclass(1, 2, 3)
         assert is_native_object(e)
         assert type(e) == ExceptionSubclass
         assert isinstance(e, Exception)
+
+    def test_syntax_error_subclass(self):
+        NativeSyntaxErrorSubclass = CPyExtHeapType(
+            "NativeSyntaxErrorSubclass",
+            bases=(SyntaxError,),
+            struct_base="PySyntaxErrorObject base;",
+        )
+        assert SyntaxError.__basicsize__ > BaseException.__basicsize__
+        assert NativeSyntaxErrorSubclass.__basicsize__ >= SyntaxError.__basicsize__
+        e = NativeSyntaxErrorSubclass("bad", ("pkg/module.py", 12, 4, "x = 1", 12, 9))
+        assert is_native_object(e)
+        assert type(e) is NativeSyntaxErrorSubclass
+        assert isinstance(e, SyntaxError)
+        assert e.args == ("bad", ("pkg/module.py", 12, 4, "x = 1", 12, 9))
+        assert e.msg == "bad"
+        assert e.filename == "pkg/module.py"
+        assert e.lineno == 12
+        assert e.offset == 4
+        assert e.text == "x = 1"
+        assert e.end_lineno == 12
+        assert e.end_offset == 9
+        assert e.print_file_and_line is None
+        assert str(e) == "bad (module.py, line 12)"
+
+        e.filename = "other.py"
+        assert e.filename == "other.py"
+        assert str(e) == "bad (other.py, line 12)"
+
+        del e.lineno
+        assert e.lineno is None
+        assert str(e) == "bad (other.py)"
 
     def test_managed_subtype(self):
         class ManagedSubclass(ExceptionSubclass):
@@ -721,10 +863,7 @@ class TestNativeExceptionSubclass:
             tb = e.__traceback__
         else:
             assert False
-        assert tb
-        assert tb.tb_frame.f_code is TestNativeExceptionSubclass.test_traceback_reraise.__code__
-        assert tb.tb_next
-        assert tb.tb_next.tb_frame.f_code is raise_native_exception.__code__
+        assert not tb
 
     def test_chaining(self):
         inner_e = ExceptionSubclass()
@@ -815,3 +954,19 @@ class TestNativeExceptionSubclass:
         e = ExceptionSubclass()
         e1 = g.throw(e)
         assert e1 is e
+
+    def test_tp_clear(self):
+        # psycopg2 calls ((PyTypeObject *)PyExc_Exception)->tp_clear from their exception subclass's dealloc
+        # We need to make sure it doesn't segfault
+        Tester = CPyExtType(
+            "TpClearTester",
+            code="""
+            static PyObject* test(PyObject* unused, PyObject* unused2) {
+                PyBaseExceptionObject o = {0};
+                ((PyTypeObject *)PyExc_Exception)->tp_clear((PyObject*)&o);
+                Py_RETURN_NONE;
+            }
+            """,
+            tp_methods='{"test", (PyCFunction)test, METH_NOARGS | METH_STATIC, ""}',
+        )
+        Tester.test()

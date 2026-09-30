@@ -1,0 +1,33 @@
+{
+    "name": "GraalPy",
+    "image": "mcr.microsoft.com/devcontainers/universal:linux",
+    "remoteEnv": {
+        "MX_GLOBAL_ENV": "${containerWorkspaceFolder}/.mxenv",
+        "MX_CACHE_DIR": "${containerWorkspaceFolder}/.mxcache",
+        "PATH": "${containerWorkspaceFolder}/.mx:${containerWorkspaceFolder}/.mx/labsjdk-ce-latest/bin:${containerEnv:PATH}"
+    },
+    "postCreateCommand": {
+        "install_packages": "sudo apt-get update && sudo apt-get install -y build-essential libffi-dev zlib1g-dev libbz2-dev cmake ninja-build",
+        "setup_mx": "bash \"${containerWorkspaceFolder}/.devcontainer/setup-mx.sh\" \"${containerWorkspaceFolder}\"",
+        "setup_jdtls": "bash \"${containerWorkspaceFolder}/.devcontainer/setup-jdtls.sh\" \"${containerWorkspaceFolder}\""
+    },
+    "hostRequirements": {
+        "cpus": 2,
+        "memory": "16gb"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "vscjava.vscode-java-pack"
+            ],
+            "settings": {
+                "java.autobuild.enabled": false
+            }
+        },
+        "codespaces": {
+            "openFiles": [
+                "docs/contributor/CONTRIBUTING.md"
+            ]
+        }
+    }
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,13 +43,14 @@ package com.oracle.graal.python.builtins.objects.ssl;
 import static com.oracle.graal.python.builtins.objects.exception.OsErrorBuiltins.IDX_STRERROR;
 import static com.oracle.graal.python.builtins.objects.exception.OsErrorBuiltins.IDX_WRITTEN;
 import static com.oracle.graal.python.builtins.objects.ssl.SSLErrorCode.ERROR_CERT_VERIFICATION;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -59,13 +60,13 @@ import com.oracle.graal.python.builtins.objects.exception.ExceptionNodes;
 import com.oracle.graal.python.builtins.objects.exception.OsErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.lib.PyObjectStrAsObjectNode;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -85,8 +86,10 @@ public final class SSLErrorBuiltins extends PythonBuiltins {
     static final int IDX_VERIFY_MESSAGE = IDX_WRITTEN + 4;
     static final int SSL_ERR_NUM_ATTRS = IDX_VERIFY_MESSAGE + 1;
 
-    public static final BaseExceptionAttrNode.StorageFactory SSL_ERROR_ATTR_FACTORY = (args, factory) -> new Object[SSL_ERR_NUM_ATTRS];
+    public static final BaseExceptionAttrNode.StorageFactory SSL_ERROR_ATTR_FACTORY = (args) -> new Object[SSL_ERR_NUM_ATTRS];
     public static final TruffleString T_SSL_IN_BRACKETS = tsLiteral("[SSL]");
+
+    public static final TpSlots SLOTS = SSLErrorBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
@@ -116,17 +119,17 @@ public final class SSLErrorBuiltins extends PythonBuiltins {
         self.setExceptionAttributes(data);
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     public abstract static class SSLErrorInitNode extends PythonBuiltinNode {
         public abstract Object execute(VirtualFrame frame, PBaseException self, Object[] args, PKeyword[] kwds);
 
         @Specialization
         static Object init(VirtualFrame frame, PBaseException self, Object[] args, PKeyword[] kwds,
-                        @Cached OsErrorBuiltins.OSErrorInitNode initNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached OsErrorBuiltins.OSErrorInitNode initNode) {
             initNode.execute(frame, self, args, kwds);
-            Object[] sslAttrs = SSL_ERROR_ATTR_FACTORY.create(args, factory);
+            Object[] sslAttrs = SSL_ERROR_ATTR_FACTORY.create(args);
             PythonUtils.arraycopy(self.getExceptionAttributes(), 0, sslAttrs, 0, self.getExceptionAttributes().length);
             self.setExceptionAttributes(sslAttrs);
             return PNone.NONE;
@@ -173,12 +176,12 @@ public final class SSLErrorBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     abstract static class StrNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object str(VirtualFrame frame, PBaseException self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectStrAsObjectNode strNode,
                         @Cached ExceptionNodes.GetArgsNode getArgsNode) {
             Object strerror = self.getExceptionAttribute(IDX_STRERROR);

@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,8 @@ import sys
 
 import array
 
+from tests.util import assert_raises
+
 BIG_NUMBER = 99999937497465632974931
 
 class _NamedIntConstant(int):
@@ -62,6 +64,42 @@ def test_int_subclassing():
     assert str(MAXREPEAT) == "MAXREPEAT"
 
 
+def test_abs():
+    assert abs(True) == 1
+    assert abs(False) == 0
+    assert abs(0) == 0
+    assert abs(1) == 1
+    assert abs(-1) == 1
+    assert abs(-2147483647-1) == 2147483648  # Smallest int
+    assert abs(-2147483647) == 2147483647
+    assert abs(-9223372036854775807-1) == 9223372036854775808  # Smallest long
+    assert abs(-9223372036854775807) == 9223372036854775807
+    assert abs(-BIG_NUMBER) == BIG_NUMBER
+    assert abs(-50.0) == 50.0
+    assert repr(abs(-0.0)) == '0.0'
+
+    class CustomInt(int):
+        def __int__(self):
+            return 100
+
+        def __index__(self):
+            return 100
+
+    class CustomFloat(float):
+        def __float__(self):
+            return 100.0
+    assert abs(CustomInt(-3)) == 3
+    assert abs(CustomFloat(-3.0)) == 3.0
+
+    try:
+        abs(object())
+    except TypeError:
+        pass
+    else:
+        assert False, "Expected TypeError"
+
+
+
 def test_bigint():
     i = int(BIG_NUMBER)
     assert isinstance(i, int)
@@ -71,6 +109,37 @@ def test_bigint():
     assert isinstance(i, int)
     assert i == BIG_NUMBER
 
+def test_bigint_lshift():
+    INT_SHIFT = -2147483648
+    LONG_SHIFT = -2147483649
+
+    assert_raises(ValueError, lambda: 0 << INT_SHIFT)
+    assert_raises(ValueError, lambda: -1 << INT_SHIFT)
+    assert_raises(ValueError, lambda: ((1 << 32) - 1) << INT_SHIFT)
+    assert_raises(ValueError, lambda: ((1 << 64) - 1) << INT_SHIFT)
+    assert_raises(ValueError, lambda: BIG_NUMBER << INT_SHIFT)
+
+    assert_raises(ValueError, lambda: 0 << LONG_SHIFT)
+    assert_raises(ValueError, lambda: -1 << LONG_SHIFT)
+    assert_raises(ValueError, lambda: 2147483647 << LONG_SHIFT)
+    assert_raises(ValueError, lambda: 9223372036854775807 << LONG_SHIFT)
+    assert_raises(ValueError, lambda: BIG_NUMBER << LONG_SHIFT)
+
+def test_bigint_rshift():
+    INT_SHIFT = -2147483648
+    LONG_SHIFT = -2147483649
+
+    assert_raises(ValueError, lambda: 0 >> INT_SHIFT)
+    assert_raises(ValueError, lambda: -1 >> INT_SHIFT)
+    assert_raises(ValueError, lambda: ((1 >> 32) - 1) >> INT_SHIFT)
+    assert_raises(ValueError, lambda: ((1 >> 64) - 1) >> INT_SHIFT)
+    assert_raises(ValueError, lambda: BIG_NUMBER >> INT_SHIFT)
+
+    assert_raises(ValueError, lambda: 0 >> LONG_SHIFT)
+    assert_raises(ValueError, lambda: -1 >> LONG_SHIFT)
+    assert_raises(ValueError, lambda: 2147483647 >> LONG_SHIFT)
+    assert_raises(ValueError, lambda: 9223372036854775807 >> LONG_SHIFT)
+    assert_raises(ValueError, lambda: BIG_NUMBER >> LONG_SHIFT)
 
 def test_boolean2int():
     assert int(True) == 1
@@ -80,6 +149,32 @@ def test_boolean2int():
 def test_bigint_mul():
     assert 99999937497465632974931 * 1223432423545234234123123 == 122343165886896325043539375228725106116626429513
     assert 99999937497465632974931 * (2**100) == 126764980791447734004805377032945185921379990352429056
+
+def test_floordiv():
+    assert 0 // (-92233720368547394651) == 0
+    assert -234 // (-92233720368547394651) == 0
+    assert 234 // (-92233720368547394651) == -1
+
+def test_pow():
+    assert 2 ** 10 == 1024
+    assert type(2 ** -1) is float
+    assert 2 ** -1 == 0.5
+    assert_raises(ValueError, pow, 2, 2, 0)
+
+    assert pow(2, 10, 1) == 0
+    assert pow(2, 10, 3) == 1
+    assert pow(2, 10, -3) == -2
+
+    assert 18446744073709551616 ** 2 == 340282366920938463463374607431768211456
+    assert type(18446744073709551616 ** -1) is float
+    assert 18446744073709551616 ** -1 == 5.421010862427522e-20
+    assert_raises(OverflowError, pow, 2**80000, -1)
+    assert_raises(OverflowError, pow, 2**80000, -(2**64))
+    assert_raises(ZeroDivisionError, pow, 0, -18446744073709551616)
+
+    assert_raises(ValueError, pow, 18446744073709551616, 2, 0)
+    assert pow(18446744073709551616, 2, 7) == 4
+    assert pow(18446744073709551616, 2, -3) == -2
 
 
 def test_int_from_custom():
@@ -365,10 +460,10 @@ def test_create_int_from_float():
         assert True
     else:
         assert False, "expected ValueError"
-        
+
     class FloatSub(float):
         pass
-    
+
     try:
         int(FloatSub(float('nan')))
     except ValueError:
@@ -424,7 +519,8 @@ class FromBytesTests(unittest.TestCase):
             b'\x80\x00': -32768,
             b'\x00\xff\xff': 65535,
             b'\xff\x00\x00': -65536,
-            b'\x80\x00\x00': -8388608
+            b'\x80\x00\x00': -8388608,
+            b'\xa0\x00\x00\x00\x00\x00\x00\x00': -6917529027641081856,
         }
         self.check(tests1, 'big', signed=True)
 
@@ -451,7 +547,8 @@ class FromBytesTests(unittest.TestCase):
             b'\x00\x80': -32768,
             b'\xff\xff\x00': 65535,
             b'\x00\x00\xff': -65536,
-            b'\x00\x00\x80': -8388608
+            b'\x00\x00\x80': -8388608,
+            b'\x00\x00\x00\x00\x00\x00\x00\xa0': -6917529027641081856,
         }
         self.check(tests2, 'little', signed=True)
 
@@ -469,6 +566,7 @@ class FromBytesTests(unittest.TestCase):
             b'\x80\x00': 32768,
             b'\xff\xff': 65535,
             b'\x01\x00\x00': 65536,
+            b'\xa0\x00\x00\x00\x00\x00\x00\x00': 11529215046068469760,
         }
         self.check(tests3, 'big', signed=False)
 
@@ -486,6 +584,7 @@ class FromBytesTests(unittest.TestCase):
             b'\x00\x80': 32768,
             b'\xff\xff': 65535,
             b'\x00\x00\x01': 65536,
+            b'\x00\x00\x00\x00\x00\x00\x00\xa0': 11529215046068469760,
         }
         self.check(tests4, 'little', signed=False)
 
@@ -603,6 +702,13 @@ class FromBytesTests(unittest.TestCase):
                 return bytes([10,20])
 
         self.assertEqual(int.from_bytes(mybyteslike(), 'big'), 2580)
+
+    def test_from_object_without_bytes_uses_iterable_fallback(self):
+        class IterableOnly:
+            def __iter__(self):
+                return iter([1, 2, 3])
+
+        self.assertEqual(int.from_bytes(IterableOnly(), 'big'), 0x010203)
 
     def test_from_wrong_byteslike_object(self):
         class mybyteslike1():
@@ -736,6 +842,7 @@ class ToBytesTests(unittest.TestCase):
 
     def test_SpecialCases(self):
         self.assertEqual((0).to_bytes(0, 'big'), b'')
+        self.assertRaises(OverflowError, (-1).to_bytes, 0, 'big', signed=True)
         self.assertEqual((1).to_bytes(5, 'big'), b'\x00\x00\x00\x00\x01')
         self.assertEqual((0).to_bytes(5, 'big'), b'\x00\x00\x00\x00\x00')
         self.assertEqual((-1).to_bytes(5, 'big', signed=True),
@@ -746,6 +853,15 @@ class ToBytesTests(unittest.TestCase):
         self.assertRaises(OverflowError, (256).to_bytes, 1, 'big', signed=True)
         self.assertRaises(OverflowError, (256).to_bytes, 1, 'little', signed=False)
         self.assertRaises(OverflowError, (256).to_bytes, 1, 'little', signed=True)
+        self.assertRaises(OverflowError, (32768).to_bytes, 2, 'big', signed=True)
+        self.assertRaises(OverflowError, (32768).to_bytes, 2, 'little', signed=True)
+        self.assertRaises(OverflowError, (-32769).to_bytes, 2, 'big', signed=True)
+        self.assertRaises(OverflowError, (-32769).to_bytes, 2, 'little', signed=True)
+        self.assertRaises(OverflowError, (-5242881).to_bytes, 2, 'big', signed=True)
+        self.assertRaises(OverflowError, (-5242881).to_bytes, 2, 'little', signed=True)
+        self.assertRaises(OverflowError, self.MyInt(32768).to_bytes, 2, 'big', signed=True)
+        self.assertRaises(OverflowError, self.MyInt(-32769).to_bytes, 2, 'big', signed=True)
+        self.assertRaises(OverflowError, self.MyInt(-5242881).to_bytes, 2, 'big', signed=True)
         self.assertRaises(OverflowError, (-1).to_bytes, 2, 'big', signed=False)
         self.assertRaises(OverflowError, (-1).to_bytes, 2, 'little', signed=False)
         self.assertRaises(OverflowError, (1).to_bytes, 0, 'big')

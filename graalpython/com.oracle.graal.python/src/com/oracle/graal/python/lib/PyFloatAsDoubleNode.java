@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,32 +43,32 @@ package com.oracle.graal.python.lib;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.DeprecationWarning;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyFloatObject__ob_fval;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readDoubleField;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___FLOAT__;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.FromNativeSubclassNode;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.floats.PFloat;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotUnaryFunc.CallSlotUnaryNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinClassExactProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
@@ -82,7 +82,6 @@ import com.oracle.truffle.api.nodes.Node;
 @GenerateUncached
 @GenerateInline
 @GenerateCached(false)
-@ImportStatic(SpecialMethodSlot.class)
 public abstract class PyFloatAsDoubleNode extends PNodeWithContext {
 
     public static double executeUncached(Object object) {
@@ -118,52 +117,71 @@ public abstract class PyFloatAsDoubleNode extends PNodeWithContext {
 
     @Specialization(guards = "isFloatSubtype(inliningTarget, object, getClassNode, isSubtype)", limit = "1")
     @InliningCutoff
-    static double doNative(Node inliningTarget, PythonAbstractNativeObject object,
+    static double doNative(@SuppressWarnings("unused") Node inliningTarget, PythonAbstractNativeObject object,
                     @SuppressWarnings("unused") @Exclusive @Cached GetClassNode getClassNode,
-                    @SuppressWarnings("unused") @Exclusive @Cached(inline = false) IsSubtypeNode isSubtype,
-                    @Cached(inline = false) CStructAccess.ReadDoubleNode read) {
-        return read.readFromObj(object, PyFloatObject__ob_fval);
+                    @SuppressWarnings("unused") @Exclusive @Cached(inline = false) IsSubtypeNode isSubtype) {
+        return readDoubleField(object.getPtr(), PyFloatObject__ob_fval);
     }
 
-    @Specialization(guards = {"!isDouble(object)", "!isInteger(object)", "!isBoolean(object)", "!isPFloat(object)",
-                    "!isFloatSubtype(inliningTarget, object, getClassNode, isSubtype)"}, limit = "1")
+    @Fallback
     @InliningCutoff
     static double doObject(VirtualFrame frame, Node inliningTarget, Object object,
                     @Exclusive @Cached GetClassNode getClassNode,
-                    @SuppressWarnings("unused") @Exclusive @Cached(inline = false) IsSubtypeNode isSubtype,
-                    @Cached(parameters = "Float", inline = false) LookupSpecialMethodSlotNode lookup,
-                    @Cached(inline = false) CallUnaryMethodNode call,
-                    @Exclusive @Cached GetClassNode resultClassNode,
-                    @Exclusive @Cached IsBuiltinClassExactProfile resultProfile,
-                    @Exclusive @Cached(inline = false) IsSubtypeNode resultSubtypeNode,
-                    @Cached PyIndexCheckNode indexCheckNode,
+                    @Cached GetCachedTpSlotsNode getSlots,
+                    @Cached CallSlotUnaryNode callFloat,
                     @Cached PyNumberIndexNode indexNode,
-                    @Cached CastToJavaDoubleNode cast,
-                    @Cached(inline = false) WarningsModuleBuiltins.WarnNode warnNode,
-                    @Cached PRaiseNode.Lazy raiseNode) {
+                    @Cached PyLongAsDoubleNode asDoubleNode,
+                    @Cached HandleFloatResultNode handleFloatResultNode,
+                    @Cached PRaiseNode raiseNode) {
         Object type = getClassNode.execute(inliningTarget, object);
-        Object floatDescr = lookup.execute(frame, type, object);
-        if (floatDescr != PNone.NO_VALUE) {
-            Object result = call.executeObject(frame, floatDescr, object);
+        TpSlots slots = getSlots.execute(inliningTarget, type);
+        if (slots.nb_float() != null) {
+            Object result = callFloat.execute(frame, inliningTarget, slots.nb_float(), object);
+            if (result instanceof Double doubleResult) {
+                return doubleResult;
+            }
+            return handleFloatResult(frame, result, object, handleFloatResultNode);
+        }
+        if (slots.nb_index() != null) {
+            Object index = indexNode.execute(frame, inliningTarget, object);
+            return asDoubleNode.execute(inliningTarget, index);
+        }
+        throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.MUST_BE_REAL_NUMBER, object);
+    }
+
+    @InliningCutoff
+    static double handleFloatResult(VirtualFrame frame, Object result, Object object, HandleFloatResultNode handleFloatResultNode) {
+        return handleFloatResultNode.execute(frame, result, object);
+    }
+
+    static boolean isFloatSubtype(Node inliningTarget, Object object, GetClassNode getClass, IsSubtypeNode isSubtype) {
+        return FromNativeSubclassNode.isFloatSubtype(inliningTarget, object, getClass, isSubtype);
+    }
+
+    @GenerateInline(false) // Uncommon
+    @GenerateUncached
+    abstract static class HandleFloatResultNode extends Node {
+        public abstract double execute(VirtualFrame frame, Object result, Object original);
+
+        @Specialization
+        static double handle(VirtualFrame frame, Object result, Object original,
+                        @Bind Node inliningTarget,
+                        @Cached GetClassNode resultClassNode,
+                        @Cached IsBuiltinClassExactProfile resultProfile,
+                        @Cached IsSubtypeNode resultSubtypeNode,
+                        @Cached CastToJavaDoubleNode cast,
+                        @Cached WarningsModuleBuiltins.WarnNode warnNode,
+                        @Cached PRaiseNode raiseNode) {
             Object resultType = resultClassNode.execute(inliningTarget, result);
             if (!resultProfile.profileClass(inliningTarget, resultType, PythonBuiltinClassType.PFloat)) {
                 if (!resultSubtypeNode.execute(resultType, PythonBuiltinClassType.PFloat)) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.RETURNED_NON_FLOAT, object, result);
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.RETURNED_NON_FLOAT, original, result);
                 } else {
                     warnNode.warnFormat(frame, null, DeprecationWarning, 1,
-                                    ErrorMessages.WARN_P_RETURNED_NON_P, object, T___FLOAT__, "float", result, "float");
+                                    ErrorMessages.WARN_P_RETURNED_NON_P, original, T___FLOAT__, "float", result, "float");
                 }
             }
             return cast.execute(inliningTarget, result);
         }
-        if (indexCheckNode.execute(inliningTarget, object)) {
-            Object index = indexNode.execute(frame, inliningTarget, object);
-            return cast.execute(inliningTarget, index);
-        }
-        throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.MUST_BE_REAL_NUMBER, object);
-    }
-
-    static boolean isFloatSubtype(Node inliningTarget, Object object, GetClassNode getClass, IsSubtypeNode isSubtype) {
-        return FromNativeSubclassNode.isFloatSubtype(null, inliningTarget, object, getClass, isSubtype);
     }
 }

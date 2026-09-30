@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,34 +40,41 @@
  */
 package com.oracle.graal.python.nodes.call.special;
 
-import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.objects.function.BuiltinMethodDescriptor.TernaryBuiltinDescriptor;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
-import com.oracle.graal.python.nodes.builtins.FunctionNodes.GetCallTargetNode;
+import com.oracle.graal.python.builtins.objects.method.PMethod;
 import com.oracle.graal.python.nodes.call.BoundDescriptor;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.call.CallDispatchers.FunctionDirectInvokeNode;
 import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.nodes.call.GenericInvokeNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
-import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.bytecode.ForceQuickening;
+import com.oracle.truffle.api.bytecode.OperationProxy.Proxyable;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.ReportPolymorphism.Megamorphic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @GenerateUncached
-public abstract class CallTernaryMethodNode extends CallReversibleMethodNode {
+@GenerateInline(false)
+@ImportStatic(CallDispatchers.class)
+@Proxyable(allowUncached = true, storeBytecodeIndex = true)
+public abstract class CallTernaryMethodNode extends AbstractCallMethodNode {
     @NeverDefault
     public static CallTernaryMethodNode create() {
         return CallTernaryMethodNodeGen.create();
@@ -79,99 +86,90 @@ public abstract class CallTernaryMethodNode extends CallReversibleMethodNode {
 
     public abstract Object execute(Frame frame, Object callable, Object arg1, Object arg2, Object arg3);
 
-    @Specialization(guards = {"cachedInfo == info", "node != null"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object callSpecialMethodSlotInlined(VirtualFrame frame, @SuppressWarnings("unused") TernaryBuiltinDescriptor info, Object arg1, Object arg2, Object arg3,
-                    @SuppressWarnings("unused") @Cached("info") TernaryBuiltinDescriptor cachedInfo,
-                    @Cached("getBuiltin(cachedInfo)") PythonTernaryBuiltinNode node) {
-        return node.execute(frame, arg1, arg2, arg3);
-    }
-
-    @Specialization(replaces = "callSpecialMethodSlotInlined")
-    @InliningCutoff
-    static Object callSpecialMethodSlotCallTarget(VirtualFrame frame, TernaryBuiltinDescriptor info, Object arg1, Object arg2, Object arg3,
-                    @Cached GenericInvokeNode invokeNode) {
-        RootCallTarget callTarget = PythonLanguage.get(invokeNode).getDescriptorCallTarget(info);
-        Object[] arguments = PArguments.create(3);
-        PArguments.setArgument(arguments, 0, arg1);
-        PArguments.setArgument(arguments, 1, arg2);
-        PArguments.setArgument(arguments, 2, arg3);
-        return invokeNode.execute(frame, callTarget, arguments);
-    }
-
-    @Specialization(guards = {"isSingleContext()", "func == cachedFunc", "builtinNode != null", "!isReverse"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object doBuiltinFunctionCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinFunction func, Object arg1, Object arg2, Object arg3,
+    @ForceQuickening
+    @Specialization(guards = {"isSingleContext()", "func == cachedFunc", "builtinNode != null"}, limit = "getCallSiteInlineCacheMaxDepth()")
+    public static Object doBuiltinFunctionCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinFunction func, Object arg1, Object arg2, Object arg3,
                     @SuppressWarnings("unused") @Cached("func") PBuiltinFunction cachedFunc,
-                    @SuppressWarnings("unused") @Cached("isForReverseBinaryOperation(func.getCallTarget())") boolean isReverse,
-                    @Cached("getBuiltin(frame, func, 3)") PythonBuiltinBaseNode builtinNode) {
+                    @Cached("getBuiltin(frame, func, 3, $node)") PythonBuiltinBaseNode builtinNode) {
         return callTernaryBuiltin(frame, builtinNode, arg1, arg2, arg3);
     }
 
-    @Specialization(guards = {"isSingleContext()", "func == cachedFunc", "builtinNode != null", "isReverse"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object doBuiltinFunctionCachedReverse(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinFunction func, Object arg1, Object arg2, Object arg3,
-                    @SuppressWarnings("unused") @Cached("func") PBuiltinFunction cachedFunc,
-                    @SuppressWarnings("unused") @Cached("isForReverseBinaryOperation(func.getCallTarget())") boolean isReverse,
-                    @Cached("getBuiltin(frame, func, 3)") PythonBuiltinBaseNode builtinNode) {
-        return callTernaryBuiltin(frame, builtinNode, arg1, arg2, arg3);
-    }
-
-    @Specialization(guards = {"func.getCallTarget() == ct", "builtinNode != null", "!isReverse"}, //
+    @Specialization(guards = {"func.getFunctionRootNode() == rootNode", "builtinNode != null"}, //
                     limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object doBuiltinFunctionCtCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinFunction func, Object arg1, Object arg2, Object arg3,
-                    @SuppressWarnings("unused") @Cached("func.getCallTarget()") RootCallTarget ct,
-                    @SuppressWarnings("unused") @Cached("isForReverseBinaryOperation(func.getCallTarget())") boolean isReverse,
-                    @Cached("getBuiltin(frame, func, 3)") PythonBuiltinBaseNode builtinNode) {
-        return callTernaryBuiltin(frame, builtinNode, arg1, arg2, arg3);
-    }
-
-    @Specialization(guards = {"func.getCallTarget() == ct", "builtinNode != null", "isReverse"}, //
-                    limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object doBuiltinFunctionCtCachedReverse(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinFunction func, Object arg1, Object arg2, Object arg3,
-                    @SuppressWarnings("unused") @Cached("func.getCallTarget()") RootCallTarget ct,
-                    @SuppressWarnings("unused") @Cached("isForReverseBinaryOperation(func.getCallTarget())") boolean isReverse,
-                    @Cached("getBuiltin(frame, func, 3)") PythonBuiltinBaseNode builtinNode) {
+    public static Object doBuiltinFunctionCtCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinFunction func, Object arg1, Object arg2, Object arg3,
+                    @SuppressWarnings("unused") @Cached(value = "func.getFunctionRootNode()", adopt = false) RootNode rootNode,
+                    @Cached("getBuiltin(frame, func, 3, $node)") PythonBuiltinBaseNode builtinNode) {
         return callTernaryBuiltin(frame, builtinNode, arg1, arg2, arg3);
     }
 
     @Specialization(guards = {"isSingleContext()", "func == cachedFunc", "builtinNode != null", "!takesSelfArg"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object doBuiltinMethodCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
+    public static Object doBuiltinMethodCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
                     @SuppressWarnings("unused") @Cached("func") PBuiltinMethod cachedFunc,
                     @SuppressWarnings("unused") @Cached("takesSelfArg(func)") boolean takesSelfArg,
-                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 3)") PythonBuiltinBaseNode builtinNode) {
+                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 3, $node)") PythonBuiltinBaseNode builtinNode) {
         return callTernaryBuiltin(frame, builtinNode, arg1, arg2, arg3);
     }
 
-    @Specialization(guards = {"builtinNode != null", "getCallTarget(func, getCt) == ct", "!takesSelfArg"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object doBuiltinMethodCtCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
-                    @SuppressWarnings("unused") @Shared @Cached GetCallTargetNode getCt,
-                    @SuppressWarnings("unused") @Cached("getCallTarget(func, getCt)") RootCallTarget ct,
+    @Specialization(guards = {"builtinNode != null", "func.getBuiltinFunction().getFunctionRootNode() == rootNode", "!takesSelfArg"}, limit = "getCallSiteInlineCacheMaxDepth()")
+    public static Object doBuiltinMethodCtCached(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
+                    @SuppressWarnings("unused") @Cached(value = "func.getBuiltinFunction().getFunctionRootNode()", adopt = false) RootNode rootNode,
                     @SuppressWarnings("unused") @Cached("takesSelfArg(func)") boolean takesSelfArg,
-                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 3)") PythonBuiltinBaseNode builtinNode) {
+                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 3, $node)") PythonBuiltinBaseNode builtinNode) {
         return callTernaryBuiltin(frame, builtinNode, arg1, arg2, arg3);
     }
 
     @Specialization(guards = {"isSingleContext()", "func == cachedFunc", "builtinNode != null", "takesSelfArg"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object callSelfMethodSingleContext(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
+    public static Object callSelfMethodSingleContext(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
                     @SuppressWarnings("unused") @Cached(value = "func", weak = true) PBuiltinMethod cachedFunc,
                     @SuppressWarnings("unused") @Cached("takesSelfArg(func)") boolean takesSelfArg,
-                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 4)") PythonBuiltinBaseNode builtinNode) {
+                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 4, $node)") PythonBuiltinBaseNode builtinNode) {
         return callQuaternaryBuiltin(frame, builtinNode, func.getSelf(), arg1, arg2, arg3);
     }
 
-    @Specialization(guards = {"builtinNode != null", "getCallTarget(func, getCt) == ct", "takesSelfArg"}, limit = "getCallSiteInlineCacheMaxDepth()")
-    static Object callSelfMethod(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
-                    @SuppressWarnings("unused") @Shared @Cached GetCallTargetNode getCt,
-                    @SuppressWarnings("unused") @Cached("getCallTarget(func, getCt)") RootCallTarget ct,
+    @Specialization(guards = {"builtinNode != null", "func.getBuiltinFunction().getFunctionRootNode() == rootNode", "takesSelfArg"}, limit = "getCallSiteInlineCacheMaxDepth()")
+    public static Object callSelfMethod(VirtualFrame frame, @SuppressWarnings("unused") PBuiltinMethod func, Object arg1, Object arg2, Object arg3,
+                    @SuppressWarnings("unused") @Cached(value = "func.getBuiltinFunction().getFunctionRootNode()", adopt = false) RootNode rootNode,
                     @SuppressWarnings("unused") @Cached("takesSelfArg(func)") boolean takesSelfArg,
-                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 4)") PythonBuiltinBaseNode builtinNode) {
+                    @Cached("getBuiltin(frame, func.getBuiltinFunction(), 4, $node)") PythonBuiltinBaseNode builtinNode) {
         return callQuaternaryBuiltin(frame, builtinNode, func.getSelf(), arg1, arg2, arg3);
     }
 
-    @Specialization(guards = "!isTernaryBuiltinDescriptor(func)", replaces = {"doBuiltinFunctionCached", "doBuiltinFunctionCtCached", "doBuiltinFunctionCachedReverse",
-                    "doBuiltinFunctionCtCachedReverse", "doBuiltinMethodCached", "doBuiltinMethodCtCached", "callSelfMethodSingleContext", "callSelfMethod"})
+    @ForceQuickening
+    @Specialization(guards = {"isSingleContext()", "hasSimpleSignature(cachedFunc, 3)", "func == cachedFunc"}, excludeForUncached = true, //
+                    assumptions = "cachedFunc.getCodeStableAssumption()", limit = "getCallSiteInlineCacheMaxDepth()")
+    public static Object callPFunction(VirtualFrame frame, @SuppressWarnings("unused") PFunction func, Object arg1, Object arg2, Object arg3,
+                    @Bind Node inliningTarget,
+                    @SuppressWarnings("unused") @Cached(value = "func", weak = true) PFunction cachedFunc,
+                    @Cached("createDirectCallNodeFor(cachedFunc)") DirectCallNode callNode,
+                    @Exclusive @Cached FunctionDirectInvokeNode invokeNode) {
+        Object[] args = PArguments.create(3);
+        PArguments.setArgument(args, 0, arg1);
+        PArguments.setArgument(args, 1, arg2);
+        PArguments.setArgument(args, 2, arg3);
+        return invokeNode.execute(frame, inliningTarget, callNode, cachedFunc, args);
+    }
+
+    @Specialization(guards = {"cachedFunc != null", "isSingleContext()", "getPFunction(func) == cachedFunc", "hasSimpleSignature(cachedFunc, 4)"}, excludeForUncached = true, //
+                    assumptions = "cachedFunc.getCodeStableAssumption()", limit = "getCallSiteInlineCacheMaxDepth()")
+    public static Object callPMethod(VirtualFrame frame, PMethod func, Object arg1, Object arg2, Object arg3,
+                    @Bind Node inliningTarget,
+                    @Cached(value = "getPFunction(func)", weak = true) PFunction cachedFunc,
+                    @Cached("createDirectCallNodeFor(cachedFunc)") DirectCallNode callNode,
+                    @Exclusive @Cached FunctionDirectInvokeNode invokeNode) {
+        Object[] args = PArguments.create(4);
+        PArguments.setArgument(args, 0, func.getSelf());
+        PArguments.setArgument(args, 1, arg1);
+        PArguments.setArgument(args, 2, arg2);
+        PArguments.setArgument(args, 3, arg3);
+        return invokeNode.execute(frame, inliningTarget, callNode, cachedFunc, args);
+    }
+
+    @Specialization(replaces = {"doBuiltinFunctionCached", "doBuiltinFunctionCtCached",
+                    "doBuiltinMethodCached", "doBuiltinMethodCtCached", "callSelfMethodSingleContext", "callSelfMethod", "callPFunction", "callPMethod"})
     @Megamorphic
     @InliningCutoff
-    static Object call(VirtualFrame frame, Object func, Object arg1, Object arg2, Object arg3,
-                    @Bind("this") Node inliningTarget,
+    public static Object call(VirtualFrame frame, Object func, Object arg1, Object arg2, Object arg3,
+                    @Bind Node inliningTarget,
                     @Cached CallNode callNode,
                     @Cached InlinedConditionProfile isBoundProfile) {
         if (isBoundProfile.profile(inliningTarget, func instanceof BoundDescriptor)) {

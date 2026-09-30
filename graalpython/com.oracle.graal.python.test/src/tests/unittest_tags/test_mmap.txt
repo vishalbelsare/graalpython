@@ -1,27 +1,28 @@
-*graalpython.lib-python.3.test.test_mmap.LargeMmapTests.test_around_2GB
-*graalpython.lib-python.3.test.test_mmap.LargeMmapTests.test_around_4GB
-*graalpython.lib-python.3.test.test_mmap.LargeMmapTests.test_large_offset
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_anonymous
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_bad_file_desc
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_basic
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_concat_repeat_exception
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_context_manager
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_context_manager_exception
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_crasher_on_windows
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_double_close
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_empty_file
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_entire_file
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_find_end
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_invalid_descriptor
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_length_0_large_offset
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_length_0_offset
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_madvise
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_prot_readonly
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_read_all
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_read_invalid_arg
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_resize_past_pos
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_sizeof
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_subclass
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_tagname
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_tougher_find
-*graalpython.lib-python.3.test.test_mmap.MmapTests.test_write_returning_the_number_of_bytes_written
+test.test_mmap.LargeMmapTests.test_large_offset @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_anonymous @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_bad_file_desc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_basic @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_concat_repeat_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_context_manager @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_context_manager_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_crasher_on_windows @ win32-AMD64-github
+test.test_mmap.MmapTests.test_double_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_empty_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_entire_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_extended_set_del_slice @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_find_does_not_access_beyond_buffer @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_mmap.MmapTests.test_find_end @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_flush_return_value @ darwin-arm64,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_length_0_large_offset @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64-github
+test.test_mmap.MmapTests.test_length_0_offset @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64-github
+test.test_mmap.MmapTests.test_offset @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_prot_readonly @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_read_all @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_read_invalid_arg @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_resize_down_anonymous_mapping @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64-github
+test.test_mmap.MmapTests.test_resize_up_anonymous_mapping @ darwin-arm64,win32-AMD64-github
+test.test_mmap.MmapTests.test_resize_up_private_anonymous_mapping @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_mmap.MmapTests.test_subclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_tougher_find @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_mmap.MmapTests.test_trackfd_neg1 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_mmap.MmapTests.test_write_returning_the_number_of_bytes_written @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

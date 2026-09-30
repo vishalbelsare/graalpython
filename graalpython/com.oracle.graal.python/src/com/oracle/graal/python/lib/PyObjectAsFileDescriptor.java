@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,9 +43,12 @@ package com.oracle.graal.python.lib;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_FILENO;
+import static com.oracle.graal.python.runtime.exception.PythonErrorType.RuntimeWarning;
 
+import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
@@ -55,6 +58,7 @@ import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -66,20 +70,28 @@ import com.oracle.truffle.api.nodes.Node;
 @GenerateUncached
 @GenerateInline
 @GenerateCached(false)
+@ImportStatic(PGuards.class)
 public abstract class PyObjectAsFileDescriptor extends PNodeWithContext {
     public abstract int execute(Frame frame, Node inliningTarget, Object object);
 
     @Specialization
+    static int doBoolean(VirtualFrame frame, boolean object,
+                    @Cached(inline = false) WarningsModuleBuiltins.WarnNode warnNode) {
+        warnNode.warnEx(frame, RuntimeWarning, ErrorMessages.BOOL_USED_AS_FILE_DESCRIPTOR, 1);
+        return object ? 1 : 0;
+    }
+
+    @Specialization
     static int doInt(Node inliningTarget, @SuppressWarnings("unused") int object,
-                    @Exclusive @Cached PRaiseNode.Lazy raise) {
+                    @Exclusive @Cached PRaiseNode raise) {
         return checkResult(object, inliningTarget, raise);
     }
 
-    @Specialization(guards = "longCheckNode.execute(inliningTarget, object)", limit = "1")
+    @Specialization(guards = {"!isBoolean(object)", "longCheckNode.execute(inliningTarget, object)"}, limit = "1")
     static int doPyLong(VirtualFrame frame, @SuppressWarnings("unused") Node inliningTarget, Object object,
                     @SuppressWarnings("unused") @Exclusive @Cached PyLongCheckNode longCheckNode,
                     @Exclusive @Cached PyLongAsIntNode asIntNode,
-                    @Exclusive @Cached PRaiseNode.Lazy raise) {
+                    @Exclusive @Cached PRaiseNode raise) {
         return checkResult(asIntNode.execute(frame, inliningTarget, object), inliningTarget, raise);
     }
 
@@ -89,21 +101,21 @@ public abstract class PyObjectAsFileDescriptor extends PNodeWithContext {
                     @Cached(inline = false) CallNode callFileno,
                     @Exclusive @Cached PyLongCheckNode checkResultNode,
                     @Exclusive @Cached PyLongAsIntNode asIntNode,
-                    @Exclusive @Cached PRaiseNode.Lazy raise) {
+                    @Exclusive @Cached PRaiseNode raise) {
         Object filenoMethod = lookupFileno.execute(frame, inliningTarget, object, T_FILENO);
         if (filenoMethod != PNone.NO_VALUE) {
             Object result = callFileno.execute(frame, filenoMethod);
             if (checkResultNode.execute(inliningTarget, result)) {
                 return checkResult(asIntNode.execute(frame, inliningTarget, result), inliningTarget, raise);
             }
-            throw raise.get(inliningTarget).raise(TypeError, ErrorMessages.RETURNED_NON_INTEGER, "fileno()");
+            throw raise.raise(inliningTarget, TypeError, ErrorMessages.RETURNED_NON_INTEGER, "fileno()");
         }
-        throw raise.get(inliningTarget).raise(TypeError, ErrorMessages.ARG_MUST_BE_INT_OR_HAVE_FILENO_METHOD);
+        throw raise.raise(inliningTarget, TypeError, ErrorMessages.ARG_MUST_BE_INT_OR_HAVE_FILENO_METHOD);
     }
 
-    private static int checkResult(int result, Node inliningTarget, PRaiseNode.Lazy raiseNode) {
+    private static int checkResult(int result, Node inliningTarget, PRaiseNode raiseNode) {
         if (result < 0) {
-            throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.S_CANNOT_BE_NEGATIVE_INTEGER_D, "file descriptor", result);
+            throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.S_CANNOT_BE_NEGATIVE_INTEGER_D, "file descriptor", result);
         }
         return result;
     }

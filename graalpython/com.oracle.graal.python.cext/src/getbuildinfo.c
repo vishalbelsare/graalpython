@@ -1,10 +1,15 @@
-/* Copyright (c) 2018, 2022, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2017 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
  */
 
+#ifndef Py_BUILD_CORE_BUILTIN
+#  define Py_BUILD_CORE_MODULE 1
+#endif
+
 #include "Python.h"
+#include "pycore_pylifecycle.h"   // _Py_gitidentifier()
 
 #ifndef DONT_HAVE_STDIO_H
 #include <stdio.h>
@@ -37,12 +42,18 @@
 #define GITBRANCH ""
 #endif
 
+static int initialized = 0;
+static char buildinfo[50 + sizeof(GITVERSION) +
+                      ((sizeof(GITTAG) > sizeof(GITBRANCH)) ?
+                       sizeof(GITTAG) : sizeof(GITBRANCH))];
+
 const char *
 Py_GetBuildInfo(void)
 {
-    static char buildinfo[50 + sizeof(GITVERSION) +
-                          ((sizeof(GITTAG) > sizeof(GITBRANCH)) ?
-                           sizeof(GITTAG) : sizeof(GITBRANCH))];
+    if (initialized) {
+        return buildinfo;
+    }
+    initialized = 1;
     const char *revision = _Py_gitversion();
     const char *sep = *revision ? ":" : "";
     const char *gitid = _Py_gitidentifier();

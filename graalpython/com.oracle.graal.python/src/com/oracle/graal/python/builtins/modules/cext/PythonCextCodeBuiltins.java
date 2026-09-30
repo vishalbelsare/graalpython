@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,110 +41,104 @@
 package com.oracle.graal.python.builtins.modules.cext;
 
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtrAsTruffleString;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtr;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyCodeObject;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyCodeObjectTransfer;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyCodeObjectRawPointer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_BYTE_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_OBJECT_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi15BuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi16BuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTernaryBuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
 import com.oracle.graal.python.builtins.objects.code.CodeNodes;
 import com.oracle.graal.python.builtins.objects.code.PCode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.CharPtrToPythonNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
 import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PythonCextCodeBuiltins {
 
-    @CApiBuiltin(ret = PyCodeObjectTransfer, args = {Int, Int, Int, Int, Int, PyObject, PyObject, PyObject, PyObject, PyObject, PyObject, PyObject, PyObject, Int, PyObject}, call = Direct)
-    abstract static class PyCode_New extends CApi15BuiltinNode {
-        @Specialization
-        @TruffleBoundary
-        public static Object codeNew(int argcount, int kwonlyargcount, int nlocals, int stacksize, int flags, Object code, Object consts,
-                        Object names, Object varnames, Object freevars, Object cellvars, Object filename, Object name, int firstlineno, Object lnotab,
-                        @Cached CallNode callNode) {
-            /*
-             * This rearranges the arguments (freevars, cellvars).
-             */
-            Object[] args = new Object[]{
-                            argcount,
-                            0, // posonlyargcount
-                            kwonlyargcount, nlocals, stacksize, flags,
-                            code, consts, names, varnames, filename, name, firstlineno, lnotab,
-                            freevars, cellvars
-            };
-            return callNode.execute(PythonBuiltinClassType.PCode, args);
-        }
+    @CApiBuiltin(ret = Py_ssize_t, args = {PyCodeObjectRawPointer}, call = Direct)
+    static long GraalPyCode_GetNumFree(long codePtr) {
+        PCode code = (PCode) NativeToPythonInternalNode.executeUncached(codePtr, false);
+        return code.getFreeVars().length;
     }
 
-    @CApiBuiltin(ret = PyCodeObjectTransfer, args = {Int, Int, Int, Int, Int, Int, PyObject, PyObject, PyObject, PyObject, PyObject, PyObject, PyObject, PyObject, Int, PyObject}, call = Direct)
-    abstract static class PyCode_NewWithPosOnlyArgs extends CApi16BuiltinNode {
-        @Specialization
-        @TruffleBoundary
-        public static Object codeNew(int argcount, int posonlyargcount, int kwonlyargcount, int nlocals, int stacksize, int flags, Object code, Object consts,
-                        Object names, Object varnames, Object freevars, Object cellvars, Object filename, Object name, int firstlineno, Object lnotab,
-                        @Cached CallNode callNode) {
-            /*
-             * This rearranges the arguments (freevars, cellvars).
-             */
-            Object[] args = new Object[]{
-                            argcount,
-                            posonlyargcount,
-                            kwonlyargcount, nlocals, stacksize, flags,
-                            code, consts, names, varnames, filename, name, firstlineno, lnotab,
-                            freevars, cellvars
-            };
-            return callNode.execute(PythonBuiltinClassType.PCode, args);
-        }
+    @CApiBuiltin(ret = Int, args = {PyCodeObjectRawPointer}, call = Direct)
+    static int GraalPyCode_GetFirstFree(long codePtr) {
+        PCode code = (PCode) NativeToPythonInternalNode.executeUncached(codePtr, false);
+        return code.getVarnames().length + code.getCellVars().length;
     }
 
-    @CApiBuiltin(ret = PyCodeObjectTransfer, args = {ConstCharPtrAsTruffleString, ConstCharPtrAsTruffleString, Int}, call = Direct)
-    abstract static class PyCode_NewEmpty extends CApiTernaryBuiltinNode {
-        public abstract PCode execute(TruffleString filename, TruffleString funcname, int lineno);
-
-        @Specialization
-        @TruffleBoundary
-        static PCode newEmpty(TruffleString filename, TruffleString funcname, int lineno,
-                        @Cached CodeNodes.CreateCodeNode createCodeNode) {
-            return createCodeNode.execute(null, 0, 0, 0, 0, 0, 0,
-                            EMPTY_BYTE_ARRAY, EMPTY_OBJECT_ARRAY, EMPTY_TRUFFLESTRING_ARRAY, EMPTY_TRUFFLESTRING_ARRAY, EMPTY_TRUFFLESTRING_ARRAY,
-                            EMPTY_TRUFFLESTRING_ARRAY, filename, funcname, lineno, EMPTY_BYTE_ARRAY);
-        }
+    @CApiBuiltin(ret = PyCodeObjectRawPointer, args = {Int, Int, Int, Int, Int, Int, PyObjectRawPointer, PyObjectRawPointer, PyObjectRawPointer, PyObjectRawPointer, PyObjectRawPointer,
+                    PyObjectRawPointer, PyObjectRawPointer, PyObjectRawPointer, PyObjectRawPointer, Int, PyObjectRawPointer, PyObjectRawPointer}, call = Direct)
+    static long PyUnstable_Code_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount, int nlocals, int stacksize, int flags, long codePtr, long constsPtr,
+                    long namesPtr, long varnamesPtr, long freevarsPtr, long cellvarsPtr,
+                    long filenamePtr, long namePtr, long qualnamePtr,
+                    int firstlineno, long lnotabPtr, long exceptionTablePtr) {
+        Object code = NativeToPythonInternalNode.executeUncached(codePtr, false);
+        Object consts = NativeToPythonInternalNode.executeUncached(constsPtr, false);
+        Object names = NativeToPythonInternalNode.executeUncached(namesPtr, false);
+        Object varnames = NativeToPythonInternalNode.executeUncached(varnamesPtr, false);
+        Object freevars = NativeToPythonInternalNode.executeUncached(freevarsPtr, false);
+        Object cellvars = NativeToPythonInternalNode.executeUncached(cellvarsPtr, false);
+        Object filename = NativeToPythonInternalNode.executeUncached(filenamePtr, false);
+        Object name = NativeToPythonInternalNode.executeUncached(namePtr, false);
+        Object qualname = NativeToPythonInternalNode.executeUncached(qualnamePtr, false);
+        Object lnotab = NativeToPythonInternalNode.executeUncached(lnotabPtr, false);
+        Object exceptionTable = NativeToPythonInternalNode.executeUncached(exceptionTablePtr, false);
+        /*
+         * This rearranges the arguments (freevars, cellvars).
+         */
+        Object[] args = new Object[]{
+                        argcount,
+                        posonlyargcount,
+                        kwonlyargcount, nlocals, stacksize, flags,
+                        code, consts, names, varnames,
+                        filename, name, qualname,
+                        firstlineno, lnotab, exceptionTable,
+                        freevars, cellvars
+        };
+        return PythonToNativeInternalNode.executeNewRefUncached(CallNode.executeUncached(PythonBuiltinClassType.PCode, args));
     }
 
-    @CApiBuiltin(ret = Int, args = {PyCodeObject, Int}, call = Direct)
-    abstract static class PyCode_Addr2Line extends CApiBinaryBuiltinNode {
-        @Specialization
-        static int addr2line(PCode code, int bci) {
-            return code.bciToLine(bci);
-        }
+    @CApiBuiltin(ret = PyCodeObjectRawPointer, args = {ConstCharPtr, ConstCharPtr, Int}, call = Direct)
+    static long PyCode_NewEmpty(long filenamePtr, long funcnamePtr, int lineno) {
+        TruffleString filename = (TruffleString) CharPtrToPythonNode.executeUncached(filenamePtr);
+        TruffleString funcname = (TruffleString) CharPtrToPythonNode.executeUncached(funcnamePtr);
+        return PythonToNativeInternalNode.executeNewRefUncached(createCodeNewEmpty(filename, funcname, lineno));
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyCodeObject}, call = Direct)
-    abstract static class PyCode_GetName extends CApiUnaryBuiltinNode {
-        @Specialization
-        static Object get(PCode code) {
-            return code.getName();
+    @CApiBuiltin(ret = Int, args = {PyCodeObjectRawPointer, Int}, call = Direct)
+    static int PyCode_Addr2Line(long codePtr, int lasti) {
+        PCode code = (PCode) NativeToPythonInternalNode.executeUncached(codePtr, false);
+        if (lasti < 0) {
+            return code.co_firstlineno();
         }
+        return code.lastiToLine(lasti);
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyCodeObject}, call = Direct)
-    abstract static class PyCode_GetFileName extends CApiUnaryBuiltinNode {
-        @Specialization
-        static Object get(PCode code) {
-            return code.getFilename();
-        }
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyCodeObjectRawPointer}, call = Direct)
+    static long GraalPyCode_GetName(long codePtr) {
+        PCode code = (PCode) NativeToPythonInternalNode.executeUncached(codePtr, false);
+        return PythonToNativeInternalNode.executeNewRefUncached(code.getName());
+    }
+
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyCodeObjectRawPointer}, call = Direct)
+    static long GraalPyCode_GetFileName(long codePtr) {
+        PCode code = (PCode) NativeToPythonInternalNode.executeUncached(codePtr, false);
+        return PythonToNativeInternalNode.executeNewRefUncached(code.getFilename());
+    }
+
+    static PCode createCodeNewEmpty(TruffleString filename, TruffleString funcname, int lineno) {
+        return CodeNodes.CreateCodeNode.executeUncached(0, 0, 0, 0, 0, 0,
+                        EMPTY_BYTE_ARRAY, EMPTY_OBJECT_ARRAY, EMPTY_TRUFFLESTRING_ARRAY,
+                        EMPTY_TRUFFLESTRING_ARRAY, EMPTY_TRUFFLESTRING_ARRAY, EMPTY_TRUFFLESTRING_ARRAY,
+                        filename, funcname, funcname,
+                        lineno, EMPTY_BYTE_ARRAY);
     }
 }

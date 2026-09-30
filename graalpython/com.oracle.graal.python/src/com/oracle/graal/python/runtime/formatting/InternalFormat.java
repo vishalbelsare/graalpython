@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) -2016 Jython Developers
  *
  * Licensed under PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -16,11 +16,12 @@ import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.NumberFormat;
 import java.util.Locale;
-import java.util.Locale.Category;
 
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.runtime.locale.PythonLocale;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -212,7 +213,7 @@ public class InternalFormat {
         }
 
         protected static DecimalFormat getCurrentDecimalFormat() {
-            Locale currLocale = Locale.getDefault(Category.FORMAT);
+            Locale currLocale = PythonContext.get(null).getCurrentLocale().category(PythonLocale.LC_NUMERIC);
             NumberFormat numberFormat = NumberFormat.getInstance(currLocale);
             return numberFormat instanceof DecimalFormat ? (DecimalFormat) numberFormat : null;
         }
@@ -508,7 +509,7 @@ public class InternalFormat {
          * @return exception to throw
          */
         public static PException unknownFormat(char code, String forType, Node raisingNode) {
-            throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.UNKNOWN_FORMAT_CODE, code, forType);
+            throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.UNKNOWN_FORMAT_CODE, code, forType);
         }
 
         /**
@@ -520,7 +521,7 @@ public class InternalFormat {
          * @return exception to throw
          */
         public PException precisionTooLarge(String type) {
-            throw PRaiseNode.raiseUncached(raisingNode, OverflowError, ErrorMessages.FORMATED_S_TOO_LONG, type);
+            throw PRaiseNode.raiseStatic(raisingNode, OverflowError, ErrorMessages.FORMATED_S_TOO_LONG, type);
         }
     }
 
@@ -540,7 +541,7 @@ public class InternalFormat {
      * specification is:
      *
      * <pre>
-     * [[fill]align][sign][#][0][width][,][.precision][type]
+     * [[fill]align][sign][z][#][0][width][,][.precision][type]
      * </pre>
      *
      * A typical idiom is:
@@ -567,6 +568,8 @@ public class InternalFormat {
          * U+FFFF if unspecified.
          */
         public final char sign;
+        /** Coerce negative zero to positive zero after rounding. */
+        public final boolean noNegativeZero;
         /** The alternative format flag '#' was given. */
         public final boolean alternate;
         /** Width to which to pad the result, or -1 if unspecified. */
@@ -609,23 +612,25 @@ public class InternalFormat {
          * Constructor to set all the fields in the format specifier.
          *
          * <pre>
-         * [[fill]align][sign][#][0][width][,][.precision][type]
+         * [[fill]align][sign][z][#][0][width][,][.precision][type]
          * </pre>
          *
          * @param fill fill character (or {@link #NONE}
          * @param align alignment indicator, one of {<code>'&lt;', '^', '>', '='</code>
          * @param sign policy, one of <code>'+'</code>, <code>'-'</code>, or <code>' '</code>.
+         * @param noNegativeZero true to coerce negative zero to positive zero after rounding
          * @param alternate true to request alternate formatting mode (<code>'#'</code> flag).
          * @param width of field after padding or -1 to default
          * @param grouping true to request comma-separated groups
          * @param precision (e.g. decimal places) or -1 to default
          * @param type indicator character
          */
-        public Spec(char fill, char align, char sign, boolean alternate, int width,
+        public Spec(char fill, char align, char sign, boolean noNegativeZero, boolean alternate, int width,
                         char grouping, int precision, char type) {
             this.fill = fill;
             this.align = align;
             this.sign = sign;
+            this.noNegativeZero = noNegativeZero;
             this.alternate = alternate;
             this.width = width;
             this.grouping = grouping;
@@ -647,6 +652,9 @@ public class InternalFormat {
             }
             if (specified(sign)) {
                 buf.append(sign);
+            }
+            if (noNegativeZero) {
+                buf.append('z');
             }
             if (alternate) {
                 buf.append('#');
@@ -677,7 +685,7 @@ public class InternalFormat {
          * @param type indicator character
          */
         public Spec(int precision, char type) {
-            this(' ', '>', NONE, false, UNSPECIFIED, NONE, precision, type);
+            this(' ', '>', NONE, false, false, UNSPECIFIED, NONE, precision, type);
         }
 
         /** The alignment from the parsed format specification, or default. */
@@ -748,13 +756,14 @@ public class InternalFormat {
          */
         /*
          * This method is the equivalent of CPython's parse_internal_render_format_spec() in
-         * ~/Objects/stringlib/formatter.h.
+         * Python/formatter_unicode.c.
          */
         Spec parse(char defaultType, char defaultAlignment, Node raisingNode) {
             char type = defaultType;
             char align = NONE;
             char fill = NONE;
             char sign = NONE;
+            boolean noNegativeZero;
             boolean alternate;
             char grouping = NONE;
             int width = Spec.UNSPECIFIED, precision = Spec.UNSPECIFIED;
@@ -781,6 +790,9 @@ public class InternalFormat {
                 sign = spec.charAt(ptr++);
             }
 
+            // Scan [z] ... (PEP 682: suppress the sign of negative zero after rounding)
+            noNegativeZero = scanPast('z');
+
             // Scan [#] ...
             alternate = scanPast('#');
 
@@ -806,7 +818,7 @@ public class InternalFormat {
                     width = scanInteger();
                 } catch (NumberFormatException ex) {
                     // CPython seems to happily parse big ints and then it chokes on the allocation
-                    throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.WIDTH_TOO_BIG);
+                    throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.WIDTH_TOO_BIG);
                 }
             }
 
@@ -816,11 +828,11 @@ public class InternalFormat {
             }
             if (scanPast('_')) {
                 if (specified(grouping)) {
-                    throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.CANNOT_SPECIFY_BOTH_COMMA_AND_UNDERSCORE);
+                    throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.CANNOT_SPECIFY_BOTH_COMMA_AND_UNDERSCORE);
                 }
                 grouping = '_';
                 if (scanPast(',')) {
-                    throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.CANNOT_SPECIFY_BOTH_COMMA_AND_UNDERSCORE);
+                    throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.CANNOT_SPECIFY_BOTH_COMMA_AND_UNDERSCORE);
                 }
             }
 
@@ -830,10 +842,10 @@ public class InternalFormat {
                     try {
                         precision = scanInteger();
                     } catch (NumberFormatException ex) {
-                        throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.PRECISION_TOO_BIG);
+                        throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.PRECISION_TOO_BIG);
                     }
                 } else {
-                    throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.FMT_SPECIFIER_MISSING_PRECISION);
+                    throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.FMT_SPECIFIER_MISSING_PRECISION);
                 }
             }
 
@@ -844,7 +856,7 @@ public class InternalFormat {
 
             // If we haven't reached the end, something is wrong
             if (ptr != spec.length()) {
-                throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.INVALID_CONVERSION_SPECIFICATION);
+                throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.INVALID_CONVERSION_SPECIFICATION);
             }
 
             // Some basic validation
@@ -875,12 +887,12 @@ public class InternalFormat {
                         valid = false;
                 }
                 if (!valid) {
-                    throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.CANNOT_SPECIFY_C_WITH_C, grouping, type);
+                    throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.CANNOT_SPECIFY_C_WITH_C, grouping, type);
                 }
             }
 
             // Create a specification
-            return new Spec(fill, align, sign, alternate, width, grouping, precision, type);
+            return new Spec(fill, align, sign, noNegativeZero, alternate, width, grouping, precision, type);
         }
 
         /**

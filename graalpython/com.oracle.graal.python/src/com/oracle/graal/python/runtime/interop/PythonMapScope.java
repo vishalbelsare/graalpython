@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,7 +44,6 @@ import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.nodes.BuiltinNames;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -117,7 +116,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     Object getMembers(@SuppressWarnings("unused") boolean includeInternal,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile)
                     throws UnsupportedMessageException {
@@ -131,7 +130,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     boolean isMemberReadable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile) {
         int length = lengthProfile.profile(inliningTarget, names.length);
@@ -147,7 +146,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     Object readMember(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile)
                     throws UnknownIdentifierException, UnsupportedMessageException {
@@ -163,7 +162,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     boolean isMemberModifiable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile) {
         int length = lengthProfile.profile(inliningTarget, names.length);
@@ -180,7 +179,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     boolean isMemberInsertable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile) {
         int length = lengthProfile.profile(inliningTarget, names.length);
@@ -197,7 +196,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     boolean hasMemberReadSideEffects(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile) {
         int length = lengthProfile.profile(inliningTarget, names.length);
@@ -212,7 +211,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     boolean hasMemberWriteSideEffects(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile) {
         int length = lengthProfile.profile(inliningTarget, names.length);
@@ -227,7 +226,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     void writeMember(String member, Object value,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile)
                     throws UnknownIdentifierException, UnsupportedMessageException, UnsupportedTypeException {
@@ -248,7 +247,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     boolean isMemberRemovable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile) {
         int length = lengthProfile.profile(inliningTarget, names.length);
@@ -265,7 +264,7 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     void removeMember(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("interop") @CachedLibrary(limit = "LIMIT") InteropLibrary interop,
                     @Shared("lenghtProfile") @Cached InlinedIntValueProfile lengthProfile)
                     throws UnsupportedMessageException, UnknownIdentifierException {
@@ -284,14 +283,14 @@ public final class PythonMapScope implements TruffleObject {
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    boolean hasLanguage() {
+    boolean hasLanguageId() {
         return true;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    Class<? extends TruffleLanguage<?>> getLanguage() {
-        return PythonLanguage.class;
+    String getLanguageId() {
+        return PythonLanguage.ID;
     }
 
     @ExportMessage

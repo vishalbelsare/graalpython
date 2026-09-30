@@ -1,4 +1,4 @@
-# Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -43,7 +43,6 @@ from typing import Optional, Tuple
 
 from asdl import java_file
 from asdl import model
-
 
 SST_PACKAGE = 'com.oracle.graal.python.pegparser.sst'
 AST_PACKAGE = 'com.oracle.graal.python.builtins.modules.ast'
@@ -100,7 +99,8 @@ class SSTNodeGenerator(Generator):
             # fields
             for f in c.fields:
                 comment = '   // nullable' if f.is_nullable else ''
-                emitter.println(f'public final {f.type.java} {f.name.java};{comment}')
+                final = '' if f.type.python == 'expr' and not f.is_sequence else 'final '
+                emitter.println(f'public {final}{f.type.java} {f.name.java};{comment}')
             # constructor
             ctor_args = ', '.join(f'{f.type.java} {f.name.java}' for f in c.fields)
             with emitter.define(f'public {c.name.java}({ctor_args}{", " if ctor_args else ""}SourceRange sourceRange)'):
@@ -109,6 +109,9 @@ class SSTNodeGenerator(Generator):
                     if not f.is_nullable and f.type.java not in ('int', 'boolean'):
                         emitter.println(f'assert {f.name.java} != null;')
                     emitter.println(f'this.{f.name.java} = {f.name.java};')
+            if 'typeParams' in [f.name.java for f in c.fields]:
+                with emitter.define('public boolean isGeneric()'):
+                    emitter.println('return typeParams != null && typeParams.length > 0;')
             # accept() method
             with emitter.define('public <T> T accept(SSTreeVisitor<T> visitor)', '@Override'):
                 emitter.println('return visitor.visit(this);')
@@ -162,6 +165,7 @@ class AstStateGenerator(Generator):
             emitter.println('import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;')
             emitter.println('import static com.oracle.graal.python.util.PythonUtils.tsLiteral;')
             emitter.println()
+            emitter.println('import com.oracle.graal.python.builtins.PythonBuiltinClassType;')
             emitter.println('import com.oracle.graal.python.builtins.objects.object.PythonObject;')
             emitter.println('import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;')
             emitter.println('import com.oracle.graal.python.builtins.objects.type.PythonClass;')
@@ -195,6 +199,38 @@ class AstStateGenerator(Generator):
             emitter.println('this.clsAst = clsAst;')
             for t in module.types:
                 self.visit(t, emitter)
+            emitter.println()
+            emitter.println('// Field types')
+            for t in module.types:
+                self.emit_field_types(t, emitter)
+
+    @classmethod
+    def emit_field_types(cls, node: model.Type, emitter: java_file.Emitter):
+        if isinstance(node, model.AbstractClass):
+            for inner_class in node.inner_classes:
+                cls.emit_field_types(inner_class, emitter)
+        elif isinstance(node, model.Enum):
+            for member in node.members:
+                emitter.println(f'factory.setFieldTypes({member.cls_field}, tsa());')
+        else:
+            fields = ', '.join(field.name.ts_literal for field in node.fields)
+            types = ', '.join(cls.field_type_expression(field) for field in node.fields)
+            suffix = f', {types}' if types else ''
+            emitter.println(f'factory.setFieldTypes({node.name.cls_field}, tsa({fields}){suffix});')
+
+    @staticmethod
+    def field_type_expression(field: model.Field):
+        builtin_types = {
+            'identifier': 'PString',
+            'string': 'PString',
+            'int': 'PInt',
+            'constant': 'PythonObject',
+        }
+        if field.type.python in builtin_types:
+            type_expression = f'PythonBuiltinClassType.{builtin_types[field.type.python]}'
+        else:
+            type_expression = model.Name(field.type.python, model.convert_type_name(field.type.python), 'T').cls_field
+        return f'factory.makeFieldType({type_expression}, {str(field.is_sequence).lower()}, {str(field.is_optional).lower()})'
 
     @staticmethod
     def emit_helpers(emitter: java_file.Emitter):
@@ -223,7 +259,7 @@ class AstStateGenerator(Generator):
             emitter.println()
             emitter.println(f'// {c.name.java}.{m.java}')
             self.emit_make_type(emitter, m, c.name, (), (), m.python)
-            emitter.println(f'{m.singleton_field} = factory.createSingleton({m.cls_field});')
+            emitter.println(f'{m.singleton_field} = AstTypeFactory.createSingleton({m.cls_field});')
 
     @staticmethod
     def emit_make_type(emitter: java_file.Emitter, name: model.Name, base_class: Optional[model.Name],
@@ -285,7 +321,7 @@ class Sst2ObjGenerator(Generator):
 
     def visit_concrete_class(self, c: model.ConcreteClass, emitter: java_file.Emitter):
         with emitter.define(f'public Object visit({c.full_name} node)', '@Override'):
-            emitter.println(f'PythonObject o = factory.createPythonObject(state.{c.name.cls_field});')
+            emitter.println(f'PythonObject o = createPythonObject(state.{c.name.cls_field});')
             for f in c.fields:
                 self.visit(f, emitter)
             if c.outer_has_attributes or c.attributes:
@@ -327,6 +363,12 @@ class Obj2Sst2Generator(Generator):
     PACKAGE = AST_PACKAGE
     CLASS_NAME = 'Obj2Sst'
 
+
+    attribute_special_defaults = {
+        "end_lineno": "lineNo",
+        "end_col_offset": "colOffset",
+    }
+
     def visit_module(self, module: model.Module):
         with self.create_emitter() as emitter:
             self.emit_imports(module, emitter)
@@ -338,6 +380,7 @@ class Obj2Sst2Generator(Generator):
     @staticmethod
     def emit_imports(module, emitter):
         emitter.println()
+        emitter.println('import com.oracle.truffle.api.nodes.Node;')
         emitter.println('import com.oracle.graal.python.builtins.objects.PNone;')
         emitter.println('import com.oracle.graal.python.pegparser.sst.ConstantValue;')
         top_level_class_names = [t.name.java for t in module.types]
@@ -346,8 +389,8 @@ class Obj2Sst2Generator(Generator):
         emitter.println('import com.oracle.graal.python.pegparser.tokenizer.SourceRange;')
 
     def emit_constructor(self, emitter: java_file.Emitter):
-        with emitter.define(f'{self.CLASS_NAME}({AstStateGenerator.CLASS_NAME} state)'):
-            emitter.println('super(state);')
+        with emitter.define(f'{self.CLASS_NAME}(Node node, {AstStateGenerator.CLASS_NAME} state)'):
+            emitter.println('super(node, state);')
 
     @staticmethod
     def visit_enum(c: model.Enum, emitter: java_file.Emitter):
@@ -406,8 +449,10 @@ class Obj2Sst2Generator(Generator):
             arguments.append(f'{f.type.java}::new')
             suffix = 'Sequence'
         elif f.type.java in ('int', 'boolean'):
-            arguments.append('false' if f.is_optional else 'true')
             suffix = f.type.java.capitalize()
+            if f.is_optional:
+                suffix += "Opt"
+                arguments.append(Obj2Sst2Generator.attribute_special_defaults.get(f.name.python, "0"))
         else:
             arguments.append(f'this::{f.convertor}')
             arguments.append('false' if f.is_optional else 'true')

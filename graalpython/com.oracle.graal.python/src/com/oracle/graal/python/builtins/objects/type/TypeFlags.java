@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,6 +46,8 @@ package com.oracle.graal.python.builtins.objects.type;
  */
 public abstract class TypeFlags {
 
+    public static final long MANAGED_WEAKREF = (1L << 3);
+    public static final long MANAGED_DICT = (1L << 4);
     public static final long SEQUENCE = (1L << 5);
     public static final long MAPPING = (1L << 6);
     public static final long HEAPTYPE = (1L << 9);
@@ -62,6 +64,7 @@ public abstract class TypeFlags {
     public static final long VALID_VERSION_TAG = (1L << 19);
     public static final long IS_ABSTRACT = (1L << 20);
     public static final long MATCH_SELF = (1L << 22);
+    public static final long ITEMS_AT_END = (1L << 23);
     public static final long LONG_SUBCLASS = (1L << 24);
     public static final long LIST_SUBCLASS = (1L << 25);
     public static final long TUPLE_SUBCLASS = (1L << 26);

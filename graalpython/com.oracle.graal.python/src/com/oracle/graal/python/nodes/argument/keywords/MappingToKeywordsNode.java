@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,10 +50,10 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.KeywordsStorage;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
 import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
@@ -81,16 +81,16 @@ public abstract class MappingToKeywordsNode extends PNodeWithContext {
 
     public abstract PKeyword[] execute(VirtualFrame frame, Node inliningTarget, Object starargs) throws SameDictKeyException, NonMappingException;
 
-    @Specialization(guards = "hasBuiltinDictIter(inliningTarget, starargs, getClassNode, lookupIter)", limit = "1")
-    static PKeyword[] doDict(VirtualFrame frame, Node inliningTarget, PDict starargs,
+    @Specialization(guards = "hasBuiltinDictIter(inliningTarget, starargs, getClassNode, getSlots)", limit = "1")
+    public static PKeyword[] doDict(VirtualFrame frame, Node inliningTarget, PDict starargs,
                     @SuppressWarnings("unused") @Cached GetPythonObjectClassNode getClassNode,
-                    @SuppressWarnings("unused") @Cached(parameters = "Iter", inline = false) LookupCallableSlotInMRONode lookupIter,
+                    @SuppressWarnings("unused") @Cached GetCachedTpSlotsNode getSlots,
                     @Exclusive @Cached HashingStorageToKeywords convert) {
         return convert.execute(frame, inliningTarget, starargs.getDictStorage());
     }
 
     @Fallback
-    static PKeyword[] doMapping(VirtualFrame frame, Node inliningTarget, Object starargs,
+    public static PKeyword[] doMapping(VirtualFrame frame, Node inliningTarget, Object starargs,
                     @Cached(inline = false) ConcatDictToStorageNode concatDictToStorageNode,
                     @Exclusive @Cached HashingStorageToKeywords convert) throws SameDictKeyException, NonMappingException {
         HashingStorage storage = concatDictToStorageNode.execute(frame, EmptyStorage.INSTANCE, starargs);
@@ -102,23 +102,23 @@ public abstract class MappingToKeywordsNode extends PNodeWithContext {
     @GenerateInline(false) // footprint reduction 44 to 26
     abstract static class AddKeywordNode extends HashingStorageNodes.HashingStorageForEachCallback<CopyKeywordsState> {
         @Override
-        public abstract CopyKeywordsState execute(Frame frame, Node Node, HashingStorage storage, HashingStorageIterator it, CopyKeywordsState accumulator);
+        public abstract CopyKeywordsState execute(Frame frame, Node node, HashingStorage storage, HashingStorageIterator it, CopyKeywordsState accumulator);
 
         @Specialization
-        public CopyKeywordsState add(@SuppressWarnings("unused") Node Node, HashingStorage storage, HashingStorageNodes.HashingStorageIterator it, CopyKeywordsState state,
-                        @Bind("this") Node inliningTarget,
+        public CopyKeywordsState add(Frame frame, @SuppressWarnings("unused") Node node, HashingStorage storage, HashingStorageNodes.HashingStorageIterator it, CopyKeywordsState state,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode,
                         @Cached CastToTruffleStringNode castToTruffleStringNode,
                         @Cached HashingStorageNodes.HashingStorageIteratorKey itKey,
                         @Cached HashingStorageNodes.HashingStorageIteratorKeyHash itKeyHash,
                         @Cached HashingStorageNodes.HashingStorageGetItemWithHash getItem) {
             Object key = itKey.execute(inliningTarget, storage, it);
-            long hash = itKeyHash.execute(inliningTarget, storage, it);
+            long hash = itKeyHash.execute(frame, inliningTarget, storage, it);
             Object value = getItem.execute(null, inliningTarget, storage, key, hash);
             try {
                 state.addKeyword(castToTruffleStringNode.execute(inliningTarget, key), value);
             } catch (CannotCastException e) {
-                throw raiseNode.raise(TypeError, ErrorMessages.KEYWORDS_S_MUST_BE_STRINGS);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.KEYWORDS_S_MUST_BE_STRINGS);
             }
             return state;
         }
@@ -157,7 +157,6 @@ public abstract class MappingToKeywordsNode extends PNodeWithContext {
 
         @Specialization(guards = {"!isKeywordsStorage(storage)", "!isEmptyStorage(storage)"})
         static PKeyword[] doCached(VirtualFrame frame, Node inliningTarget, HashingStorage storage,
-                        @SuppressWarnings("unused") @Cached(parameters = "Iter", inline = false) LookupCallableSlotInMRONode lookupIter,
                         @Cached(inline = false) AddKeywordNode addKeywordNode,
                         @Cached HashingStorageNodes.HashingStorageForEach forEachNode,
                         @SuppressWarnings("unused") @Cached HashingStorageLen lenNode,

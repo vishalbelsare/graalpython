@@ -1,23 +1,34 @@
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_class_methods
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_copy
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_dir
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_equality
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_exposed_type
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_generic_subclass
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_instantiate
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_isinstance
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_issubclass
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_no_chaining
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_no_kwargs
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_parameter_chaining
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_parameters
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_pickle
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_repr
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_subclassing
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_subclassing_types_genericalias
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_type_generic
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_type_subclass_generic
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_unbound_methods
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_union
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_union_generic
-*graalpython.lib-python.3.test.test_genericalias.BaseTest.test_unsubscriptable
+test.test_genericalias.BaseTest.test_calling_next_twice_raises_stopiteration @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_class_methods @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_copy @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_del_iter @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_equality @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_evil_repr1 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_evil_repr2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_exposed_type @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_generic_subclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_gh150146 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_instantiate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_isinstance @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_issubclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_iter_creates_starred_tuple @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_no_chaining @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_no_kwargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_parameter_chaining @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_parameters @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_pickle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_subclassing @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_subclassing_types_genericalias @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_subscriptable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_type_generic @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_type_subclass_generic @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_unbound_methods @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_union @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_union_generic @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_unpack @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_unsubscriptable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.BaseTest.test_weakref @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.TypeIterationTests.test_cannot_iterate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_genericalias.TypeIterationTests.test_is_not_instance_of_iterable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,91 +40,123 @@
  */
 package com.oracle.graal.python.builtins.objects.dict;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.RuntimeError;
-import static com.oracle.graal.python.builtins.objects.common.HashingStorage.addKeyValuesToStorage;
+import static com.oracle.graal.python.nodes.ErrorMessages.DESCRIPTOR_REQUIRES_S_OBJ_RECEIVED_P;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_KEYS;
+import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.common.ForeignHashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
-import com.oracle.graal.python.builtins.objects.common.HashingStorage.ObjectToArrayPairNode;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageAddAllToOther;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGuards;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIterator;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageLen;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageSetItem;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageTransferItem;
+import com.oracle.graal.python.builtins.objects.common.PHashingCollection;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.lib.PyDictMerge;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
-import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
+import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.ImportStatic;
+import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 public abstract class DictNodes {
-    @ImportStatic(HashingStorageGuards.class)
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 188 -> 170
+
+    @GenerateUncached
+    @GenerateInline(inlineByDefault = true)
+    public abstract static class GetDictStorageNode extends PNodeWithContext {
+
+        public abstract HashingStorage execute(Node inliningTarget, Object object);
+
+        @Specialization
+        static HashingStorage doPHashingCollection(PHashingCollection dict) {
+            return dict.getDictStorage();
+        }
+
+        @Specialization(guards = {"isForeignObjectNode.execute(inliningTarget, dict)", "interop.hasHashEntries(dict)"}, limit = "1")
+        static HashingStorage doForeign(Node inliningTarget, Object dict,
+                        @Cached IsForeignObjectNode isForeignObjectNode,
+                        @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop) {
+            return new ForeignHashingStorage(dict);
+        }
+
+        @Fallback
+        static HashingStorage doFallback(Node inliningTarget, Object object) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, DESCRIPTOR_REQUIRES_S_OBJ_RECEIVED_P, "dict", object);
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    public abstract static class UpdateDictStorageNode extends PNodeWithContext {
+
+        public abstract void execute(Node inliningTarget, Object dict, HashingStorage oldStorage, HashingStorage newStorage);
+
+        @Specialization
+        static void doPHashingCollection(Node inliningTarget, PHashingCollection dict, HashingStorage oldStorage, HashingStorage newStorage,
+                        @Exclusive @Cached InlinedConditionProfile generalizedProfile) {
+            if (generalizedProfile.profile(inliningTarget, oldStorage != newStorage)) {
+                dict.setDictStorage(newStorage);
+            }
+        }
+
+        @Fallback
+        static void doForeign(Object dict, HashingStorage oldStorage, HashingStorage newStorage) {
+            if (oldStorage != newStorage) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw CompilerDirectives.shouldNotReachHere("foreign dict storage should never need to be replaced: " + dict);
+            }
+        }
+
+    }
+
+    @GenerateInline(false)       // footprint reduction 52 -> 36
+    @GenerateUncached
     public abstract static class UpdateNode extends PNodeWithContext {
-        public abstract void execute(Frame frame, PDict self, Object other);
+        public abstract void execute(Frame frame, Object self, Object other);
 
-        @SuppressWarnings("unused")
-        @Specialization(guards = "isIdentical(self, other)")
-        static void updateSelf(VirtualFrame frame, PDict self, Object other) {
+        public static void executeUncached(Frame frame, Object self, Object other) {
+            DictNodesFactory.UpdateNodeGen.getUncached().execute(frame, self, other);
         }
 
-        @Specialization(guards = "!mayHaveSideEffectingEq(self)")
-        static void updateDictNoSideEffects(PDict self, PDict other,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached HashingStorageAddAllToOther addAllToOther) {
-            // The contract is such that we iterate over 'other' and add its elements to 'self'. If
-            // 'other' gets mutated during the iteration, we should raise. This can happen via a
-            // side effect of '__eq__' of some key in self, we should not run any other arbitrary
-            // code here (hashes are reused from the 'other' storage).
-            addAllToOther.execute(null, inliningTarget, other.getDictStorage(), self);
-        }
-
-        @Specialization(guards = "mayHaveSideEffectingEq(self)")
-        static void updateDictGeneric(VirtualFrame frame, PDict self, PDict other,
-                        @Bind("this") Node inliningTarget,
-                        @Cached HashingStorageTransferItem transferItem,
-                        @Cached HashingStorageGetIterator getOtherIter,
-                        @Cached HashingStorageIteratorNext iterNext,
-                        @Cached HashingStorageLen otherLenNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            HashingStorage selfStorage = self.getDictStorage();
-            HashingStorage otherStorage = other.getDictStorage();
-            int initialSize = otherLenNode.execute(inliningTarget, otherStorage);
-            HashingStorageIterator itOther = getOtherIter.execute(inliningTarget, otherStorage);
-            while (iterNext.execute(inliningTarget, otherStorage, itOther)) {
-                selfStorage = transferItem.execute(frame, inliningTarget, otherStorage, itOther, selfStorage);
-                if (initialSize != otherLenNode.execute(inliningTarget, otherStorage)) {
-                    throw raiseNode.get(inliningTarget).raise(RuntimeError, ErrorMessages.MUTATED_DURING_UPDATE, "dict");
+        @Specialization
+        static void updateDictGeneric(VirtualFrame frame, Object self, Object other,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectLookupAttr lookupKeys,
+                        @Cached PyDictMerge.BuiltinDictNode mergeBuiltinDict,
+                        @Cached PyDictMerge.MappingNode mergeMapping,
+                        @Cached PyDictMerge.FromSeq2Node mergeFromSeq2,
+                        @Cached GetPythonObjectClassNode getClassNode,
+                        @Cached GetCachedTpSlotsNode getSlots,
+                        @Cached InlinedConditionProfile builtinDictProfile) {
+            if (self != other) {
+                boolean hasDictIter = other instanceof PDict dict && (PGuards.isBuiltinDict(dict) || PGuards.hasBuiltinDictIter(inliningTarget, dict, getClassNode, getSlots));
+                if (builtinDictProfile.profile(inliningTarget, hasDictIter)) {
+                    PDict dict = (PDict) other;
+                    mergeBuiltinDict.execute(frame, inliningTarget, self, dict);
+                } else {
+                    Object keysAttribute = lookupKeys.execute(frame, inliningTarget, other, T_KEYS);
+                    if (keysAttribute != PNone.NO_VALUE) {
+                        mergeMapping.execute(frame, inliningTarget, self, other, keysAttribute);
+                    } else {
+                        mergeFromSeq2.execute(frame, inliningTarget, self, other);
+                    }
                 }
             }
-            self.setDictStorage(selfStorage);
-        }
-
-        @Specialization(guards = "!isDict(other)")
-        static void updateArg(VirtualFrame frame, PDict self, Object other,
-                        @Bind("this") Node inliningTarget,
-                        @Cached HashingStorageSetItem setItem,
-                        @Cached PyObjectLookupAttr lookupKeys,
-                        @Cached ObjectToArrayPairNode toArrayPair) {
-            Object keyAttr = lookupKeys.execute(frame, inliningTarget, other, T_KEYS);
-            HashingStorage storage = addKeyValuesToStorage(frame, self, other, keyAttr,
-                            inliningTarget, toArrayPair, setItem);
-            self.setDictStorage(storage);
-        }
-
-        protected static boolean isIdentical(PDict dict, Object other) {
-            return dict == other;
         }
 
         @NeverDefault

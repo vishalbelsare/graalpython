@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,40 +40,38 @@
  */
 package com.oracle.graal.python.builtins.objects.getsetdescriptor;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___DELETE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GET__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OBJCLASS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SET__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescrDeleteNode;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescrGetNode;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescrSetNode;
-import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescriptorCheckNode;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetNameNode;
-import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.DescrGetBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrSet.DescrSetBuiltinNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.object.DescriptorCheckNode;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 /**
@@ -81,6 +79,8 @@ import com.oracle.truffle.api.strings.TruffleString;
  */
 @CoreFunctions(extendClasses = PythonBuiltinClassType.GetSetDescriptor)
 public final class GetSetDescriptorTypeBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = GetSetDescriptorTypeBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return GetSetDescriptorTypeBuiltinsFactory.getFactories();
@@ -95,107 +95,104 @@ public final class GetSetDescriptorTypeBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        static Object doHiddenKeyDescriptor(HiddenKeyDescriptor self) {
+        static Object doIndexedSlotDescriptor(IndexedSlotDescriptor self) {
             return self.getType();
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class GetSetReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         TruffleString repr(GetSetDescriptor descr,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("gerName") @Cached GetNameNode getName,
                         @Shared("format") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             return simpleTruffleStringFormatNode.format("<attribute '%s' of '%s' objects>", descr.getName(), getName.execute(inliningTarget, descr.getType()));
         }
 
         @Specialization
-        TruffleString repr(HiddenKeyDescriptor descr,
-                        @Bind("this") Node inliningTarget,
+        TruffleString repr(IndexedSlotDescriptor descr,
+                        @Bind Node inliningTarget,
                         @Shared("gerName") @Cached GetNameNode getName,
                         @Shared("format") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
-            return simpleTruffleStringFormatNode.format("<attribute '%s' of '%s' objects>", descr.getKey().getName(), getName.execute(inliningTarget, descr.getType()));
+            return simpleTruffleStringFormatNode.format("<attribute '%s' of '%s' objects>", descr.getName(), getName.execute(inliningTarget, descr.getType()));
         }
     }
 
-    @Builtin(name = J___GET__, minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 3)
+    @Slot(value = SlotKind.tp_descr_get, isComplex = true)
+    @GenerateUncached
     @GenerateNodeFactory
-    abstract static class GetSetGetNode extends PythonTernaryBuiltinNode {
-        @Specialization(guards = {"isNone(obj)", "!isPNone(type)"})
-        static Object doNone(@SuppressWarnings("unused") Object descr, @SuppressWarnings("unused") PNone obj, @SuppressWarnings("unused") Object type) {
+    abstract static class GetSetGetNode extends DescrGetBuiltinNode {
+        @Specialization(guards = "isNoValue(obj)")
+        static Object doNone(@SuppressWarnings("unused") Object descr, @SuppressWarnings("unused") Object obj, @SuppressWarnings("unused") Object type) {
             return descr;
         }
 
-        @Specialization(guards = "isNone(obj)")
-        static Object doNoneNone(@SuppressWarnings("unused") Object descr, @SuppressWarnings("unused") PNone obj, @SuppressWarnings("unused") PNone type,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.GET_NONE_NONE_IS_INVALID);
-        }
-
-        // https://github.com/python/cpython/blob/e8b19656396381407ad91473af5da8b0d4346e88/Objects/descrobject.c#L149
-        @Specialization(guards = "!isNone(obj)")
+        @Specialization(guards = "!isNoValue(obj)")
         static Object doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor descr, Object obj, @SuppressWarnings("unused") Object type,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached DescriptorCheckNode descriptorCheckNode,
                         @Shared @Cached DescrGetNode getNode) {
             descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getName(), obj);
             return getNode.execute(frame, descr, obj);
         }
 
-        @Specialization(guards = "!isNone(obj)")
-        static Object doHiddenKeyDescriptor(VirtualFrame frame, HiddenKeyDescriptor descr, Object obj, @SuppressWarnings("unused") Object type,
-                        @Bind("this") Node inliningTarget,
+        @Specialization(guards = "!isNoValue(obj)")
+        static Object doIndexedSlotDescriptor(VirtualFrame frame, IndexedSlotDescriptor descr, Object obj, @SuppressWarnings("unused") Object type,
+                        @Bind Node inliningTarget,
                         @Shared @Cached DescriptorCheckNode descriptorCheckNode,
                         @Shared @Cached DescrGetNode getNode) {
-            descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getKey(), obj);
+            descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getName(), obj);
             return getNode.execute(frame, descr, obj);
         }
     }
 
-    @Builtin(name = J___SET__, minNumOfPositionalArgs = 3)
+    @Slot(value = SlotKind.tp_descr_set, isComplex = true)
     @GenerateNodeFactory
-    abstract static class GetSetSetNode extends PythonTernaryBuiltinNode {
-        @Specialization
-        static Object doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor descr, Object obj, Object value,
-                        @Bind("this") Node inliningTarget,
+    abstract static class DescrSet extends DescrSetBuiltinNode {
+        @Specialization(guards = "!isNoValue(value)")
+        static void doDescriptorSet(VirtualFrame frame, Object descr, Object obj, Object value,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile isGetSetDescrProfile,
                         @Shared @Cached DescriptorCheckNode descriptorCheckNode,
-                        @Shared @Cached DescrSetNode setNode) {
-            descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getName(), obj);
-            return setNode.execute(frame, descr, obj, value);
+                        @Cached DescrSetNode setNode) {
+            Object type;
+            Object name;
+            if (isGetSetDescrProfile.profile(inliningTarget, descr instanceof GetSetDescriptor)) {
+                GetSetDescriptor getSet = (GetSetDescriptor) descr;
+                type = getSet.getType();
+                name = getSet.getName();
+            } else if (descr instanceof IndexedSlotDescriptor hidden) {
+                type = hidden.getType();
+                name = hidden.getName();
+            } else {
+                throw CompilerDirectives.shouldNotReachHere("Not a GetSetDescriptor nor IndexedSlotDescriptor");
+            }
+            descriptorCheckNode.execute(inliningTarget, type, name, obj);
+            setNode.execute(frame, descr, obj, value);
         }
 
-        @Specialization
-        static Object doHiddenKeyDescriptor(VirtualFrame frame, HiddenKeyDescriptor descr, Object obj, Object value,
-                        @Bind("this") Node inliningTarget,
+        @Specialization(guards = "isNoValue(value)")
+        static void doDescriptorDel(VirtualFrame frame, Object descr, Object obj, @SuppressWarnings("unused") Object value,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile isGetSetDescrProfile,
                         @Shared @Cached DescriptorCheckNode descriptorCheckNode,
-                        @Shared @Cached DescrSetNode setNode) {
-            descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getKey(), obj);
-            return setNode.execute(frame, descr, obj, value);
-        }
-    }
-
-    @Builtin(name = J___DELETE__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    abstract static class GetSetDeleteNode extends PythonBinaryBuiltinNode {
-
-        @Specialization
-        static Object doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor descr, Object obj,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached DescriptorCheckNode descriptorCheckNode,
-                        @Shared @Cached DescrDeleteNode deleteNode) {
-            descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getName(), obj);
-            return deleteNode.execute(frame, descr, obj);
-        }
-
-        @Specialization
-        static Object doHiddenKeyDescriptor(VirtualFrame frame, HiddenKeyDescriptor descr, Object obj,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached DescriptorCheckNode descriptorCheckNode,
-                        @Shared @Cached DescrDeleteNode deleteNode) {
-            descriptorCheckNode.execute(inliningTarget, descr.getType(), descr.getKey(), obj);
-            return deleteNode.execute(frame, descr, obj);
+                        @Cached DescrDeleteNode deleteNode) {
+            Object type;
+            Object name;
+            if (isGetSetDescrProfile.profile(inliningTarget, descr instanceof GetSetDescriptor)) {
+                GetSetDescriptor getSet = (GetSetDescriptor) descr;
+                type = getSet.getType();
+                name = getSet.getName();
+            } else if (descr instanceof IndexedSlotDescriptor hidden) {
+                type = hidden.getType();
+                name = hidden.getName();
+            } else {
+                throw CompilerDirectives.shouldNotReachHere("Not a GetSetDescriptor nor IndexedSlotDescriptor");
+            }
+            descriptorCheckNode.execute(inliningTarget, type, name, obj);
+            deleteNode.execute(frame, descr, obj);
         }
     }
 }

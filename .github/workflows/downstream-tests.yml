@@ -1,0 +1,66 @@
+name: Weekly Downstream Tests
+on:
+  schedule:
+  - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+
+  build-standalone-artifacts:
+    uses: ./.github/workflows/ci-matrix-gen.yml
+    with:
+      jobs_to_run: ^(?=.*python-svm-build-gate-linux-amd64).*$
+      logs_retention_days: 0
+      artifacts_retention_days: 0
+
+  downstream-pybind11:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: pybind11
+      needs_cmake: true
+
+  downstream-virtualenv:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: virtualenv
+
+  downstream-pyo3:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: pyo3
+      needs_rust: true
+
+  downstream-pydantic-core:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: pydantic-core
+      needs_rust: true
+      needs_uv: true
+
+  downstream-jiter:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: jiter
+      needs_rust: true
+      needs_uv: true
+
+  downstream-cython:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: cython
+
+  downstream-oracledb:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-oracledb.yml
+    with:
+      package: oracledb

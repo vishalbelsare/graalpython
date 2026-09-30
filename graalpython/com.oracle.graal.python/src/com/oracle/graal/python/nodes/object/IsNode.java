@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,32 +40,27 @@
  */
 package com.oracle.graal.python.nodes.object;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___EQ__;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
-import com.oracle.graal.python.builtins.objects.code.CodeNodes;
-import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.str.StringNodes;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeGeneratorFunctionRootNode;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.expression.BinaryOp;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsAnyBuiltinObjectProfile;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.util.OverflowException;
-import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.bytecode.OperationProxy;
+import com.oracle.truffle.api.bytecode.StoreBytecodeIndex;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
@@ -74,12 +69,11 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.strings.TruffleString;
 
 @ImportStatic(PythonOptions.class)
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 44 -> 26
+@OperationProxy.Proxyable(allowUncached = true, storeBytecodeIndex = false)
+@GenerateInline(false)       // footprint reduction 44 -> 26
 public abstract class IsNode extends Node implements BinaryOp {
 
     protected abstract boolean executeInternal(Object left, Object right);
@@ -87,7 +81,7 @@ public abstract class IsNode extends Node implements BinaryOp {
     protected abstract boolean executeInternal(boolean left, Object right);
 
     @Override
-    public final Object executeObject(VirtualFrame frame, Object left, Object right) {
+    public final Object execute(VirtualFrame frame, Object left, Object right) {
         return execute(left, right);
     }
 
@@ -105,13 +99,14 @@ public abstract class IsNode extends Node implements BinaryOp {
 
     // Primitives
     @Specialization
-    static boolean doBB(boolean left, boolean right) {
+    public static boolean doBB(boolean left, boolean right) {
         return left == right;
     }
 
     @Specialization
-    boolean doBP(boolean left, PInt right) {
-        Python3Core core = PythonContext.get(this);
+    public static boolean doBP(boolean left, PInt right,
+                    @Bind Node inliningTarget) {
+        Python3Core core = PythonContext.get(inliningTarget);
         if (left) {
             return right == core.getTrue();
         } else {
@@ -120,18 +115,18 @@ public abstract class IsNode extends Node implements BinaryOp {
     }
 
     @Specialization
-    static boolean doII(int left, int right) {
+    public static boolean doII(int left, int right) {
         return left == right;
     }
 
     @Specialization
-    static boolean doIL(int left, long right) {
+    public static boolean doIL(int left, long right) {
         return left == right;
     }
 
     @Specialization
-    static boolean doIP(int left, PInt right,
-                    @Bind("this") Node inliningTarget,
+    public static boolean doIP(int left, PInt right,
+                    @Bind Node inliningTarget,
                     @Shared("isBuiltin") @Cached IsAnyBuiltinObjectProfile isBuiltin) {
         if (isBuiltin.profileIsAnyBuiltinObject(inliningTarget, right)) {
             try {
@@ -145,18 +140,18 @@ public abstract class IsNode extends Node implements BinaryOp {
     }
 
     @Specialization
-    static boolean doLI(long left, int right) {
+    public static boolean doLI(long left, int right) {
         return left == right;
     }
 
     @Specialization
-    static boolean doLL(long left, long right) {
+    public static boolean doLL(long left, long right) {
         return left == right;
     }
 
     @Specialization
-    static boolean doLP(long left, PInt right,
-                    @Bind("this") Node inliningTarget,
+    public static boolean doLP(long left, PInt right,
+                    @Bind Node inliningTarget,
                     @Shared("isBuiltin") @Cached IsAnyBuiltinObjectProfile isBuiltin) {
         if (isBuiltin.profileIsAnyBuiltinObject(inliningTarget, right)) {
             try {
@@ -170,119 +165,103 @@ public abstract class IsNode extends Node implements BinaryOp {
     }
 
     @Specialization
-    static boolean doDD(double left, double right) {
+    public static boolean doDD(double left, double right) {
         // n.b. we simulate that the primitive NaN is a singleton; this is required to make
         // 'nan = float("nan"); nan is nan' work
-        return left == right || (Double.isNaN(left) && Double.isNaN(right));
+        return left == right || (Double.doubleToRawLongBits(left) == Double.doubleToRawLongBits(right));
     }
 
     @Specialization
-    boolean doPB(PInt left, boolean right) {
-        return doBP(right, left);
+    public static boolean doPB(PInt left, boolean right,
+                    @Bind Node inliningTarget) {
+        return doBP(right, left, inliningTarget);
     }
 
     @Specialization
-    static boolean doPI(PInt left, int right,
-                    @Bind("this") Node inliningTarget,
+    public static boolean doPI(PInt left, int right,
+                    @Bind Node inliningTarget,
                     @Shared("isBuiltin") @Cached IsAnyBuiltinObjectProfile isBuiltin) {
         return doIP(right, left, inliningTarget, isBuiltin);
     }
 
     @Specialization
-    static boolean doPL(PInt left, long right,
-                    @Bind("this") Node inliningTarget,
+    public static boolean doPL(PInt left, long right,
+                    @Bind Node inliningTarget,
                     @Shared("isBuiltin") @Cached IsAnyBuiltinObjectProfile isBuiltin) {
         return doLP(right, left, inliningTarget, isBuiltin);
     }
 
     // types
     @Specialization
-    static boolean doCT(PythonBuiltinClass left, PythonBuiltinClassType right) {
+    public static boolean doCT(PythonBuiltinClass left, PythonBuiltinClassType right) {
         return left.getType() == right;
     }
 
     @Specialization
-    static boolean doTC(PythonBuiltinClassType left, PythonBuiltinClass right) {
+    public static boolean doTC(PythonBuiltinClassType left, PythonBuiltinClass right) {
         return right.getType() == left;
     }
 
     // native objects
     @Specialization
-    static boolean doNative(PythonAbstractNativeObject left, PythonAbstractNativeObject right,
-                    @Cached CExtNodes.PointerCompareNode isNode) {
-        return isNode.execute(T___EQ__, left, right);
+    @InliningCutoff
+    @StoreBytecodeIndex
+    public static boolean doNative(PythonAbstractNativeObject left, PythonAbstractNativeObject right,
+                    @Exclusive @CachedLibrary(limit = "1") InteropLibrary interop) {
+        // Assumption: not perf critical, instead of refactoring
+        // PythonAbstractNativeObject.isIdentical into a separate node, we just piggy-back on
+        // interop library. We do not need two libraries, this will always specialize only to
+        // PythonAbstractNativeObject
+        return interop.isIdentical(left, right, interop);
     }
 
-    // code
-    @Specialization
-    static boolean doCode(PCode left, PCode right,
-                    @Bind("this") Node inliningTarget,
-                    @Cached CodeNodes.GetCodeCallTargetNode getCt) {
-        // Special case for code objects: Frames create them on-demand even if they refer to the
-        // same function. So we need to compare the root nodes.
-        if (left != right) {
-            RootCallTarget leftCt = getCt.execute(inliningTarget, left);
-            RootCallTarget rightCt = getCt.execute(inliningTarget, right);
-            if (leftCt != null && rightCt != null) {
-                RootNode leftRootNode = leftCt.getRootNode();
-                RootNode rightRootNode = rightCt.getRootNode();
-                if (leftRootNode instanceof PBytecodeGeneratorFunctionRootNode) {
-                    leftRootNode = ((PBytecodeGeneratorFunctionRootNode) leftRootNode).getBytecodeRootNode();
-                }
-                if (rightRootNode instanceof PBytecodeGeneratorFunctionRootNode) {
-                    rightRootNode = ((PBytecodeGeneratorFunctionRootNode) rightRootNode).getBytecodeRootNode();
-                }
-                if (leftRootNode instanceof PBytecodeRootNode && rightRootNode instanceof PBytecodeRootNode) {
-                    return ((PBytecodeRootNode) leftRootNode).getCodeUnit() == ((PBytecodeRootNode) rightRootNode).getCodeUnit();
-                }
-                return leftRootNode == rightRootNode;
-            } else {
-                return false;
-            }
-        }
-        return true;
+    public static boolean someIsNone(Object left, Object right) {
+        return PGuards.isPNone(left) || PGuards.isPNone(right);
     }
 
     // none
-    @Specialization
-    static boolean doObjectPNone(Object left, PNone right,
-                    @Bind("this") Node inliningTarget,
+    @Specialization(guards = "someIsNone(left, right)")
+    @StoreBytecodeIndex
+    public static boolean doPNone(Object left, Object right,
+                    @Bind Node inliningTarget,
                     @Shared @Cached IsForeignObjectNode isForeignObjectNode,
                     @Shared @CachedLibrary(limit = "3") InteropLibrary lib) {
         if (left == right) {
             return true;
         }
+        return doPNoneSlowpath(left, right, inliningTarget, isForeignObjectNode, lib);
+    }
+
+    @InliningCutoff
+    private static boolean doPNoneSlowpath(Object left, Object right, Node inliningTarget, IsForeignObjectNode isForeignObjectNode, InteropLibrary lib) {
         if (isForeignObjectNode.execute(inliningTarget, left)) {
             return lib.isNull(left);
+        }
+        if (isForeignObjectNode.execute(inliningTarget, right)) {
+            return lib.isNull(right);
         }
         return false;
     }
 
-    @Specialization
-    static boolean doPNoneObject(PNone left, Object right,
-                    @Bind("this") Node inliningTarget,
-                    @Shared @Cached IsForeignObjectNode isForeignObjectNode,
-                    @Shared @CachedLibrary(limit = "3") InteropLibrary lib) {
-        return doObjectPNone(right, left, inliningTarget, isForeignObjectNode, lib);
-    }
-
     // pstring (may be interned)
+    /**
+     * See {@link com.oracle.graal.python.builtins.objects.str.StringNodes.InternStringNode} and
+     * {@link com.oracle.graal.python.builtins.objects.str.StringNodes.IsInternedStringNode}
+     */
     @Specialization
-    static boolean doPString(PString left, PString right,
-                    @Bind("this") Node inliningTarget,
-                    @Cached StringNodes.StringMaterializeNode materializeNode,
-                    @Cached StringNodes.IsInternedStringNode isInternedStringNode,
-                    @Cached TruffleString.EqualNode equalNode) {
-        if (isInternedStringNode.execute(inliningTarget, left) && isInternedStringNode.execute(inliningTarget, right)) {
-            return equalNode.execute(materializeNode.execute(inliningTarget, left), materializeNode.execute(inliningTarget, right), TS_ENCODING);
+    public static boolean doPString(PString left, PString right) {
+        if (left == right) {
+            return true;
         }
-        return left == right;
+        return PGuards.isBuiltinPString(left) && PGuards.isBuiltinPString(right) && left.isMaterialized() && right.isMaterialized() && left.getMaterialized() == right.getMaterialized();
     }
 
     // everything else
     @Fallback
-    static boolean doOther(Object left, Object right,
-                    @Bind("this") Node inliningTarget,
+    @InliningCutoff
+    @StoreBytecodeIndex
+    public static boolean doOther(Object left, Object right,
+                    @Bind Node inliningTarget,
                     @Shared @Cached IsForeignObjectNode isForeignObjectNode,
                     @Shared @CachedLibrary(limit = "3") InteropLibrary lib) {
         if (left == right) {

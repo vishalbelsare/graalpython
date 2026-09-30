@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,16 +40,23 @@
  */
 package com.oracle.graal.python.builtins.objects.bytes;
 
+import java.nio.ByteOrder;
+
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAcquireLibrary;
+import com.oracle.graal.python.builtins.objects.cext.capi.PySequenceArrayWrapper;
 import com.oracle.graal.python.runtime.sequence.PSequence;
 import com.oracle.graal.python.runtime.sequence.storage.ByteSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.NativeByteSequenceStorage;
+import com.oracle.graal.python.runtime.sequence.storage.NativeSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
+import com.oracle.truffle.api.dsl.Bind;
+import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
 
 @ExportLibrary(PythonBufferAcquireLibrary.class)
@@ -65,6 +72,7 @@ public abstract class PBytesLike extends PSequence {
 
     public PBytesLike(Object cls, Shape instanceShape, SequenceStorage store) {
         super(cls, instanceShape);
+        assert store instanceof ByteSequenceStorage || store instanceof NativeByteSequenceStorage;
         this.store = store;
     }
 
@@ -121,32 +129,46 @@ public abstract class PBytesLike extends PSequence {
     }
 
     @ExportMessage
-    short readShort(int byteOffset,
+    short readShortByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readShort(store, byteOffset);
+        return bufferLib.readShortByteOrder(store, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    int readInt(int byteOffset,
+    int readIntByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readInt(store, byteOffset);
+        return bufferLib.readIntByteOrder(store, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    long readLong(int byteOffset,
+    long readLongByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readLong(store, byteOffset);
+        return bufferLib.readLongByteOrder(store, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    float readFloat(int byteOffset,
+    float readFloatByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readFloat(store, byteOffset);
+        return bufferLib.readFloatByteOrder(store, byteOffset, byteOrder);
     }
 
     @ExportMessage
-    double readDouble(int byteOffset,
+    double readDoubleByteOrder(int byteOffset, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        return bufferLib.readDouble(store, byteOffset);
+        return bufferLib.readDoubleByteOrder(store, byteOffset, byteOrder);
+    }
+
+    @ExportMessage(library = PythonBufferAccessLibrary.class, name = "isNative")
+    boolean isNativeStorage() {
+        return store instanceof NativeByteSequenceStorage;
+    }
+
+    @ExportMessage
+    long getNativePointer(
+                    @Bind Node inliningTarget,
+                    @Cached PySequenceArrayWrapper.ToNativeStorageNode toNativeStorageNode) {
+        NativeSequenceStorage newStorage = toNativeStorageNode.execute(inliningTarget, store, true);
+        setSequenceStorage(newStorage);
+        return newStorage.getPtr();
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,80 +41,101 @@
 package com.oracle.graal.python.builtins.objects.capsule;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.Capsule;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodesFactory.FromCharPointerNodeGen;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.FromCharPointerNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
-import com.oracle.truffle.api.strings.TruffleString;
 
 @ExportLibrary(InteropLibrary.class)
 public final class PyCapsule extends PythonBuiltinObject {
-    private Object pointer;
-    private Object name;
-    private Object context;
-    private Object destructor;
+
+    /*
+     * This class provides indirection to all the data members. Capsule destructors take the
+     * capsule, so we use this to recreate a temporary "resurrected" capsule for the destructor
+     * call.
+     */
+    public static class CapsuleData {
+        private long pointer;
+        private long namePtr;
+        private long context;
+        private long destructor;
+
+        public CapsuleData(long pointer, long namePtr) {
+            this.pointer = pointer;
+            this.namePtr = namePtr;
+        }
+
+        public long getDestructor() {
+            return destructor;
+        }
+    }
+
+    private final CapsuleData data;
+    private CApiTransitions.PyCapsuleReference reference;
 
     /**
      * (mq) We are forcing all PyCapsule objects to be of a builtin type
      * PythonBuiltinClassType.Capsule. There are, currently, no possible way to extend PyCapsule, so
      * we can relax few checks elsewhere.
      */
-    public PyCapsule(PythonLanguage lang, Object pointer, Object name, Object destructor) {
+    public PyCapsule(PythonLanguage lang, CapsuleData data) {
         super(Capsule, Capsule.getInstanceShape(lang));
-        this.pointer = pointer;
-        this.name = name;
-        this.context = null;
-        this.destructor = destructor;
+        this.data = data;
     }
 
-    public Object getPointer() {
-        return pointer;
+    public CapsuleData getData() {
+        return data;
     }
 
-    public void setPointer(Object pointer) {
-        this.pointer = pointer;
+    public long getPointer() {
+        return data.pointer;
     }
 
-    public Object getName() {
-        return name;
+    public void setPointer(long pointer) {
+        data.pointer = pointer;
     }
 
-    public void setName(Object name) {
-        this.name = name;
+    public long getNamePtr() {
+        return data.namePtr;
     }
 
-    public Object getContext() {
-        return context;
+    public void setNamePtr(long name) {
+        data.namePtr = name;
     }
 
-    public void setContext(Object context) {
-        this.context = context;
+    public long getContext() {
+        return data.context;
     }
 
-    public Object getDestructor() {
-        return destructor;
+    public void setContext(long context) {
+        data.context = context;
     }
 
-    public void setDestructor(Object destructor) {
-        this.destructor = destructor;
+    public long getDestructor() {
+        return data.destructor;
+    }
+
+    public void registerDestructor(long destructor) {
+        if (reference == null && destructor != NULLPTR) {
+            reference = CApiTransitions.registerPyCapsuleDestructor(this);
+        }
+        data.destructor = destructor;
     }
 
     @ExportMessage
     @TruffleBoundary
     public String toDisplayString(@SuppressWarnings("unused") boolean allowSideEffects) {
         String quote, n;
-        if (name != null) {
+        if (data.namePtr != NULLPTR) {
             quote = "\"";
-            if (name instanceof TruffleString) {
-                n = ((TruffleString) getName()).toJavaStringUncached();
-            } else {
-                n = CastToJavaStringNode.getUncached().execute(FromCharPointerNodeGen.getUncached().execute(name, false));
-            }
+            n = CastToJavaStringNode.getUncached().execute(FromCharPointerNode.executeUncached(data.namePtr));
         } else {
             quote = "";
             n = "NULL";

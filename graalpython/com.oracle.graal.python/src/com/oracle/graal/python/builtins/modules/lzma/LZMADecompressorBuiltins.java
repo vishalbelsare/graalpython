@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,12 +52,15 @@ import static com.oracle.graal.python.builtins.modules.lzma.LZMAModuleBuiltins.F
 import static com.oracle.graal.python.builtins.modules.lzma.LZMAModuleBuiltins.FORMAT_XZ;
 import static com.oracle.graal.python.builtins.modules.lzma.LZMAModuleBuiltins.T_LZMA_JAVA_ERROR;
 import static com.oracle.graal.python.nodes.ErrorMessages.ALREADY_AT_END_OF_STREAM;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -67,18 +70,22 @@ import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonQuaternaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
@@ -87,23 +94,38 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PLZMADecompressor)
 public final class LZMADecompressorBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = LZMADecompressorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return LZMADecompressorBuiltinsFactory.getFactories();
     }
 
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "LZMADecompressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    abstract static class LZMADecompressorNode extends PythonBuiltinNode {
+
+        @Specialization
+        LZMAObject doNew(Object cls, @SuppressWarnings("unused") Object arg,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            // data filled in subsequent __init__ call - see LZMADecompressorBuiltins.InitNode
+            PythonContext context = getContext();
+            return PFactory.createLZMADecompressor(cls, getInstanceShape.execute(cls), context.getNativeLZMASupport().isAvailable());
+        }
+    }
+
     @ImportStatic(PGuards.class)
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self", "format", "memlimit", "filters"})
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "LZMADecompressor", minNumOfPositionalArgs = 1, parameterNames = {"$self", "format", "memlimit", "filters"})
     @ArgumentClinic(name = "format", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "LZMAModuleBuiltins.FORMAT_AUTO", useDefaultForNone = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     public abstract static class InitNode extends PythonQuaternaryClinicBuiltinNode {
 
         @Override
@@ -113,15 +135,15 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!isRaw(format)", "validFormat(format)", "!isPNone(memlimitObj)"})
         static PNone notRaw(VirtualFrame frame, LZMADecompressor self, int format, Object memlimitObj, @SuppressWarnings("unused") PNone filters,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToJavaIntExactNode cast,
                         @Shared("d") @Cached LZMANodes.LZMADecompressInit decompressInit,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             int memlimit;
             try {
                 memlimit = cast.execute(inliningTarget, memlimitObj);
             } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.INTEGER_REQUIRED);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.INTEGER_REQUIRED);
             }
             return doNotRaw(frame, self, format, memlimit, decompressInit);
 
@@ -144,7 +166,7 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = {"isRaw(format)", "!isPNone(filters)"})
         static PNone raw(VirtualFrame frame, LZMADecompressor self, int format, PNone memlimit, Object filters,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached LZMANodes.LZMARawDecompressInit decompressInit) {
             self.setCheck(CHECK_NONE);
             decompressInit.execute(frame, inliningTarget, self, filters);
@@ -154,29 +176,29 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = {"isRaw(format)", "!isPNone(memlimit)"})
         static PNone rawError(LZMADecompressor self, int format, Object memlimit, Object filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.CANNOT_SPECIFY_MEM_LIMIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.CANNOT_SPECIFY_MEM_LIMIT);
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "isRaw(format)")
         static PNone rawFilterError(LZMADecompressor self, int format, Object memlimit, PNone filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.MUST_SPECIFY_FILTERS);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.MUST_SPECIFY_FILTERS);
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = {"!isRaw(format)", "!isPNone(filters)"})
         static PNone rawFilterError(LZMADecompressor self, int format, Object memlimit, Object filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.CANNOT_SPECIFY_FILTERS);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.CANNOT_SPECIFY_FILTERS);
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "!validFormat(format)")
         static PNone invalidFormat(LZMADecompressor self, int format, Object memlimit, Object filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, ErrorMessages.INVALID_CONTAINER_FORMAT, format);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.INVALID_CONTAINER_FORMAT, format);
         }
 
         protected static boolean validFormat(int format) {
@@ -194,7 +216,6 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
     @Builtin(name = "decompress", minNumOfPositionalArgs = 2, parameterNames = {"$self", "$data", "max_length"}, needsFrame = true)
     @ArgumentClinic(name = "max_length", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "-1", useDefaultForNone = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class DecompressNode extends PythonTernaryClinicBuiltinNode {
 
         @Override
@@ -204,38 +225,41 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!self.isEOF()"})
         static PBytes doBytes(LZMADecompressor self, PBytesLike data, int maxLength,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached SequenceStorageNodes.GetInternalByteArrayNode toBytes,
-                        @Exclusive @Cached LZMANodes.DecompressNode decompress,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Exclusive @Cached LZMANodes.DecompressNode decompress) {
             byte[] bytes = toBytes.execute(inliningTarget, data.getSequenceStorage());
             int len = data.getSequenceStorage().length();
-            return factory.createBytes(decompress.execute(inliningTarget, self, bytes, len, maxLength));
+            // Incremental decompression uses the backing array length to detect appended input.
+            if (bytes.length != len) {
+                bytes = PythonUtils.arrayCopyOf(bytes, len);
+            }
+            return PFactory.createBytes(language, decompress.execute(inliningTarget, self, bytes, len, maxLength));
 
         }
 
         @Specialization(guards = {"!self.isEOF()"})
         static PBytes doObject(VirtualFrame frame, LZMADecompressor self, Object data, int maxLength,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached BytesNodes.ToBytesNode toBytes,
-                        @Exclusive @Cached LZMANodes.DecompressNode decompress,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Exclusive @Cached LZMANodes.DecompressNode decompress) {
             byte[] bytes = toBytes.execute(frame, data);
             int len = bytes.length;
-            return factory.createBytes(decompress.execute(inliningTarget, self, bytes, len, maxLength));
+            return PFactory.createBytes(language, decompress.execute(inliningTarget, self, bytes, len, maxLength));
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = {"self.isEOF()"})
         static Object err(LZMADecompressor self, Object data, int maxLength,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(EOFError, ALREADY_AT_END_OF_STREAM);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, EOFError, ALREADY_AT_END_OF_STREAM);
         }
     }
 
     @Builtin(name = "eof", minNumOfPositionalArgs = 1, parameterNames = {"self"}, isGetter = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class EofNode extends PythonUnaryBuiltinNode {
 
         @Specialization
@@ -247,7 +271,6 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
 
     @Builtin(name = "needs_input", minNumOfPositionalArgs = 1, parameterNames = {"self"}, isGetter = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class NeedsInputNode extends PythonUnaryBuiltinNode {
 
         @Specialization
@@ -259,7 +282,6 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
 
     @Builtin(name = "check", minNumOfPositionalArgs = 1, parameterNames = {"self"}, isGetter = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class CheckNode extends PythonUnaryBuiltinNode {
 
         @Specialization
@@ -269,23 +291,21 @@ public final class LZMADecompressorBuiltins extends PythonBuiltins {
 
         @Specialization
         static int doCheck(@SuppressWarnings("unused") LZMADecompressor.Java self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(SystemError, T_LZMA_JAVA_ERROR);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, T_LZMA_JAVA_ERROR);
         }
 
     }
 
     @Builtin(name = "unused_data", minNumOfPositionalArgs = 1, parameterNames = {"self"}, isGetter = true)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class UnusedDataNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         static PBytes doUnusedData(LZMADecompressor self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createBytes(self.getUnusedData());
+                        @Bind PythonLanguage language) {
+            return PFactory.createBytes(language, self.getUnusedData());
         }
 
     }
-
 }

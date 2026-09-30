@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,9 @@ import abc
 import argparse
 import json
 import os
-import re
 import shlex
-import sys
 import types
+from pathlib import Path
 
 import mx
 
@@ -52,55 +51,53 @@ def print_line(l):
     print('=' * l)
 
 
-def get_suite(name):
-    suite_name = name.lstrip('/')
-    suite = mx.suite(suite_name, fatalIfMissing=False)
-    if not suite:
-        suite = mx.primary_suite().import_suite(suite_name, version=None, urlinfos=None, in_subdir=name.startswith('/'))
-    assert suite
-    return suite
+SUITE = mx.suite('graalpython')
+GIT = SUITE.vc
+DIR = Path(SUITE.vc_dir).absolute()
+GRAAL_DIR = DIR.parent / 'graal'
+VM_DIR = GRAAL_DIR / 'vm'
+GRAAL_ENTERPRISE_DIR = DIR.parent / 'graal-enterprise'
+VM_ENTERPRISE_DIR = GRAAL_ENTERPRISE_DIR / 'vm-enterprise'
+
+SUITE_MAPPING = {
+    GRAAL_DIR: VM_DIR,
+    GRAAL_ENTERPRISE_DIR: VM_ENTERPRISE_DIR,
+}
+
+DOWNSTREAM_REPO_MAPPING = {
+    DIR: GRAAL_DIR,
+    GRAAL_DIR: GRAAL_ENTERPRISE_DIR,
+}
+
+RESULTS_JSON_PATH = 'bisect-benchmark-result.json'
 
 
-def get_downstream_suite(suite):
-    downstreams = {
-        'graalpython-apptests': 'graalpython',
-        'graalpython-extensions': 'graalpython',
-        'graalpython': '/vm',
-        'vm': '/vm-enterprise',
-    }
-    downstream = downstreams.get(suite.name)
-    if downstream:
-        return get_suite(downstream)
+def get_commit(repo_path, ref='HEAD'):
+    if repo_path:
+        return GIT.git_command(repo_path, ['rev-parse', ref], abortOnError=True).strip()
 
 
-def get_commit(suite, ref='HEAD'):
-    if not suite:
-        return None
-    return suite.vc.git_command(suite.vc_dir, ['rev-parse', ref], abortOnError=True).strip()
+def get_message(repo_path: Path, commit):
+    return GIT.git_command(repo_path, ['log', '--format=%s', '-n', '1', commit]).strip()
 
 
-def get_message(suite, commit):
-    return suite.vc.git_command(suite.vc_dir, ['log', '--format=%s', '-n', '1', commit]).strip()
-
-
-def run_bisect_benchmark(suite, bad, good, callback, good_result=None, bad_result=None):
-    git_dir = suite.vc_dir
-    commits = suite.vc.git_command(
-        git_dir,
+def run_bisect_benchmark(repo_path: Path, bad, good, callback, good_result=None, bad_result=None):
+    commits = GIT.git_command(
+        repo_path,
         ['log', '--first-parent', '--format=format:%H', '{}^..{}'.format(good, bad)],
         abortOnError=True,
     ).splitlines()
     if not commits:
         raise RuntimeError("No merge commits found in the range. Did you swap good and bad?")
-    downstream_suite = get_downstream_suite(suite)
+    downstream_repo_path = DOWNSTREAM_REPO_MAPPING.get(repo_path)
     results = [None] * len(commits)
     if good_result is None and bad_result is None:
         bad_index = 0
         good_index = len(commits) - 1
-        bad_result = results[bad_index] = callback(suite, bad)
-        downstream_bad = get_commit(downstream_suite)
-        good_result = results[good_index] = callback(suite, good)
-        downstream_good = get_commit(downstream_suite)
+        bad_result = results[bad_index] = callback(repo_path, bad)
+        downstream_bad = get_commit(downstream_repo_path)
+        good_result = results[good_index] = callback(repo_path, good)
+        downstream_good = get_commit(downstream_repo_path)
         if not good_result.bound_is_valid(bad_result):
             raise RuntimeError(
                 "Didn't detect a regression: "
@@ -122,25 +119,25 @@ def run_bisect_benchmark(suite, bad, good, callback, good_result=None, bad_resul
             assert good_index - bad_index == 1
             break
         commit = commits[index]
-        result = results[index] = callback(suite, commit)
+        result = results[index] = callback(repo_path, commit)
         if result.is_good(good_result, bad_result):
             good_index = index
-            downstream_good = get_commit(downstream_suite)
+            downstream_good = get_commit(downstream_repo_path)
         else:
             bad_index = index
-            downstream_bad = get_commit(downstream_suite)
+            downstream_bad = get_commit(downstream_repo_path)
     subresults = {}
     if downstream_bad and downstream_good and downstream_bad != downstream_good:
-        suite.vc.update_to_branch(suite.vc_dir, commits[good_index])
-        subresult = run_bisect_benchmark(downstream_suite, downstream_bad, downstream_good, callback, good_result,
+        GIT.update_to_branch(repo_path, commits[good_index])
+        subresult = run_bisect_benchmark(downstream_repo_path, downstream_bad, downstream_good, callback, good_result,
                                          bad_result)
         subresults[bad_index] = subresult
-    return BisectResult(suite, commits, results, good_index, bad_index, subresults)
+    return BisectResult(repo_path, commits, results, good_index, bad_index, subresults)
 
 
 class BisectResult:
-    def __init__(self, suite, commits, results, good_index, bad_index, dependency_results):
-        self.suite = suite
+    def __init__(self, repo_path: Path, commits, results, good_index, bad_index, dependency_results):
+        self.repo_path = repo_path
         self.commits = commits
         self.results = results
         self.good_index = good_index
@@ -149,7 +146,7 @@ class BisectResult:
 
     @property
     def repo_name(self):
-        return os.path.basename(self.suite.vc_dir)
+        return self.repo_path.name
 
     @property
     def good_commit(self):
@@ -166,7 +163,7 @@ class BisectResult:
         out = ["{} {}".format(level_marker, self.repo_name)]
         for index, (commit, value) in enumerate(zip(self.commits, self.results)):
             if value is not None:
-                out.append(f"{level_marker} {commit} {value} {get_message(self.suite, commit)}")
+                out.append(f"{level_marker} {commit} {value} {get_message(self.repo_path, commit)}")
             if self.dependency_results and index in self.dependency_results:
                 out.append(self.dependency_results[index].visualize(level + 1))
         return '\n'.join(out)
@@ -178,8 +175,24 @@ class BisectResult:
                 if summary:
                     return summary
             return ("Detected bad commit in {} repository:\n{} {}"
-                    .format(self.repo_name, self.bad_commit, get_message(self.suite, self.bad_commit)))
+                    .format(self.repo_name, self.bad_commit, get_message(self.repo_path, self.bad_commit)))
         return ''
+
+    def to_dict(self):
+        return {
+            'repo_name': self.repo_name,
+            'repo_path': str(self.repo_path),
+            'commits': self.commits,
+            'results': [result.to_dict() if result is not None else None for result in self.results],
+            'good_index': self.good_index,
+            'bad_index': self.bad_index,
+            'good_commit': self.good_commit,
+            'bad_commit': self.bad_commit,
+            'dependency_results': {
+                str(index): dependency_result.to_dict()
+                for index, dependency_result in self.dependency_results.items()
+            },
+        }
 
 
 class BenchmarkResult(abc.ABC):
@@ -195,12 +208,22 @@ class BenchmarkResult(abc.ABC):
 
     def bound_is_significant(self, bad_result, epsilon):
         avg = (self.value + bad_result.value) / 2
+        if not avg:
+            return False
         diff = abs(self.value - bad_result.value)
         return diff / avg >= epsilon
 
     @abc.abstractmethod
     def is_good(self, good_result, bad_result):
         pass
+
+    def to_dict(self):
+        return {
+            'kind': type(self).__name__,
+            'value': self.value,
+            'unit': self.unit,
+            'display': str(self),
+        }
 
 
 class LowerIsBetterResult(BenchmarkResult):
@@ -226,7 +249,14 @@ class WorksResult(BenchmarkResult):
         return "works" if self.value == 0 else "doesn't work"
 
 
-def _bisect_benchmark(argv, bisect_id, email_to):
+def filter_benchmark_results(docs, benchmark_name):
+    exact_docs = [x for x in docs if x['benchmark'] == benchmark_name]
+    if exact_docs:
+        return exact_docs
+    return [x for x in docs if x['benchmark'].endswith(f'.{benchmark_name}')]
+
+
+def _bisect_benchmark(argv, bisect_id):
     default_metric = 'time'
     if 'BISECT_BENCHMARK_CONFIG' in os.environ:
         import configparser
@@ -267,56 +297,58 @@ def _bisect_benchmark(argv, bisect_id, email_to):
         parser.add_argument('--no-clean', action='store_true', help="Do not run 'mx clean' between runs")
         args = parser.parse_args(argv)
 
-    primary_suite = mx.primary_suite()
-
-    def checkout_enterprise():
-        # First try to get the revision we explicitly specify in ci-overlays. If that doesn't match with graal, then we
-        # fall back on mx checkout-downstream
-        suite = get_suite('graalpython')
-        ce_suite = get_suite('/vm')
-        ce_rev = ce_suite.vc.tip(ce_suite.vc_dir).strip()
-        ee_suite = get_suite('/vm-enterprise')
-        overlays = '../ci-overlays'
-        if not os.path.isdir(overlays):
-            sys.exit("Needs to have ci-overlays checkout")
-        with open(os.path.join(get_suite("graalpython").dir, "ci.jsonnet")) as f:
-            overlay_rev = json.load(f)['overlay']
-        suite.vc.update_to_branch(overlays, overlay_rev)
-        constants_file = os.path.join(overlays, 'python/imported-constants.json')
-        with open(constants_file) as f:
-            ee_rev = json.load(f)['GRAAL_ENTERPRISE_REVISION']
-        ee_suite.vc.update_to_branch(ee_suite.vc_dir, ee_rev)
-        mx.run_mx(['sforceimports'], suite=ee_suite)
-        if ce_suite.vc.tip(ce_suite.vc_dir).strip() != ce_rev:
-            # The enterprise rev specified in ci-overlays imports newer graal than graalpython does. Fall back to
-            # mx checkout-downstream to find older compatible enterprise rev
-            ce_suite.vc.update_to_branch(ce_suite.vc_dir, ce_rev)
-            mx.run_mx(['checkout-downstream', 'vm', 'vm-enterprise', '--no-fetch'], suite=ee_suite)
-
-    def checkout_suite(suite, commit):
-        suite.vc.update_to_branch(suite.vc_dir, commit)
-        mx.run_mx(['sforceimports'], suite=suite)
-        mx.run_mx(['--env', 'ce', 'sforceimports'], suite=get_suite('/vm'))
+    def checkout(repo_path: Path, commit):
+        if 'CI' in os.environ:
+            # discard any changes made by the previous build before checkout
+            GIT.run(['git', 'reset', '--hard', 'HEAD'], nonZeroIsFatal=True, cwd=repo_path)
+        GIT.update_to_branch(repo_path, commit)
+        if repo_path == DIR:
+            mx.run_mx(['sforceimports'], suite=str(DIR))
         if args.enterprise:
-            if suite.name != 'vm-enterprise':
-                checkout_enterprise()
-            # Make sure vm is imported before vm-enterprise
-            get_suite('/vm')
-            mx.run_mx(['--env', 'ee', 'sforceimports'], suite=get_suite('/vm-enterprise'))
-        suite.vc.update_to_branch(suite.vc_dir, commit)
-        mx.run_mx(['sforceimports'], suite=suite)
-        debug_str = "debug: graalpython={} graal={}".format(
-            get_commit(get_suite('graalpython')), get_commit(get_suite('/vm')))
+            # Keep the Graal revision selected by the current bisection point. The
+            # enterprise suite imports Graal, so its sforceimports would otherwise
+            # replace that revision with the one recorded in graal-enterprise.
+            graal_commit = get_commit(GRAAL_DIR)
+            if repo_path.name != 'graal-enterprise':
+                mx.run_mx(['--quiet', 'checkout-downstream', 'vm', 'vm-enterprise', '--no-fetch'],
+                          suite=str(VM_ENTERPRISE_DIR))
+            mx.run_mx(['--dy', 'substratevm-enterprise-gcs', 'sforceimports'], suite=str(VM_ENTERPRISE_DIR))
+            GIT.update_to_branch(GRAAL_DIR, graal_commit)
+        debug_str = f"debug: {SUITE.name}={get_commit(SUITE.vc_dir)} graal={get_commit(GRAAL_DIR)}"
         if args.enterprise:
-            debug_str += " graal-enterprise={}".format(get_commit(get_suite('/vm-enterprise')))
+            debug_str += f" graal-enterprise={get_commit(GRAAL_ENTERPRISE_DIR)}"
         print(debug_str)
 
-    def checkout_and_build_suite(suite, commit):
-        checkout_suite(suite, commit)
+    def fetch_jdk():
+        import mx_fetchjdk
+        if args.enterprise:
+            fetch_args = [
+                '--configuration', str(GRAAL_ENTERPRISE_DIR / 'common.json'),
+                '--jdk-binaries', str(GRAAL_ENTERPRISE_DIR / 'ci' / 'jdk-binaries.json'),
+                'labsjdk-ee-latest',
+            ]
+        else:
+            fetch_args = [
+                '--configuration', str(GRAAL_DIR / 'common.json'),
+                'labsjdk-ce-latest',
+            ]
+        # Awkward way to suppress the confirmation prompt
+        ci = 'CI' in os.environ
+        if not ci:
+            os.environ['CI'] = '1'
+        try:
+            return mx_fetchjdk.fetch_jdk(fetch_args)
+        finally:
+            if not ci:
+                del os.environ['CI']
+
+    def checkout_and_build(repo_path, commit):
+        checkout(repo_path, commit)
+        os.environ['JAVA_HOME'] = fetch_jdk()
         build_command = shlex.split(args.build_command)
         if not args.no_clean:
             try:
-                clean_command = build_command[:build_command.index('build')] + ['clean']
+                clean_command = build_command[:build_command.index('build')] + ['clean', '--all', '--aggressive']
                 retcode = mx.run(clean_command, nonZeroIsFatal=False)
                 if retcode:
                     print("Warning: clean command failed")
@@ -326,8 +358,8 @@ def _bisect_benchmark(argv, bisect_id, email_to):
         if retcode:
             raise RuntimeError("Failed to execute the build command for {}".format(commit))
 
-    def benchmark_callback(suite, commit, bench_command=args.benchmark_command):
-        checkout_and_build_suite(suite, commit)
+    def benchmark_callback(repo_path: Path, commit, bench_command=args.benchmark_command):
+        checkout_and_build(repo_path, commit)
         retcode = mx.run(shlex.split(bench_command), nonZeroIsFatal=False)
         if args.benchmark_metric == 'WORKS':
             return WorksResult(retcode)
@@ -338,7 +370,7 @@ def _bisect_benchmark(argv, bisect_id, email_to):
             data = json.load(f)
         docs = [x for x in data['queries'] if x['metric.name'] == args.benchmark_metric]
         if args.benchmark_name:
-            docs = [x for x in docs if x['benchmark'] == args.benchmark_name]
+            docs = filter_benchmark_results(docs, args.benchmark_name)
         if not docs:
             raise RuntimeError(f"Couldn't find specified metric {args.benchmark_metric!r} in the results")
         if len(docs) > 1:
@@ -351,9 +383,9 @@ def _bisect_benchmark(argv, bisect_id, email_to):
         result_class = HigherIsBetterResult if doc.get('metric.better', 'lower') == 'higher' else LowerIsBetterResult
         return result_class(doc['metric.value'], doc['metric.unit'])
 
-    bad = get_commit(primary_suite, args.bad)
-    good = get_commit(primary_suite, args.good)
-    result = run_bisect_benchmark(primary_suite, bad, good, benchmark_callback)
+    bad = get_commit(DIR, args.bad)
+    good = get_commit(DIR, args.good)
+    result = run_bisect_benchmark(DIR, bad, good, benchmark_callback)
     visualization = result.visualize()
     summary = result.summarize()
 
@@ -362,62 +394,44 @@ def _bisect_benchmark(argv, bisect_id, email_to):
     print()
     print(summary)
 
+    with open(RESULTS_JSON_PATH, 'w', encoding='utf-8') as result_file:
+        json.dump({
+            'bisect_id': bisect_id,
+            'summary': summary,
+            'visualization': visualization,
+            'result': result.to_dict(),
+            'build_url': os.environ.get('BUILD_URL'),
+        }, result_file, indent=2, sort_keys=True)
+        result_file.write('\n')
+
     if args.rerun_with_commands:
         print('\n\nRerunning the good and bad commits with extra benchmark commands:')
+        repo_path = DIR
         current_result = result
-        current_suite = primary_suite
         while current_result.subresults and current_result.bad_index in current_result.subresults:
-            downstream_suite = get_downstream_suite(current_suite)
+            downstream_repo_path = DOWNSTREAM_REPO_MAPPING.get(repo_path)
             next_result = current_result.subresults[current_result.bad_index]
             if not next_result.good_commit or not next_result.bad_commit:
-                print("Next downstream suite {} does not have both good and bad commits".format(downstream_suite.name))
+                print(f"Next downstream repo {downstream_repo_path.name} does not have both good and bad commits")
                 break
-            print("Recursing to downstream suite: {}, commit: {}".format(downstream_suite.name,
-                                                                         current_result.bad_commit))
-            checkout_suite(current_suite, current_result.bad_commit)
+            print(f"Recursing to downstream repo: {downstream_repo_path.name}, commit: {current_result.bad_commit}")
+            checkout(downstream_repo_path, current_result.bad_commit)
             current_result = next_result
-            current_suite = downstream_suite
+            repo_path = downstream_repo_path
         for commit in [current_result.good_commit, current_result.bad_commit]:
             print_line(80)
             print("Commit: {}".format(commit))
-            checkout_and_build_suite(current_suite, commit)
+            checkout_and_build(repo_path, commit)
             for cmd in args.rerun_with_commands.split(";"):
                 print_line(40)
                 mx.run(shlex.split(cmd.strip()), nonZeroIsFatal=False)
 
-    send_email(
-        bisect_id,
-        email_to,
-        "Bisection job has finished successfully.\n{}\n".format(summary)
-        + "Note I'm just a script and I don't validate statistical significance of the above result.\n"
-        + "Please take a moment to also inspect the detailed results below.\n\n{}\n\n".format(visualization)
-        + os.environ.get('BUILD_URL', 'Unknown URL')
-    )
-
 
 def bisect_benchmark(argv):
-    suite = mx.primary_suite()
-    initial_branch = suite.vc.git_command(suite.vc_dir, ['rev-parse', '--abbrev-ref', 'HEAD']).strip()
-    initial_commit = suite.vc.git_command(suite.vc_dir, ['log', '--format=%s', '-n', '1']).strip()
-    email_to = suite.vc.git_command(suite.vc_dir, ['log', '--format=%cE', '-n', '1']).strip()
+    initial_branch = GIT.git_command(DIR, ['rev-parse', '--abbrev-ref', 'HEAD']).strip()
+    initial_commit = GIT.git_command(DIR, ['log', '--format=%s', '-n', '1']).strip()
     bisect_id = f'{initial_branch}: {initial_commit}'
-    _bisect_benchmark(argv, bisect_id, email_to)
-
-
-def send_email(bisect_id, email_to, content):
-    if 'BISECT_EMAIL_SMTP_SERVER' in os.environ:
-        import smtplib
-        from email.message import EmailMessage
-
-        msg = EmailMessage()
-        msg['Subject'] = "Bisection result for {}".format(bisect_id)
-        msg['From'] = os.environ['BISECT_EMAIL_FROM']
-        validate_to = os.environ['BISECT_EMAIL_TO_PATTERN']
-        if not re.match(validate_to, email_to):
-            sys.exit("Email {} not allowed, aborting sending".format(email_to))
-        msg['To'] = email_to
-        msg.set_content(content)
-        print(msg)
-        smtp = smtplib.SMTP(os.environ['BISECT_EMAIL_SMTP_SERVER'])
-        smtp.send_message(msg)
-        smtp.quit()
+    try:
+        _bisect_benchmark(argv, bisect_id)
+    finally:
+        GIT.update_to_branch(DIR, initial_branch)

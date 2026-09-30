@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,12 +36,12 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
-import sys
+import io
 import mmap
+import sys
 import tempfile
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare
 
 
 def create_and_map_file():
@@ -50,16 +50,18 @@ def create_and_map_file():
         f.write("hello, world")
     f = open(tmp, "r")
     return mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-    
+
+
+def _reference_buffer(args):
+    if sys.implementation.name == 'graalpy' and __graalpython__.posix_module_backend() == 'java':
+        # Cannot get mmap pointer under emulated backend
+        raise io.UnsupportedOperation
+    return b"hello, world"
+
 
 class TestPyMmap(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyMmap, self).compile_module(name)
-
-
     test_buffer = CPyExtFunction(
-        lambda args: b"hello, world",
+        _reference_buffer,
         lambda: (
             (create_and_map_file(),),
         ),
@@ -68,7 +70,7 @@ class TestPyMmap(CPyExtTestCase):
             Py_buffer buf;
             Py_ssize_t len, i;
             char* data = NULL;
-            if (PyObject_GetBuffer(mmapObj, &buf, PyBUF_SIMPLE)) {
+            if (PyObject_GetBuffer(mmapObj, &buf, PyBUF_SIMPLE) < 0) {
                 return NULL;
             }
             len = buf.len;
@@ -76,7 +78,7 @@ class TestPyMmap(CPyExtTestCase):
             for (i=0; i < buf.len; i++) {
                 data[i] = ((char *) buf.buf)[i];
             }
-            return PyBytes_FromStringAndSize(data, len); 
+            return PyBytes_FromStringAndSize(data, len);
         }
         """,
         resultspec="O",
@@ -88,7 +90,7 @@ class TestPyMmap(CPyExtTestCase):
 
     # Exercises conversion to native and copying from the actual mmap pointer
     test_buffer_memcpy = CPyExtFunction(
-        lambda args: b"hello, world",
+        _reference_buffer,
         lambda: (
             (create_and_map_file(),),
         ),

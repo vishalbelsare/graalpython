@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,6 +38,133 @@
 # SOFTWARE.
 
 import unittest, sys
+from collections import defaultdict
+
+graalpy_only = unittest.skipUnless(sys.implementation.name == "graalpy", "GraalPy-specific dict storage test")
+
+
+def test_namespace_reinitialization_with_backing_dict():
+    from types import SimpleNamespace
+
+    obj = SimpleNamespace(a=1)
+    mapping = obj.__dict__
+    assert len(mapping) == 1
+    obj.__init__(b=2)
+    assert len(mapping) == 2
+    assert mapping == {"a": 1, "b": 2}
+    mapping.clear()
+    mapping = obj.__dict__
+    assert len(mapping) == 0
+    obj.__init__(c=3)
+    assert mapping == {"c": 3}
+    assert obj.c == 3
+
+
+def test_namespace_reinitialization_with_positional_mapping_and_backing_dict():
+    from types import SimpleNamespace
+
+    obj = SimpleNamespace(a=1)
+    mapping = obj.__dict__
+    assert len(mapping) == 1
+    mapping.clear()
+    assert len(mapping) == 0
+    obj.__init__({"b": 2}, c=3)
+    assert len(mapping) == 2
+    assert mapping == {"b": 2, "c": 3}
+    assert obj.__dict__ is mapping
+
+
+def test_namespace_replace_with_backing_dict():
+    from types import SimpleNamespace
+
+    class Namespace(SimpleNamespace):
+        def __init__(self):
+            self.seed = 1
+            assert len(self.__dict__) == 1
+
+    obj = Namespace()
+    obj.extra = 2
+    result = obj.__replace__(extra=3)
+    assert result.__dict__ == {"seed": 1, "extra": 3}
+    assert len(result.__dict__) == 2
+
+
+def test_object_dict_length_after_attribute_mutations():
+    class Object:
+        pass
+
+    obj = Object()
+    obj.deleted = 1
+    del obj.deleted  # Ordinary objects do not maintain HAS_NO_VALUE_PROPERTIES.
+    mapping = obj.__dict__
+    assert len(mapping) == 0
+    for _ in range(3):
+        obj.value = 1
+        assert len(mapping) == 1
+        obj.value = 2
+        assert len(mapping) == 1
+        del obj.value
+        assert len(mapping) == 0
+        mapping.update(a=1, b=2)
+        assert len(mapping) == 2
+        assert mapping.pop("a") == 1
+        assert len(mapping) == 1
+        mapping.clear()
+        assert len(mapping) == 0
+        mapping = obj.__dict__
+
+
+def test_type_dict_length_and_dir_after_mutations():
+    for size in (3, 1000):
+        for delete_before_dict in (False, True):
+            cls = type("ManyAttributes", (), {f"attr_{i}": i for i in range(size)})
+            if delete_before_dict:
+                del cls.attr_0
+            mapping = cls.__dict__
+            expected = set(mapping)
+            for _ in range(3):
+                assert len(mapping) == len(expected)
+                assert set(dir(cls)) == expected | set(dir(object))
+                cls.attr_0 = 42
+                expected.add("attr_0")
+                assert len(mapping) == len(expected)
+                assert "attr_0" in dir(cls)
+                del cls.attr_0
+                expected.remove("attr_0")
+                assert len(mapping) == len(expected)
+                assert "attr_0" not in dir(cls)
+                copied = mapping.copy()
+                assert len(copied) == len(expected)
+                assert set(copied) == expected
+
+
+@graalpy_only
+def test_dynamic_storage_cached_length_mutations():
+    import __graalpython__
+
+    mapping = __graalpython__.set_storage_strategy({}, "dynamicobject")
+    assert len(mapping) == 0
+    for _ in range(3):
+        mapping["a"] = 1
+        assert len(mapping) == 1
+        mapping["a"] = 2
+        assert len(mapping) == 1
+        del mapping["a"]
+        assert len(mapping) == 0
+        mapping.setdefault("a", 3)
+        assert len(mapping) == 1
+        mapping.update(b=4)
+        assert len(mapping) == 2
+        assert mapping.pop("a") == 3
+        assert len(mapping) == 1
+        copied = mapping.copy()
+        assert len(copied) == 1
+        copied["c"] = 5
+        assert len(copied) == 2
+        assert len(mapping) == 1
+        mapping.clear()
+        assert len(mapping) == 0
+
 
 def assert_raises(err, fn, *args, **kwargs):
     raised = False
@@ -46,7 +173,6 @@ def assert_raises(err, fn, *args, **kwargs):
     except err:
         raised = True
     assert raised
-
 
 def test_equality():
 
@@ -172,6 +298,96 @@ def test_fromkeys():
 
     assert foo(a=5, b=6) == {'a': 1, 'b': 1}
 
+    d = dict.fromkeys({'a': 1, 'b': 2, 'c': 3})
+    assert len(d) == 3
+    assert set(d.keys()) == {'a', 'b', 'c'}
+    assert set(d.values()) == {None}
+
+
+def test_fromkeys_dict_subclass_iter():
+    class DictSubclass(dict):
+        def __iter__(self):
+            return iter((1,))
+
+    for contents in ({}, {2: 'value'}):
+        source = DictSubclass(contents)
+        assert dict.fromkeys(source) == {1: None}
+        value = object()
+        assert dict.fromkeys(source, value) == {1: value}
+        assert source == contents
+
+    DictSubclass.__iter__ = None
+    assert_raises(TypeError, dict.fromkeys, DictSubclass())
+
+
+def test_fromkeys_dict_subclass_rehashes_keys():
+    class DictSubclass(dict):
+        pass
+
+    class Key:
+        hash_calls = 0
+
+        def __hash__(self):
+            self.hash_calls += 1
+            return 42
+
+    for cls in (dict, DictSubclass, defaultdict):
+        key = Key()
+        source = cls()
+        source[key] = 'value'
+        key.hash_calls = 0
+        result = dict.fromkeys(source)
+        assert key.hash_calls == (0 if cls is dict else 1)
+        assert len(result) == 1 and next(iter(result)) is key
+
+
+def test_fromkeys_ordered_dict():
+    from collections import OrderedDict
+
+    source = OrderedDict(a=1, b=2)
+    source.move_to_end('a')
+    for value in (None, object()):
+        result = dict.fromkeys(source, value)
+        assert list(result) == ['b', 'a']
+        assert all(v is value for v in result.values())
+
+
+def test_fromkeys_set_subclass_iter():
+    for base in (set, frozenset):
+        class SetSubclass(base):
+            def __iter__(self):
+                return iter((1,))
+
+        for contents in ((), (2,)):
+            source = SetSubclass(contents)
+            assert dict.fromkeys(source) == {1: None}
+            value = object()
+            assert dict.fromkeys(source, value) == {1: value}
+
+        SetSubclass.__iter__ = None
+        assert_raises(TypeError, dict.fromkeys, SetSubclass())
+
+
+def test_fromkeys_set_subclass_rehashes_keys():
+    class Key:
+        hash_calls = 0
+
+        def __hash__(self):
+            self.hash_calls += 1
+            return 42
+
+    for base in (set, frozenset):
+        class SetSubclass(base):
+            pass
+
+        for cls in (base, SetSubclass):
+            key = Key()
+            source = cls((key,))
+            key.hash_calls = 0
+            result = dict.fromkeys(source)
+            assert key.hash_calls == (0 if cls is base else 1)
+            assert len(result) == 1 and next(iter(result)) is key
+
 
 def test_init():
     d = dict(a=1, b=2, c=3)
@@ -197,6 +413,31 @@ def test_init():
     assert d == {'a':1, 'b':2, 'c':3}
     d.__init__({'d':4})
     assert d == {'a':1, 'b':2, 'c':3, 'd':4}
+
+
+def test_dict_update_does_not_call_overridden_setitem():
+    class DictSubclass(dict):
+        def __setitem__(self, key, value):
+            raise AssertionError("dict update called overridden __setitem__")
+
+    d = DictSubclass()
+    dict.__init__(d, [('key', 'value')])
+    assert d == {'key': 'value'}
+
+    class Mapping:
+        def keys(self):
+            return ['other']
+
+        def __getitem__(self, key):
+            assert key == 'other'
+            return 'value'
+
+    dict.__init__(d, Mapping())
+    assert d == {'key': 'value', 'other': 'value'}
+
+    dict.update(d, [('third', 'value')])
+    assert d == {'key': 'value', 'other': 'value', 'third': 'value'}
+
 
 def test_init1():
     try:
@@ -266,6 +507,225 @@ def test_init5():
     assert len(d) == 4, "invalid length, expected 4 but was %d" % len(d)
     assert set(d.keys()) == key_set, "unexpected keys: %s" % str(d.keys())
     assert set(d.values()) == {97, 98, 99, 100}, "unexpected values: %s" % str(d.values())
+
+
+@graalpy_only
+def test_economic_map_storage_small_dict_grows_cleanly():
+    d = {}
+    for i in range(4):
+        d[i] = i
+
+    assert list(d.items()) == [(0, 0), (1, 1), (2, 2), (3, 3)]
+
+    d[4] = 4
+
+    assert list(d.items()) == [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)]
+
+    del d[1]
+    d[1] = 10
+    assert list(d.items()) == [(0, 0), (2, 2), (3, 3), (4, 4), (1, 10)]
+
+
+def test_economic_map_storage_small_dict_hash_and_eq_counts():
+    count_hash = 0
+    count_eq = 0
+
+    class Key:
+        def __init__(self, x):
+            self.x = x
+
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return 12345
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return isinstance(other, Key) and self.x == other.x
+
+    a = Key(1)
+    d = {0: 0, 1: 1, 2: 2, 3: 3, a: 42}
+    b = Key(1)
+    count_hash = 0
+    count_eq = 0
+
+    assert b in d
+    assert count_hash == 1, count_hash
+    assert count_eq == 1, count_eq
+
+    assert d[b] == 42
+    assert count_hash == 2, count_hash
+    assert count_eq == 2, count_eq
+
+    d[b] = 112
+    assert count_hash == 3, count_hash
+    assert count_eq == 3, count_eq
+
+    del d[b]
+    assert count_hash == 4, count_hash
+    assert count_eq == 4, count_eq
+    assert a not in d
+
+
+def test_economic_map_storage_small_dict_copy_does_not_rehash_keys():
+    count_hash = 0
+    count_eq = 0
+
+    class Key:
+        def __init__(self, x):
+            self.x = x
+
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return self.x
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return isinstance(other, Key) and self.x == other.x
+
+    d = {Key(i): i for i in range(5)}
+    count_hash = 0
+    count_eq = 0
+
+    copied = d.copy()
+    assert copied == d
+    assert count_hash == 0, count_hash
+    assert count_eq == 0, count_eq
+
+    rebuilt = dict(d)
+    assert rebuilt == d
+    assert count_hash == 0, count_hash
+    assert count_eq == 0, count_eq
+
+
+def test_economic_map_storage_hash_and_eq_counts():
+    count_hash = 0
+    count_eq = 0
+
+    class Key:
+        def __init__(self, x):
+            self.x = x
+
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return 1234567
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return isinstance(other, Key) and self.x == other.x
+
+    a = Key(1)
+    d = {i: i for i in range(8)}
+    d[a] = 42
+
+    b = Key(1)
+    count_hash = 0
+    count_eq = 0
+
+    assert b in d
+    assert count_hash == 1, count_hash
+    assert count_eq == 1, count_eq
+
+    assert d[b] == 42
+    assert count_hash == 2, count_hash
+    assert count_eq == 2, count_eq
+
+    d[b] = 112
+    assert count_hash == 3, count_hash
+    assert count_eq == 3, count_eq
+
+    del d[b]
+    assert count_hash == 4, count_hash
+    assert count_eq == 4, count_eq
+    assert a not in d
+
+
+def test_economic_map_storage_copy_does_not_rehash_keys():
+    count_hash = 0
+    count_eq = 0
+
+    class Key:
+        def __init__(self, x):
+            self.x = x
+
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return self.x + 1000
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return isinstance(other, Key) and self.x == other.x
+
+    d = {Key(i): i for i in range(9)}
+
+    count_hash = 0
+    count_eq = 0
+
+    copied = d.copy()
+    assert copied == d
+    assert count_hash == 0, count_hash
+    assert count_eq == 0, count_eq
+
+    rebuilt = dict(d)
+    assert rebuilt == d
+    assert count_hash == 0, count_hash
+    assert count_eq == 0, count_eq
+
+
+def test_economic_map_storage_compaction_preserves_order_and_hashes():
+    count_hash = 0
+    count_eq = 0
+
+    class Key:
+        def __init__(self, x):
+            self.x = x
+
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return 987654321
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return isinstance(other, Key) and self.x == other.x
+
+    original = Key(1)
+    d = {i: i for i in range(11)}
+    d[original] = 99
+
+    for i in range(4):
+        del d[i]
+
+    count_hash = 0
+    count_eq = 0
+    del d[Key(1)]
+    assert count_hash == 1, count_hash
+    assert count_eq == 1, count_eq
+
+    replacement = Key(1)
+    count_hash = 0
+    count_eq = 0
+    d[replacement] = 100
+    assert count_hash == 1, count_hash
+    assert count_eq == 0, count_eq
+
+    assert list(d.items()) == [(4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (9, 9), (10, 10), (replacement, 100)]
+
+    probe = Key(1)
+    count_hash = 0
+    count_eq = 0
+    assert d[probe] == 100
+    assert count_hash == 1, count_hash
+    assert count_eq == 1, count_eq
+
 
 def test_init6():
     try:
@@ -350,6 +810,38 @@ def test_copy():
     d1['c'] = 3
     assert set(d0.keys()) == {'a', 'b'}
     assert set(d1.keys()) == {'a', 'b', 'c'}
+
+
+def test_defaultdict_operations_subclass_preserve_type():
+    class DefaultDictSubclass(defaultdict):
+        pass
+
+    d = DefaultDictSubclass(int, a=1)
+    copied = d.copy()
+    merged = d | {"b": 2}
+    rmerged = {"b": 2} | d
+
+    assert type(copied) is DefaultDictSubclass
+    assert copied.default_factory is int
+    assert dict(copied) == {"a": 1}
+    assert type(merged) is DefaultDictSubclass
+    assert merged.default_factory is int
+    assert dict(merged) == {"a": 1, "b": 2}
+    assert type(rmerged) is DefaultDictSubclass
+    assert rmerged.default_factory is int
+    assert dict(rmerged) == {"b": 2, "a": 1}
+
+
+def test_dict_operations_return_builtin_dict_for_subclass():
+    class DictSubclass(dict):
+        pass
+
+    d = DictSubclass(a=1)
+    other = {"b": 2}
+
+    assert type(d.copy()) is dict
+    assert type(d | other) is dict
+    assert type(other | d) is dict
 
 
 def test_keywords():
@@ -888,6 +1380,45 @@ def test_calling_hash_and_eq():
     assert count_eq == 1, count_eq
 
 
+def test_hash_and_eq_for_keywords_storage():
+    count_hash = 0
+    count_eq = 0
+
+    class Probe:
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return hash("a")
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return other == "a"
+
+    def check(**kwargs):
+        probe = Probe()
+
+        assert probe in kwargs
+        assert count_hash == 1, count_hash
+        assert count_eq == 1, count_eq
+
+        assert kwargs[probe] == 1
+        assert count_hash == 2, count_hash
+        assert count_eq == 2, count_eq
+
+        kwargs[probe] = 2
+        assert kwargs["a"] == 2
+        assert count_hash == 3, count_hash
+        assert count_eq == 3, count_eq
+
+        del kwargs[probe]
+        assert "a" not in kwargs
+        assert count_hash == 4, count_hash
+        assert count_eq == 4, count_eq
+
+    check(a=1)
+
+
 def test_hash_and_eq_for_dynamic_object_storage():
     class MyObject:
         def __init__(self, string):
@@ -917,6 +1448,47 @@ def test_hash_and_eq_for_dynamic_object_storage():
     assert d2[MyObject("1")] == 112
     del d2[MyObject("1")]
     assert "1" not in d2
+
+
+def test_hash_and_eq_count_for_dynamic_object_storage():
+    count_hash = 0
+    count_eq = 0
+
+    class Probe:
+        def __hash__(self):
+            nonlocal count_hash
+            count_hash += 1
+            return hash("a")
+
+        def __eq__(self, other):
+            nonlocal count_eq
+            count_eq += 1
+            return other == "a"
+
+    class MyObject:
+        pass
+
+    d = MyObject().__dict__
+    d["a"] = 1
+    probe = Probe()
+
+    assert probe in d
+    assert count_hash == 1, count_hash
+    assert count_eq == 1, count_eq
+
+    assert d[probe] == 1
+    assert count_hash == 2, count_hash
+    assert count_eq == 2, count_eq
+
+    d[probe] = 2
+    assert d["a"] == 2
+    assert count_hash == 3, count_hash
+    assert count_eq == 3, count_eq
+
+    del d[probe]
+    assert "a" not in d
+    assert count_hash == 4, count_hash
+    assert count_eq == 4, count_eq
 
 def test_update_side_effect_on_other():
     class X:
@@ -1064,17 +1636,98 @@ def test_decorated_method_dict():
     A().f()
 
 def test_update():
-    x = {1: 0, 2: 1}
-    y = {}
-    y.update(x)
-    assert y == x
+    class DictSubclass(dict):
+        pass
+
+    class Mapping:
+        def keys(self):
+            return ("mapping",)
+
+        def __getitem__(self, key):
+            assert key == "mapping"
+            return 3
+
+    class Pair:
+        def __iter__(self):
+            yield "generic pair"
+            yield 6
+
+    d = {}
+    assert d.update() is None
+    assert d.update(d) is None
+    assert d.update({"dict": 1}) is None
+    assert d.update(DictSubclass({"dict subclass": 2})) is None
+    assert d.update(Mapping()) is None
+    assert d.update([("tuple pair", 4), ["list pair", 5], Pair()]) is None
+    assert d.update({"positional": 7}, keyword=8) is None
+    assert d.update(keyword_only=9) is None
+    assert d == {
+        "dict": 1,
+        "dict subclass": 2,
+        "mapping": 3,
+        "tuple pair": 4,
+        "list pair": 5,
+        "generic pair": 6,
+        "positional": 7,
+        "keyword": 8,
+        "keyword_only": 9,
+    }
+    assert_raises(TypeError, d.update, {}, {})
+
+
+def test_update_is_incremental():
+    d = {}
+
+    def pairs():
+        yield ("tuple pair", 1)
+        assert d["tuple pair"] == 1
+        yield ["list pair", 2]
+        assert d["list pair"] == 2
+
+        class Pair:
+            def __iter__(self):
+                yield "generic pair"
+                yield 3
+
+        yield Pair()
+        assert d["generic pair"] == 3
+
+    d.update(pairs())
+    assert d == {"tuple pair": 1, "list pair": 2, "generic pair": 3}
+
+
+def test_update_materializes_mapping_keys():
+    events = []
+
+    class Mapping:
+        def keys(self):
+            events.append("keys")
+
+            def keys_iterator():
+                events.append("yield a")
+                yield "a"
+                events.append("yield b")
+                yield "b"
+
+            return keys_iterator()
+
+        def __getitem__(self, key):
+            events.append("get " + key)
+            return key.upper()
+
+    result = {}
+    result.update(Mapping())
+
+    assert result == {"a": "A", "b": "B"}
+    assert events == ["keys", "yield a", "yield b", "get a", "get b"]
+
 
 def test_module_dict():
     import sys
     ModuleType = type(sys)
 
     foo = ModuleType.__new__(ModuleType)
-    assert foo.__dict__ == None
+    assert foo.__dict__ == {}
 
     foo = ModuleType.__new__(ModuleType)
     foo.f = 1
@@ -1244,6 +1897,46 @@ def test_eq_side_effects():
     assert key.eq_calls == 1
 
 
+def test_keys_xor_side_effects():
+    key1 = TrackingKey('foo')
+    key2 = TrackingKey('foo')
+    d1 = {key1: 1}
+    d2 = {key2: 2}
+    key1.clear_observations()
+    key2.clear_observations()
+
+    assert d1.keys() ^ d2.keys() == set()
+    assert key1.eq_calls == 1
+    assert key1.hash_calls == 0
+    assert key2.eq_calls == 0
+    assert key2.hash_calls == 1
+
+
+def test_items_xor_side_effects():
+    log = []
+
+    class Key:
+        def __init__(self, name):
+            self.name = name
+
+        def __hash__(self):
+            log.append(("hash", self.name))
+            return 42
+
+        def __eq__(self, other):
+            log.append(("eq", self.name, other.name))
+            return True
+
+    key1 = Key('left')
+    key2 = Key('right')
+    d1 = {key1: 1}
+    d2 = {key2: 1}
+    log.clear()
+
+    assert d1.items() ^ d2.items() == set()
+    assert log == [("eq", "left", "right"), ("eq", "left", "right")]
+
+
 # TODO: GR-40680
 # def test_iteration_and_del():
 #     def test_iter(get_iterable):
@@ -1267,3 +1960,21 @@ def test_dict_values_eq():
     d1 = {1: 1, 2: 2, 4: 4}
     assert d1.values() != d1.values()
 
+def test_missing_and_not_implemented():
+    class MyDict(dict):
+        def __missing__(self, key):
+            return NotImplemented
+
+    d = MyDict()
+    assert d['bogus_key'] == NotImplemented
+
+def test_removing_attr_from_economic_map():
+    class Test:
+        pass
+
+    o = Test()
+    o.foo = 1
+    o.__dict__[42] = 10
+    del o.foo
+
+    assert "foo" not in o.__dict__

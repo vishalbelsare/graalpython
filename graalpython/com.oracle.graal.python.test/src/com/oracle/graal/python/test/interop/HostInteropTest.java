@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,17 +40,24 @@
  */
 package com.oracle.graal.python.test.interop;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.util.Date;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.io.ByteSequence;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -71,6 +78,30 @@ public class HostInteropTest extends PythonTests {
     @After
     public void tearDown() {
         context.close();
+    }
+
+    public static int TEST_FIELD = 32;
+
+    @Test
+    public void testJavaTemporalStrWithoutImportingDatetime() {
+        Value strFunction = context.eval("python", "str");
+        assertEquals("1970-01-01 00:00:00+00:00", strFunction.execute(new Date(0)).asString());
+        assertEquals("1970-01-01 00:00:00+00:00", strFunction.execute(Instant.EPOCH).asString());
+        ZonedDateTime zonedDateTime = ZonedDateTime.of(2000, 1, 2, 3, 4, 5, 0, ZoneId.of("UTC"));
+        assertEquals("2000-01-02 03:04:05+00:00", strFunction.execute(zonedDateTime).asString());
+    }
+
+    @Test
+    public void testStaticMembers() {
+        int oldValue = TEST_FIELD;
+        Value t = context.eval("python", String.format("""
+                        import java
+                        jt = java.type("%s")
+                        oldvalue = jt.TEST_FIELD
+                        jt.TEST_FIELD = oldvalue + 1
+                        jt.TEST_FIELD
+                        """, HostInteropTest.class.getName()));
+        assertEquals(oldValue + 1, t.asInt());
     }
 
     @Test
@@ -307,6 +338,68 @@ public class HostInteropTest extends PythonTests {
     }
 
     @Test
+    public void testSequences() {
+        Value t;
+        // builtin sequences
+        t = context.eval("python", """
+                        [0,1,2,3,4]
+                        """);
+        assertTrue(t.hasArrayElements());
+        assertEquals(5, t.getArraySize());
+        assertEquals(1, t.getArrayElement(1).asInt());
+        // remove - [1,2,3,4]
+        t.removeArrayElement(0);
+        assertEquals(4, t.getArraySize());
+        assertEquals(2, t.getArrayElement(1).asInt());
+        // append - [1,2,3,4,5]
+        t.setArrayElement(4, 5);
+        assertEquals(5, t.getArraySize());
+        assertEquals(5, t.getArrayElement(4).asInt());
+        // edit - [1,20,3,4,5]
+        t.setArrayElement(1, 20);
+        assertEquals(5, t.getArraySize());
+        assertEquals(20, t.getArrayElement(1).asInt());
+
+        // emulated
+        t = context.eval("python", """
+                        class MyType:
+                            data = [0,1,2,3,4]
+
+                            def __len__(self):
+                                return len(self.data)
+
+                            def __getitem__(self, i):
+                                return self.data[i]
+
+                            def __setitem__(self, i, v):
+                                if i >= len(self.data):
+                                    self.data.insert(i, v)
+                                else:
+                                    self.data[i] = v
+
+                            def __delitem__(self, i):
+                                del self.data[i]
+
+                        MyType()
+                        """);
+        assertTrue(t.hasArrayElements());
+        assertEquals(5, t.getArraySize());
+        assertEquals(1, t.getArrayElement(1).asInt());
+        // remove - [1,2,3,4]
+        t.removeArrayElement(0);
+        assertEquals(4, t.getArraySize());
+        assertEquals(2, t.getArrayElement(1).asInt());
+        // append - [1,2,3,4,5]
+        t.setArrayElement(4, 5);
+        assertEquals(5, t.getArraySize());
+        assertEquals(5, t.getArrayElement(4).asInt());
+        // edit - [1,20,3,4,5]
+        t.setArrayElement(1, 20);
+        assertEquals(5, t.getArraySize());
+        assertEquals(20, t.getArrayElement(1).asInt());
+    }
+
+    @Test
     public void testIterator() {
         // existing iterators
         Value t = context.eval("python", """
@@ -452,8 +545,7 @@ public class HostInteropTest extends PythonTests {
 
                         class MyType(object):
                             # timezone
-                            tm_zone = "UTC"
-                            tm_gmtoff = 3600
+                            tz = "UTC"
                             # date
                             year = 2023
                             month = 12
@@ -466,11 +558,11 @@ public class HostInteropTest extends PythonTests {
 
                         polyglot.register_interop_behavior(MyType,
                             is_date=True,
-                            as_date=lambda t: t,
+                            as_date=lambda t: (t.year, t.month, t.day),
                             is_time=True,
-                            as_time=lambda t: t,
+                            as_time=lambda t: (t.hour, t.minute, t.second, t.microsecond),
                             is_time_zone=True,
-                            as_time_zone=lambda t: t,
+                            as_time_zone=lambda t: t.tz,
                         )
 
                         MyType()
@@ -480,6 +572,234 @@ public class HostInteropTest extends PythonTests {
         assertTrue(t.isTime());
         assertEquals(LocalTime.of(3, 10, 10, 10 * 1000), t.asTime());
         assertTrue(t.isTimeZone());
+        assertEquals(ZoneId.of("UTC"), t.asTimeZone());
+
+        // test decorator api
+        t = context.eval("python", """
+                        import polyglot
+
+                        class MyType(object):
+                            # timezone
+                            tz = "UTC"
+                            # date
+                            year = 2023
+                            month = 12
+                            day = 12
+                            # time
+                            hour = 3
+                            minute = 10
+                            second = 10
+                            microsecond = 10
+
+                        @polyglot.interop_behavior(MyType)
+                        class MyTypeInteropBehaviorSupplier:
+                            @staticmethod
+                            def is_date(t):
+                                return True
+
+                            @staticmethod
+                            def as_date(t):
+                                return t.year, t.month, t.day
+
+                            @staticmethod
+                            def is_time(t):
+                                return True
+
+                            @staticmethod
+                            def as_time(t):
+                                return t.hour, t.minute, t.second, t.microsecond
+
+                            @staticmethod
+                            def is_time_zone(t):
+                                return True
+
+                            @staticmethod
+                            def as_time_zone(t):
+                                return t.tz
+
+                        MyType()
+                        """);
+        assertTrue(t.isDate());
+        assertEquals(LocalDate.of(2023, 12, 12), t.asDate());
+        assertTrue(t.isTime());
+        assertEquals(LocalTime.of(3, 10, 10, 10 * 1000), t.asTime());
+        assertTrue(t.isTimeZone());
+        assertEquals(ZoneId.of("UTC"), t.asTimeZone());
+
+        // test builtin types
+        t = context.eval("python", """
+                        from datetime import datetime, timezone, timedelta
+
+                        datetime(2023, 12, 12, 3, 10, 10, 10, timezone(timedelta(hours=1), 'utc'))
+                        """);
+        assertTrue(t.isTime());
+        assertEquals(LocalTime.of(3, 10, 10, 10 * 1000), t.asTime());
+        assertTrue(t.isDate());
+        assertEquals(LocalDate.of(2023, 12, 12), t.asDate());
+        assertTrue(t.isTimeZone());
         assertEquals(ZoneId.of("UTC+1"), t.asTimeZone());
+
+        t = context.eval("python", """
+                        import time
+
+                        # time.struct_time(tm_year=2022, tm_mon=12, tm_mday=28, tm_hour=8, tm_min=8, tm_sec=53, tm_wday=2, tm_yday=362, tm_isdst=0)
+                        time.gmtime(1672214933)
+                        """);
+        assertTrue(t.isTime());
+        assertEquals(LocalTime.of(8, 8, 53, 0), t.asTime());
+        assertTrue(t.isDate());
+        assertEquals(LocalDate.of(2022, 12, 28), t.asDate());
+        assertTrue(t.isTimeZone());
+        assertEquals(ZoneId.of("UTC"), t.asTimeZone());
+    }
+
+    @Test
+    public void testException() {
+        Value t;
+        // cannot convert
+        t = context.eval("python", """
+                        import polyglot
+
+                        class MyType(object):
+                            pass
+
+                        @polyglot.interop_behavior(MyType)
+                        class MyTypeInteropBehaviorSupplier:
+                            @staticmethod
+                            def is_time_zone(t):
+                                return False
+
+                            @staticmethod
+                            def as_time_zone(t):
+                                raise polyglot.UnsupportedMessage
+
+                        MyType()
+                        """);
+        assertFalse(t.isTimeZone());
+        boolean raised = false;
+        try {
+            t.asTimeZone();
+        } catch (ClassCastException cce) {
+            raised = true;
+        }
+        assertTrue(raised);
+    }
+
+    @Test
+    public void testByteBuffer() {
+        Value t;
+        // test bytes
+        t = context.eval("python", "bytes([" +
+                        "10, " + // 10 (byte)
+                        "0xFF, 0x7F, " + // Short.MAX_VALUE
+                        "0xFF, 0xFF, 0xFF, 0x7F, " + // Integer.MAX_VALUE
+                        "0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, " + // Long.MAX_VALUE
+                        "0, 0, 0, 0x3F, 0xFF, 0xFF, 0xFF, 0x7F, " + // 0.5f
+                        "0xAD, 0x26, 0x99, 0xE6, 0xD6, 0x1C, 0xC8, 0x40])"); // 12345.6789123
+        assertTrue(t.hasBufferElements());
+        assertFalse(t.isBufferWritable());
+        assertEquals(31, t.getBufferSize());
+        assertEquals(10, t.readBufferByte(0));
+        assertEquals(Short.MAX_VALUE, t.readBufferShort(ByteOrder.LITTLE_ENDIAN, 1));
+        assertEquals(Integer.MAX_VALUE, t.readBufferInt(ByteOrder.LITTLE_ENDIAN, 3));
+        assertEquals(Long.MAX_VALUE, t.readBufferLong(ByteOrder.LITTLE_ENDIAN, 7));
+        assertEquals(0.5f, t.readBufferFloat(ByteOrder.LITTLE_ENDIAN, 15), 0.0);
+        assertEquals(12345.6789123, t.readBufferDouble(ByteOrder.LITTLE_ENDIAN, 23), 0.0);
+        byte[] dst = new byte[8];
+        t.readBuffer(23, dst, 0, 8);
+        assertArrayEquals(dst, new byte[]{(byte) 0xAD, 0x26, (byte) 0x99, (byte) 0xE6, (byte) 0xD6, 0x1C, (byte) 0xC8, 0x40});
+
+        // test bytearray
+        t = context.eval("python", "bytearray(10)");
+        assertTrue(t.hasBufferElements());
+        assertTrue(t.isBufferWritable());
+        assertEquals(10, t.getBufferSize());
+        t.writeBufferByte(0, (byte) 10);
+        assertEquals(10, t.readBufferByte(0));
+        t.writeBufferShort(ByteOrder.LITTLE_ENDIAN, 0, Short.MAX_VALUE);
+        assertEquals(Short.MAX_VALUE, t.readBufferShort(ByteOrder.LITTLE_ENDIAN, 0));
+        t.writeBufferInt(ByteOrder.LITTLE_ENDIAN, 0, Integer.MAX_VALUE);
+        assertEquals(Integer.MAX_VALUE, t.readBufferInt(ByteOrder.LITTLE_ENDIAN, 0));
+        t.writeBufferLong(ByteOrder.LITTLE_ENDIAN, 0, Long.MAX_VALUE);
+        assertEquals(Long.MAX_VALUE, t.readBufferLong(ByteOrder.LITTLE_ENDIAN, 0));
+        t.writeBufferFloat(ByteOrder.LITTLE_ENDIAN, 0, 0.5f);
+        assertEquals(0.5f, t.readBufferFloat(ByteOrder.LITTLE_ENDIAN, 0), 0.0);
+        t.writeBufferDouble(ByteOrder.LITTLE_ENDIAN, 0, 12345.6789123);
+        assertEquals(12345.6789123, t.readBufferDouble(ByteOrder.LITTLE_ENDIAN, 0), 0.0);
+    }
+
+    @Test
+    public void testHostByteBufferAsPythonBuffer() {
+        byte[] writable = new byte[]{1, 2, 3, 4};
+        context.getBindings("python").putMember("writable_bb", ByteBuffer.wrap(writable));
+        context.getBindings("python").putMember("readonly_bb", ByteBuffer.wrap(new byte[]{-1, 5, 6, 7, 8}).asReadOnlyBuffer());
+
+        context.eval("python", """
+                        import binascii
+                        import io
+
+                        mv = memoryview(writable_bb)
+                        assert not mv.readonly
+                        assert mv.tobytes() == b"\\x01\\x02\\x03\\x04"
+                        assert bytes(writable_bb) == b"\\x01\\x02\\x03\\x04"
+                        assert bytearray(writable_bb) == bytearray(b"\\x01\\x02\\x03\\x04")
+                        assert binascii.hexlify(writable_bb) == b"01020304"
+                        bio = io.BytesIO()
+                        assert bio.write(writable_bb) == 4
+                        assert bio.getvalue() == b"\\x01\\x02\\x03\\x04"
+                        mv[1] = 9
+                        assert io.BytesIO(b"abcd").readinto(writable_bb) == 4
+                        assert bytes(writable_bb) == b"abcd"
+
+                        ro = memoryview(readonly_bb)
+                        assert ro.readonly
+                        assert ro.tobytes() == b"\\xff\\x05\\x06\\x07\\x08"
+                        assert bytes(readonly_bb) == b"\\xff\\x05\\x06\\x07\\x08"
+                        assert bytearray(readonly_bb) == bytearray(b"\\xff\\x05\\x06\\x07\\x08")
+                        assert io.BytesIO().write(readonly_bb) == 5
+                        try:
+                            ro[0] = 1
+                            raise AssertionError("expected memoryview write to fail")
+                        except TypeError:
+                            pass
+                        try:
+                            io.BytesIO(b"wxyz").readinto(readonly_bb)
+                            raise AssertionError("expected readinto to fail")
+                        except TypeError:
+                            pass
+                        """);
+
+        assertArrayEquals(new byte[]{'a', 'b', 'c', 'd'}, writable);
+    }
+
+    @Test
+    public void testHostByteSequenceAsPythonBuffer() {
+        byte[] bytes = new byte[]{10, 20, 30, 40};
+        context.getBindings("python").putMember("seq", ByteSequence.create(bytes));
+
+        context.eval("python", """
+                        import binascii
+                        import io
+
+                        mv = memoryview(seq)
+                        assert mv.readonly
+                        assert mv.tobytes() == b"\\x0a\\x14\\x1e\\x28"
+                        assert bytes(seq) == b"\\x0a\\x14\\x1e\\x28"
+                        assert bytearray(seq) == bytearray(b"\\x0a\\x14\\x1e\\x28")
+                        assert binascii.hexlify(seq) == b"0a141e28"
+                        bio = io.BytesIO()
+                        assert bio.write(seq) == 4
+                        assert bio.getvalue() == b"\\x0a\\x14\\x1e\\x28"
+                        try:
+                            mv[0] = 1
+                            raise AssertionError("expected memoryview write to fail")
+                        except TypeError:
+                            pass
+                        try:
+                            io.BytesIO(b"abcd").readinto(seq)
+                            raise AssertionError("expected readinto to fail")
+                        except TypeError:
+                            pass
+                        """);
     }
 }

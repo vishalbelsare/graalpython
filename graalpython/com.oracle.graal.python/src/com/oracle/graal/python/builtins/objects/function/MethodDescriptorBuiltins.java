@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,88 +40,105 @@
  */
 package com.oracle.graal.python.builtins.objects.function;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GET__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
-
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.method.PMethod;
 import com.oracle.graal.python.builtins.objects.str.StringUtils;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.DescrGetBuiltinNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.nodes.object.DescriptorCheckNode;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PBuiltinFunction)
 public final class MethodDescriptorBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = MethodDescriptorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return MethodDescriptorBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___GET__, minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 3)
+    @Slot(SlotKind.tp_descr_get)
+    @GenerateUncached
     @GenerateNodeFactory
     @SuppressWarnings("unused")
-    public abstract static class GetNode extends PythonTernaryBuiltinNode {
-        @Specialization(guards = {"!isPNone(instance)"})
+    public abstract static class GetNode extends DescrGetBuiltinNode {
+        @Specialization(guards = "!isNoValue(instance)")
         static PMethod doMethod(PFunction self, Object instance, Object klass,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createMethod(instance, self);
+                        @Bind PythonLanguage language) {
+            return PFactory.createMethod(language, instance, self);
         }
 
-        @Specialization
-        static Object doFunction(PFunction self, PNone instance, Object klass) {
+        @Specialization(guards = "isNoValue(instance)")
+        static Object doFunction(PFunction self, Object instance, Object klass) {
             return self;
         }
 
-        @Specialization(guards = {"!isPNone(instance)", "!self.needsDeclaringType()"})
+        @Specialization(guards = {"!isNoValue(instance)", "!self.needsDeclaringType()"})
         static PBuiltinMethod doBuiltinMethod(PBuiltinFunction self, Object instance, Object klass,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createBuiltinMethod(instance, self);
+                        @Bind PythonLanguage language,
+                        @Bind Node inliningTarget,
+                        @Shared("descriptorCheckNode") @Cached DescriptorCheckNode descriptorCheckNode) {
+            checkBuiltinDescriptorReceiver(self, instance, inliningTarget, descriptorCheckNode);
+            return PFactory.createBuiltinMethod(language, instance, self);
         }
 
-        @Specialization(guards = {"!isPNone(instance)", "self.needsDeclaringType()"})
+        @Specialization(guards = {"!isNoValue(instance)", "self.needsDeclaringType()"})
         static PBuiltinMethod doBuiltinMethodWithDeclaringClass(PBuiltinFunction self, Object instance, Object klass,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createBuiltinMethod(instance, self, self.getEnclosingType());
+                        @Bind PythonLanguage language,
+                        @Bind Node inliningTarget,
+                        @Shared("descriptorCheckNode") @Cached DescriptorCheckNode descriptorCheckNode) {
+            checkBuiltinDescriptorReceiver(self, instance, inliningTarget, descriptorCheckNode);
+            return PFactory.createBuiltinMethod(language, instance, self, self.getEnclosingType());
         }
 
-        @Specialization
-        static Object doBuiltinFunction(PBuiltinFunction self, PNone instance, Object klass) {
+        @Specialization(guards = "isNoValue(instance)")
+        static Object doBuiltinFunction(PBuiltinFunction self, Object instance, Object klass) {
             return self;
+        }
+
+        private static void checkBuiltinDescriptorReceiver(PBuiltinFunction self, Object instance, Node inliningTarget, DescriptorCheckNode descriptorCheckNode) {
+            Object enclosingType = self.getEnclosingType();
+            if (enclosingType == null) {
+                return;
+            }
+            descriptorCheckNode.execute(inliningTarget, enclosingType, self.getName(), instance);
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization(guards = "self.getEnclosingType() == null")
         static TruffleString reprModuleFunction(PBuiltinFunction self,
-                        @Cached.Shared("formatter") @Cached StringUtils.SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
+                        @Shared("formatter") @Cached StringUtils.SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             // (tfel): these really shouldn't be accessible, I think
             return simpleTruffleStringFormatNode.format("<built-in function %s>", self.getName());
         }
 
         @Specialization(guards = "self.getEnclosingType() != null")
         static TruffleString reprClassFunction(PBuiltinFunction self,
-                        @Cached.Shared("formatter") @Cached StringUtils.SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
-            return simpleTruffleStringFormatNode.format("<method '%s' of '%s' objects>", self.getName(), TypeNodes.GetNameNode.doSlowPath(self.getEnclosingType()));
+                        @Shared("formatter") @Cached StringUtils.SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
+            return simpleTruffleStringFormatNode.format("<method '%s' of '%s' objects>", self.getName(), TypeNodes.GetNameNode.executeUncached(self.getEnclosingType()));
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -67,10 +67,10 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 
 /**
- * Equivalent of CPython's {@code PyNumber_AsSize} function. Converts the argument into integer (our
- * equivalent of {@code Py_ssize_t}) using its {@code __index__} method. Raises a {@code TypeError}
- * if the argument is not convertible to integer. Overflow behavior depends on the execute method
- * used:
+ * Equivalent of CPython's {@code PyNumber_AsSize} function. In addition, converts the argument into
+ * integer (our equivalent of {@code Py_ssize_t}) using its {@code __index__} method. Raises a
+ * {@code TypeError} if the argument is not convertible to integer. Overflow behavior depends on the
+ * execute method used:
  * <ul>
  * <li>{@link #executeLossy(Frame, Node, Object)} clamps the value to maximal/minimal integer
  * (equivalent of passing {@code NULL} in CPython).
@@ -115,7 +115,7 @@ public abstract class PyNumberAsSizeNode extends PNodeWithContext {
         return execute(frame, inliningTarget, object, errorClass);
     }
 
-    protected abstract int execute(Frame frame, Node inliningTarget, Object object, Object errorClass);
+    public abstract int execute(Frame frame, Node inliningTarget, Object object, Object errorClass);
 
     @Specialization
     static int doInt(int object, @SuppressWarnings("unused") Object errorClass) {
@@ -123,13 +123,13 @@ public abstract class PyNumberAsSizeNode extends PNodeWithContext {
     }
 
     @Specialization
-    static int doLongExact(Node inliningTarget, long object, PythonBuiltinClassType errorClass,
-                    @Cached PRaiseNode.Lazy raiseNode) {
+    public static int doLongExact(Node inliningTarget, long object, PythonBuiltinClassType errorClass,
+                    @Cached PRaiseNode raiseNode) {
         int converted = (int) object;
         if (object == converted) {
             return converted;
         }
-        throw raiseNode.get(inliningTarget).raise(errorClass, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, object);
+        throw raiseNode.raise(inliningTarget, errorClass, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, object);
     }
 
     @Specialization
@@ -155,15 +155,15 @@ public abstract class PyNumberAsSizeNode extends PNodeWithContext {
 
         @Specialization
         static int doObjectExact(VirtualFrame frame, Object object, PythonBuiltinClassType errorClass,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached PyNumberIndexNode indexNode,
-                        @Cached PRaiseNode.Lazy raiseNode,
+                        @Cached PRaiseNode raiseNode,
                         @Cached CastToJavaIntExactNode cast) {
             Object index = indexNode.execute(frame, inliningTarget, object);
             try {
                 return cast.execute(inliningTarget, index);
             } catch (PException pe) {
-                throw raiseNode.get(inliningTarget).raise(errorClass, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, object);
+                throw raiseNode.raise(inliningTarget, errorClass, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, object);
             } catch (CannotCastException cannotCastException) {
                 throw CompilerDirectives.shouldNotReachHere("PyNumberIndexNode didn't return a python integer");
             }
@@ -171,7 +171,7 @@ public abstract class PyNumberAsSizeNode extends PNodeWithContext {
 
         @Specialization
         static int doObjectLossy(VirtualFrame frame, Object object, @SuppressWarnings("unused") PNone errorClass,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached PyNumberIndexNode indexNode,
                         @Cached CastToJavaIntLossyNode cast) {
             Object index = indexNode.execute(frame, inliningTarget, object);

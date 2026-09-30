@@ -1,4 +1,4 @@
-# Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -54,7 +54,6 @@ docker run -i ol6_python3 python3 -u - <gen_native_cfg.py >../graalpython/com.or
 ssh darwin 'cd /tmp && /usr/local/bin/python3 -u -' <gen_native_cfg.py >../graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PosixConstantsDarwin.java
 """
 
-import argparse
 import datetime
 import os
 import subprocess
@@ -75,7 +74,9 @@ includes = '''
 # include <netdb.h>
 # include <netinet/in.h>
 # include <netinet/tcp.h>
+# include <poll.h>
 # include <sys/mman.h>
+# include <sys/resource.h>
 # include <sys/select.h>
 # include <sys/socket.h>
 # include <sys/un.h>
@@ -88,6 +89,7 @@ includes = '''
 # include <winsock2.h>
 # include <ws2tcpip.h>
 # include <windows.h>
+# include <sys/locking.h>
 # include <sys/stat.h>
 # ifndef PATH_MAX
 #  define PATH_MAX MAX_PATH
@@ -113,13 +115,14 @@ type_defs = {
 # Column #1 - fallback specifier:
 #   empty - mandatory constant
 #   `*` - optional constant
-#   `0` - if not defined, it will default to 0
+#   `0`...`9` - if not defined, it will default to the number given (0 to 9)
 #   `u` - if not defined, it will use the constant prefixed with an underscore
 # Column #2 - type specifier:
 #   `i` - int
 #   `x` - int, appearing in hexadecimal in the generated source
-#   `b` - boolean, will be true if the plaform is Linux (WTF?)
+#   `b` - boolean, will be true on POSIX platforms
 # Column #3 - the name of the constant
+# Comments can come after that starting with "//"
 constant_defs = '''
   b HAVE_FUTIMENS
   b HAVE_UTIMENSAT
@@ -148,7 +151,24 @@ constant_defs = '''
 
 * i PIPE_BUF
 
+[pollFlags]
+* x POLLIN
+* x POLLPRI
+* x POLLOUT
+* x POLLERR
+* x POLLHUP
+* x POLLNVAL
+* x POLLRDNORM
+* x POLLRDBAND
+* x POLLWRNORM
+* x POLLWRBAND
+* x POLLMSG
+
 * i SEM_VALUE_MAX
+
+* i RUSAGE_CHILDREN
+0 i RUSAGE_SELF
+* i RUSAGE_THREAD
 
 [openFlags]
 * x O_ACCMODE
@@ -180,6 +200,17 @@ constant_defs = '''
 * x O_SEARCH
 * x O_PATH
 * x O_TTY_INIT
+* x O_EVTONLY
+* x O_FSYNC
+* x O_SYMLINK
+* x O_NOINHERIT
+* x O_NOFOLLOW
+* x O_NOFOLLOW_ANY
+* x O_NOLINKS
+* x O_NOATIME
+* x O_RANDOM
+* x O_SEQUENTIAL
+* x O_ASYNC
 
 [fileType]
 u x S_IFMT
@@ -192,17 +223,17 @@ u x S_IFCHR
 0 x S_IFIFO
 
 [mmapFlags]
-0 x MAP_SHARED
-0 x MAP_PRIVATE
-0 x MAP_ANONYMOUS
+1 x MAP_SHARED
+* x MAP_PRIVATE
+4 x MAP_ANONYMOUS
 * x MAP_DENYWRITE
 * x MAP_EXECUTABLE
 
 [mmapProtection]
 0 x PROT_NONE
-0 x PROT_READ
-0 x PROT_WRITE
-0 x PROT_EXEC
+1 x PROT_READ
+2 x PROT_WRITE
+4 x PROT_EXEC
 
 [flockOperation]
 0 x LOCK_SH
@@ -214,6 +245,13 @@ u x S_IFCHR
 * i F_RDLCK
 * i F_WRLCK
 * i F_UNLCK
+
+[msvcrtLocking]
+* i _LK_UNLCK
+* i _LK_LOCK
+* i _LK_NBLCK
+* i _LK_RLCK
+* i _LK_NBRLCK
 
 [direntType]
 0 i DT_UNKNOWN
@@ -260,6 +298,13 @@ u x S_IFCHR
 0 x RTLD_NOW
 0 x RTLD_GLOBAL
 0 x RTLD_LOCAL
+
+[winapiLoadLibraryFlags]
+* i LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+* i LOAD_LIBRARY_SEARCH_APPLICATION_DIR
+* i LOAD_LIBRARY_SEARCH_SYSTEM32
+* i LOAD_LIBRARY_SEARCH_USER_DIRS
+* i LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
 
 [socketFamily]
   i AF_UNSPEC
@@ -424,6 +469,41 @@ u x S_IFCHR
 * i IPV6_RECVPATHMTU
 * i IPV6_TCLASS
 * i IPV6_USE_MIN_MTU
+
+[sysconfigNames] // These names use some sensible overlapping default values for windows
+0 i _SC_ARG_MAX  // I made those required which are on both Mac and Linux
+1 i _SC_CHILD_MAX
+* i _SC_HOST_NAME_MAX
+2 i _SC_LOGIN_NAME_MAX
+* i _SC_NGROUPS_MAX
+3 i _SC_CLK_TCK
+4 i _SC_OPEN_MAX
+5 i _SC_PAGESIZE
+5 i _SC_PAGE_SIZE
+* i _SC_RE_DUP_MAX
+* i _SC_STREAM_MAX
+* i _SC_SYMLOOP_MAX
+* i _SC_TTY_NAME_MAX
+* i _SC_TZNAME_MAX
+* i _SC_VERSION
+* i _SC_BC_BASE_MAX
+* i _SC_BC_DIM_MAX
+* i _SC_BC_SCALE_MAX
+* i _SC_BC_STRING_MAX
+* i _SC_COLL_WEIGHTS_MAX
+* i _SC_EXPR_NEST_MAX
+* i _SC_LINE_MAX
+* i _SC_2_VERSION
+* i _SC_2_C_DEV
+* i _SC_2_FORT_DEV
+* i _SC_2_FORT_RUN
+* i _SC_2_LOCALEDEF
+* i _SC_2_SW_DEV
+7 i _SC_SEM_NSEMS_MAX
+8 i _SC_PHYS_PAGES
+* i _SC_AVPHYS_PAGES
+9 i _SC_NPROCESSORS_CONF
+9 i _SC_NPROCESSORS_ONLN
 '''
 
 layout_defs = '''
@@ -450,13 +530,18 @@ layout_defs = '''
 [struct in6_addr]
   s6_addr
 
+[struct pollfd] u
+  fd
+  events
+  revents
+
 [struct sockaddr_un] u
   sun_family
   sun_path
 '''
 
 java_copyright = '''/*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -509,17 +594,19 @@ class PosixConstants{platform} {{
     static void getConstants(PosixConstants.Registry constants) {{
 {output}
     }}
-}}'''
+}}
+'''
 
 Constant = namedtuple('Constant', ['name', 'optional', 'type', 'format'])
 Struct = namedtuple('Struct', ['name', 'members', 'unix_only'])
 
 c_source_file = 'gen_native_cfg.c'
 c_executable_file = 'gen_native_cfg'
+c_output_file = 'gen_native_cfg.out'
 
 
 def parse_defs():
-    regex = re.compile(r'\[(\w+)\]|(\*|u|0?)\s*(\w+)\s+(\w+)')
+    regex = re.compile(r'(?:\[(\w+)\]|(\*|u|\d?)\s*(\w+)\s+(\w+))( *\/\/.*)?')
     current_group = []
     groups = {}
     constants = []
@@ -535,11 +622,8 @@ def parse_defs():
             current_group = []
             groups[m.group(1)] = current_group
         else:
-            d = type_defs[m.group(3)]
-            optional = m.group(2) == '*' or (m.group(2) and sys.platform.capitalize() == 'Win32')
-            if sys.platform.capitalize() == 'Win32':
-                optional = m.group(2)
-            c = Constant(m.group(4), optional, *d)
+            c_type, c_format = type_defs[m.group(3)]
+            c = Constant(name=m.group(4), optional=m.group(2), type=c_type, format=c_format)
             current_group.append(c)
             constants.append(c)
 
@@ -598,19 +682,19 @@ def generate_platform():
         f.write('\nint main() {\n')
         for c in constants:
             if c.format is None:
-                val = 'true' if platform == 'Linux' else 'false'
+                val = 'true' if platform in ('Linux', 'Darwin') else 'false'
                 f.write(f'    printf("        constants.put(\\"{c.name}\\", {val});\\n");\n')
                 continue
             if c.optional:
                 f.write(f'#ifdef {c.name}\n')
             f.write(f'    printf("        constants.put(\\"{c.name}\\", {c.format});\\n", {c.name});\n')
             if c.optional:
-                if c.optional not in ["*", True]:
+                if c.optional != '*':
                     f.write('#else\n')
                     if c.optional == "u":
                         f.write(f'    printf("        constants.put(\\"{c.name}\\", {c.format});\\n", _{c.name});\n')
-                    elif c.optional == "0":
-                        f.write(f'    printf("        constants.put(\\"{c.name}\\", 0);\\n");\n')
+                    elif ord("0") <= ord(c.optional) <= ord("9"):
+                        f.write(f'    printf("        constants.put(\\"{c.name}\\", {c.optional});\\n");\n')
                     else:
                         raise ValueError(f"Unsupported fallback specifier for {c.name}: {c.optional}")
                 f.write(f'#endif\n')
@@ -619,13 +703,19 @@ def generate_platform():
 
     flags = '-D_GNU_SOURCE' if platform == 'Linux' else ''
     flags += '' if platform == 'Win32' else ' -Wall -Werror -Wno-format '
-    cc = os.environ.get('CC', 'cc')
+    cc = os.environ.get('CC', 'cl' if platform == 'Win32' else 'cc')
     subprocess.run(f'{cc} {flags} -o {c_executable_file} {c_source_file}', shell=True, check=True)
 
-    output = subprocess.run(f'./{c_executable_file}', shell=False, check=True, stdout=subprocess.PIPE, universal_newlines=True).stdout[:-1]
-    uname = " ".join(tuple(plat.uname()))
+    with open(c_output_file, 'w+') as output_file:
+        subprocess.run(f'./{c_executable_file}', shell=False, check=True, stdout=output_file, universal_newlines=True)
+        output_file.seek(0)
+        output = output_file.read()[:-1]
+    uname = " ".join(tuple(plat.uname())).rstrip()
 
-    print(platform_template.format(java_copyright=java_copyright, script_name=script_name, timestamp=datetime.datetime.now(), uname=uname, platform=platform, output=output))
+    out_path = DIR / f'graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PosixConstants{platform}.java'
+
+    with open(out_path, 'w') as f:
+      f.write(platform_template.format(java_copyright=java_copyright, script_name=script_name, timestamp=datetime.datetime.now(), uname=uname, platform=platform, output=output))
 
 
 def load_existing_parts(path):
@@ -673,7 +763,7 @@ def generate_posix_constants(constants, groups):
     defs = []
 
     def add_constant(opt, typ, name):
-        prefix = 'Optional' if opt else 'Mandatory'
+        prefix = 'Optional' if opt == '*' else 'Mandatory'
         decls.append(f'    public static final {prefix}{typ}Constant {name};\n')
         defs.append(f'        {name} = reg.create{prefix}{typ}("{name}");\n')
 
@@ -703,7 +793,7 @@ def generate_posix_constants(constants, groups):
 
 def generate_native_constants(layouts):
     c_filename = DIR / 'graalpython/python-libposix/src/posix.c'
-    java_filename = DIR / 'graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/NFIPosixConstants.java'
+    java_filename = DIR / 'graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/NativePosixConstants.java'
     constants = []
     for struct in layouts:
         if struct.unix_only:
@@ -730,17 +820,15 @@ def generate_native_constants(layouts):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--common', action='store_true')
-    args = parser.parse_args()
-    if args.common:
-        generate_common()
-        return
     try:
+        generate_common()
         generate_platform()
     finally:
         delete_if_exists(c_source_file)
         delete_if_exists(c_executable_file)
+        delete_if_exists(c_executable_file + '.exe')
+        delete_if_exists(c_executable_file + '.obj')
+        delete_if_exists(c_output_file)
 
 
 if __name__ == '__main__':

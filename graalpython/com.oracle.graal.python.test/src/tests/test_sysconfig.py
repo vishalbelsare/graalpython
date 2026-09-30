@@ -1,0 +1,88 @@
+# Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# The Universal Permissive License (UPL), Version 1.0
+#
+# Subject to the condition set forth below, permission is hereby granted to any
+# person obtaining a copy of this software, associated documentation and/or
+# data (collectively the "Software"), free of charge and under any and all
+# copyright rights in the Software, and any and all patent rights owned or
+# freely licensable by each licensor hereunder covering either (i) the
+# unmodified Software as contributed to or provided by such licensor, or (ii)
+# the Larger Works (as defined below), to deal in both
+#
+# (a) the Software, and
+#
+# (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+# one is included with the Software each a "Larger Work" to which the Software
+# is contributed by such licensors),
+#
+# without restriction, including without limitation the rights to copy, create
+# derivative works of, display, perform, and distribute the Software and make,
+# use, sell, offer for sale, import, export, have made, and have sold the
+# Software and the Larger Work(s), and to sublicense the foregoing rights on
+# either these or other terms.
+#
+# This license is subject to the following condition:
+#
+# The above copyright notice and either this complete permission notice or at a
+# minimum a reference to the UPL must be included in all copies or substantial
+# portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+import sys
+import unittest
+
+
+def test_sysconfig():
+    import os, sysconfig
+    os.environ["PATH"] += os.pathsep + r" : \ " + os.pathsep
+    sysconfig.get_config_vars()
+    # must not fail
+
+
+@unittest.skipIf(sys.platform == "win32", "Windows does not use _sysconfigdata")
+def test_platform_sysconfigdata():
+    import importlib
+    import sysconfig
+    mod = importlib.import_module(sysconfig._get_sysconfigdata_name())
+    # These flags are parsed directly from the file by maturin
+    for key in ("ABIFLAGS", "EXT_SUFFIX", "INSTSONAME", "SOABI", "VERSION"):
+        assert key in mod.build_time_vars
+    assert mod.build_time_vars["ABIFLAGS"] == sys.abiflags
+    assert mod.build_time_vars["INSTSONAME"] == mod.build_time_vars["LDLIBRARY"]
+    assert sys.abiflags in sysconfig.get_config_var("INCLUDEPY")
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-specific sysconfig behavior")
+def test_windows_libpython_is_not_exposed():
+    import sysconfig
+    assert "LIBPYTHON" not in sysconfig.get_config_vars()
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-specific sysconfig behavior")
+def test_windows_hash_algorithm():
+    import sysconfig
+    assert sysconfig.get_config_var("Py_HASH_ALGORITHM") == 0
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-specific sysconfig behavior")
+def test_windows_library_names():
+    import sysconfig
+    expected = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+    assert sysconfig.get_config_var("LIBRARY") == expected
+    assert sysconfig.get_config_var("LDLIBRARY") == expected
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-specific sys behavior")
+def test_windows_platform_specific_sys_attributes():
+    assert not hasattr(sys, "abiflags")
+    assert not hasattr(sys, "getdlopenflags")
+    assert not hasattr(sys, "setdlopenflags")
+    assert not hasattr(sys, "windowsversion")

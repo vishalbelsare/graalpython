@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,48 +40,102 @@
  */
 package com.oracle.graal.python.builtins.objects.itertools;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.StopIteration;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinFunctions;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedSetStateBuiltin;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
+import com.oracle.graal.python.lib.PyObjectGetIter;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PZipLongest})
 public final class ZipLongestBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = ZipLongestBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ZipLongestBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "zip_longest", minNumOfPositionalArgs = 1, takesVarArgs = true, keywordOnlyNames = {"fillvalue"})
+    @GenerateNodeFactory
+    public abstract static class ZipLongestNode extends PythonBuiltinNode {
+        @Specialization
+        static Object construct(VirtualFrame frame, Object cls, Object[] args, Object fillValueIn,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetIter getIterNode,
+                        @Cached InlinedConditionProfile fillIsNone,
+                        @Cached InlinedLoopConditionProfile loopProfile,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached InlinedBranchProfile errorProfile,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
+            if (!isTypeNode.execute(inliningTarget, cls)) {
+                // Note: @Fallback or other @Specialization generate data-class
+                errorProfile.enter(inliningTarget);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+            }
+
+            Object fillValue = fillValueIn;
+            if (fillIsNone.profile(inliningTarget, PGuards.isPNone(fillValue))) {
+                fillValue = null;
+            }
+
+            PZipLongest self = PFactory.createZipLongest(cls, getInstanceShape.execute(cls));
+            self.setFillValue(fillValue);
+            self.setNumActive(args.length);
+
+            Object[] itTuple = new Object[args.length];
+            loopProfile.profileCounted(inliningTarget, itTuple.length);
+            LoopNode.reportLoopCount(inliningTarget, itTuple.length);
+            for (int i = 0; loopProfile.inject(inliningTarget, i < itTuple.length); i++) {
+                itTuple[i] = getIterNode.execute(frame, inliningTarget, args[i]);
+            }
+            self.setItTuple(itTuple);
+            return self;
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -90,33 +144,23 @@ public final class ZipLongestBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
-        @SuppressWarnings("unused")
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization(guards = "zeroSize(self)")
-        static Object nextNoFillValue(VirtualFrame frame, PZipLongest self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raiseStopIteration();
+        static Object nextNoFillValue(@SuppressWarnings("unused") PZipLongest self) {
+            throw iteratorExhausted();
         }
 
         @Specialization(guards = "!zeroSize(self)")
         static Object next(VirtualFrame frame, PZipLongest self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached BuiltinFunctions.NextNode nextNode,
-                        @Cached IsBuiltinObjectProfile isStopIterationProfile,
+                        @Bind Node inliningTarget,
+                        @Cached PyIterNextNode nextNode,
                         @Cached InlinedConditionProfile noItProfile,
                         @Cached InlinedConditionProfile noActiveProfile,
                         @Cached InlinedLoopConditionProfile loopProfile,
-                        @Cached InlinedConditionProfile isNullFillProfile,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached InlinedConditionProfile isNullFillProfile) {
             Object fillValue = isNullFillProfile.profile(inliningTarget, isNullFillValue(self)) ? PNone.NONE : self.getFillValue();
-            return next(frame, inliningTarget, self, fillValue, nextNode, isStopIterationProfile, loopProfile, noItProfile, noActiveProfile, factory, raiseNode);
-        }
-
-        private static Object next(VirtualFrame frame, Node inliningTarget, PZipLongest self, Object fillValue, BuiltinFunctions.NextNode nextNode, IsBuiltinObjectProfile isStopIterationProfile,
-                        InlinedLoopConditionProfile loopProfile, InlinedConditionProfile noItProfile, InlinedConditionProfile noActiveProfile, PythonObjectFactory factory, PRaiseNode.Lazy raiseNode) {
             Object[] result = new Object[self.getItTuple().length];
             loopProfile.profileCounted(inliningTarget, result.length);
             for (int i = 0; loopProfile.inject(inliningTarget, i < result.length); i++) {
@@ -126,25 +170,23 @@ public final class ZipLongestBuiltins extends PythonBuiltins {
                     item = fillValue;
                 } else {
                     try {
-                        item = nextNode.execute(frame, it, PNone.NO_VALUE);
-                    } catch (PException e) {
-                        if (isStopIterationProfile.profileException(inliningTarget, e, StopIteration)) {
-                            self.setNumActive(self.getNumActive() - 1);
-                            if (noActiveProfile.profile(inliningTarget, self.getNumActive() == 0)) {
-                                throw raiseNode.get(inliningTarget).raiseStopIteration();
-                            } else {
-                                item = fillValue;
-                                self.getItTuple()[i] = PNone.NONE;
-                            }
+                        item = nextNode.execute(frame, inliningTarget, it);
+                    } catch (IteratorExhausted e) {
+                        self.setNumActive(self.getNumActive() - 1);
+                        if (noActiveProfile.profile(inliningTarget, self.getNumActive() == 0)) {
+                            throw iteratorExhausted();
                         } else {
-                            self.setNumActive(0);
-                            throw e;
+                            item = fillValue;
+                            self.getItTuple()[i] = PNone.NONE;
                         }
+                    } catch (PException e) {
+                        self.setNumActive(0);
+                        throw e;
                     }
                 }
                 result[i] = item;
             }
-            return factory.createTuple(result);
+            return PFactory.createTuple(PythonLanguage.get(inliningTarget), result);
         }
 
         protected static boolean isNullFillValue(PZipLongest self) {
@@ -158,43 +200,36 @@ public final class ZipLongestBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         @Specialization
-        static Object reduce(PZipLongest self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClass,
-                        @Cached InlinedConditionProfile noFillValueProfile,
-                        @Cached InlinedLoopConditionProfile loopProfile,
-                        @Cached InlinedConditionProfile noItProfile,
-                        @Cached PythonObjectFactory factory) {
+        static Object reduce(PZipLongest self) {
+            PythonLanguage language = PythonLanguage.get(null);
             Object fillValue = self.getFillValue();
-            if (noFillValueProfile.profile(inliningTarget, fillValue == null)) {
+            if (fillValue == null) {
                 fillValue = PNone.NONE;
             }
-            Object type = getClass.execute(inliningTarget, self);
+            Object type = GetClassNode.executeUncached(self);
             Object[] its = new Object[self.getItTuple().length];
-            loopProfile.profileCounted(inliningTarget, its.length);
-            for (int i = 0; loopProfile.profile(inliningTarget, i < its.length); i++) {
+            for (int i = 0; i < its.length; i++) {
                 Object it = self.getItTuple()[i];
-                if (noItProfile.profile(inliningTarget, it == PNone.NONE)) {
-                    its[i] = factory.createEmptyTuple();
+                if (it == PNone.NONE) {
+                    its[i] = PFactory.createEmptyTuple(language);
                 } else {
                     its[i] = it;
                 }
             }
-            PTuple tuple = factory.createTuple(its);
-            return factory.createTuple(new Object[]{type, tuple, fillValue});
+            PTuple tuple = PFactory.createTuple(language, its);
+            return PFactory.createTuple(language, new Object[]{type, tuple, fillValue});
         }
     }
 
     @Builtin(name = J___SETSTATE__, minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    public abstract static class SetStateNode extends PythonBinaryBuiltinNode {
+    public abstract static class SetStateNode extends DeprecatedSetStateBuiltin {
         @Specialization
         static Object setState(PZipLongest self, Object state) {
             self.setFillValue(state);
             return PNone.NONE;
         }
     }
-
 }

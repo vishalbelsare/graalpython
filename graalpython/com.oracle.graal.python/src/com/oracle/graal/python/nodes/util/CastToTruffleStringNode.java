@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,15 +42,18 @@ package com.oracle.graal.python.nodes.util;
 
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyASCIIObject__length;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyASCIIObject__state;
-import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyASCIIObject__state_ready_shift;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyUnicodeObject__data;
-import static com.oracle.graal.python.util.PythonUtils.isBitSet;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readIntField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readLongField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readPtrField;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.cext.PythonNativeObject;
 import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.str.PString;
+import com.oracle.graal.python.builtins.objects.str.StringNodes.CastToTruffleStringChecked0Node;
+import com.oracle.graal.python.builtins.objects.str.StringNodes.CastToTruffleStringChecked1Node;
 import com.oracle.graal.python.builtins.objects.str.StringNodes.StringMaterializeNode;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
@@ -67,14 +70,18 @@ import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
 /**
  * Casts a Python string to a TruffleString without coercion. <b>ATTENTION:</b> If the cast fails,
  * because the object is not a Python string, the node will throw a {@link CannotCastException}.
+ * <br/>
+ * Prefer {@link CastToTruffleStringChecked0Node}, {@link CastToTruffleStringChecked1Node}, etc when
+ * possible as they are much better for host inlining with only 1 @InliningCutoff vs
+ * 3 @InliningCutoff in this node.
  */
 @GenerateUncached
 @GenerateInline(inlineByDefault = true)
@@ -92,6 +99,22 @@ public abstract class CastToTruffleStringNode extends PNodeWithContext {
         return CastToTruffleStringNodeGen.getUncached().execute(null, x);
     }
 
+    public final TruffleString castKnownString(Node inliningTarget, Object x) {
+        try {
+            return execute(inliningTarget, x);
+        } catch (CannotCastException ex) {
+            throw CompilerDirectives.shouldNotReachHere(ex);
+        }
+    }
+
+    public static TruffleString castKnownStringUncached(Object x) {
+        try {
+            return executeUncached(x);
+        } catch (CannotCastException ex) {
+            throw CompilerDirectives.shouldNotReachHere(ex);
+        }
+    }
+
     @Specialization
     static TruffleString doTruffleString(TruffleString x) {
         return x;
@@ -103,6 +126,7 @@ public abstract class CastToTruffleStringNode extends PNodeWithContext {
     }
 
     @Specialization(guards = "!x.isMaterialized()")
+    @InliningCutoff
     static TruffleString doPStringGeneric(Node inliningTarget, PString x,
                     @Cached StringMaterializeNode materializeNode) {
         return materializeNode.execute(inliningTarget, x);
@@ -112,44 +136,32 @@ public abstract class CastToTruffleStringNode extends PNodeWithContext {
     @GenerateInline(false) // Footprint reduction 48 -> 29
     public abstract static class ReadNativeStringNode extends PNodeWithContext {
 
-        public abstract TruffleString execute(Object pointer);
+        public abstract TruffleString execute(long pointer);
 
         @Specialization
-        static TruffleString read(Object pointer,
-                        @Cached CStructAccess.ReadI32Node readI32,
-                        @Cached CStructAccess.ReadI64Node readI64,
-                        @Cached CStructAccess.ReadPointerNode readPointer,
-                        @Cached CStructAccess.ReadByteNode readByte,
-                        @CachedLibrary(limit = "3") InteropLibrary lib,
-                        @Cached TruffleString.FromNativePointerNode fromNative,
-                        @Cached TruffleString.FromByteArrayNode fromBytes) {
-            int state = readI32.read(pointer, PyASCIIObject__state);
-            boolean ready = isBitSet(state, PyASCIIObject__state_ready_shift);
-            if (!ready) {
-                throw CompilerDirectives.shouldNotReachHere("not implemented - need to call _PyUnicode_Ready for native string");
-            }
+        static TruffleString read(long rawPointer,
+                        @Cached TruffleString.FromNativePointerWithCompactionUTF32Node fromNative,
+                        @Cached TruffleString.SwitchEncodingNode switchEncodingNode) {
+            int state = readIntField(rawPointer, PyASCIIObject__state);
             int kind = (state >> CFields.PyASCIIObject__state_kind_shift) & 0x7;
-            Object data = readPointer.read(pointer, PyUnicodeObject__data);
-            long length = readI64.read(pointer, PyASCIIObject__length);
+            long data = readPtrField(rawPointer, PyUnicodeObject__data);
+            long length = readLongField(rawPointer, PyASCIIObject__length);
 
-            Encoding encoding;
+            TruffleString.CompactionLevel compactionLevel;
             if (kind == 1) {
                 // isBitSet(state, PyASCIIObject__state_ascii_shift))
                 // ascii doesn't matter, codepoint 0-127 are the same in ascii and latin1
-                encoding = Encoding.ISO_8859_1;
+                compactionLevel = TruffleString.CompactionLevel.S1;
             } else if (kind == 2) {
-                encoding = Encoding.UTF_16LE;
+                compactionLevel = TruffleString.CompactionLevel.S2;
             } else {
                 assert kind == 4;
-                encoding = Encoding.UTF_32LE;
+                compactionLevel = TruffleString.CompactionLevel.S4;
             }
             int bytes = PythonUtils.toIntError(length * kind);
 
-            if (lib.isPointer(data) || data instanceof Long) {
-                return fromNative.execute(data, 0, bytes, encoding, false);
-            }
-            byte[] result = readByte.readByteArray(pointer, bytes);
-            return fromBytes.execute(result, encoding, false);
+            TruffleString ts = fromNative.execute(data, 0, bytes, compactionLevel, true);
+            return switchEncodingNode.execute(ts, TS_ENCODING);
         }
     }
 
@@ -167,8 +179,21 @@ public abstract class CastToTruffleStringNode extends PNodeWithContext {
     }
 
     @Specialization(guards = {"!isString(x)", "!isNativeObject(x)"})
-    static TruffleString doUnsupported(@SuppressWarnings("unused") Object x) {
-        throw CannotCastException.INSTANCE;
+    @InliningCutoff
+    static TruffleString other(Object x,
+                    @CachedLibrary(limit = "getCallSiteInlineCacheMaxDepth()") InteropLibrary interop,
+                    @Cached TruffleString.SwitchEncodingNode switchEncodingNode) {
+        if (interop.isString(x)) {
+            TruffleString truffleString;
+            try {
+                truffleString = interop.asTruffleString(x);
+            } catch (UnsupportedMessageException e) {
+                throw CompilerDirectives.shouldNotReachHere(e);
+            }
+            return switchEncodingNode.execute(truffleString, TS_ENCODING);
+        } else {
+            throw CannotCastException.INSTANCE;
+        }
     }
 
     @NeverDefault

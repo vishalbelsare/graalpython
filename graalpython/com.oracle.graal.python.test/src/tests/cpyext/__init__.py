@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,20 +36,20 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-import os
-from importlib import invalidate_caches
-from io import StringIO
-from pathlib import Path
-from string import Formatter
+import textwrap
 
 import gc
 import sys
+import unittest
+from copy import deepcopy
+from io import StringIO
+from string import Formatter
 
-DIR = Path(__file__).parent.absolute()
+from .. import ccompile, compile_module_from_file, compile_module_from_string, compile_module_from_string_no_import, DIR
+
 
 GRAALPYTHON = sys.implementation.name == "graalpy"
 
-IS_MANAGED_LAUNCHER = not GRAALPYTHON or __graalpython__.is_managed_launcher()
 
 def assert_raises(err, fn, *args, **kwargs):
     raised = False
@@ -60,7 +60,7 @@ def assert_raises(err, fn, *args, **kwargs):
     assert raised
 
 
-if sys.implementation.name == 'graalpy':
+if GRAALPYTHON:
     is_native_object = getattr(__graalpython__, 'is_native_object', None)
     if not is_native_object:
         raise RuntimeError("Needs to be run with --python.EnableDebuggingBuiltins")
@@ -81,94 +81,15 @@ def unhandled_error_compare_with_message(x, y):
     else:
         return x == y
 
-class CPyExtTestCase():
 
-    def setUpClass(self):
-        for typ in type(self).mro():
-            for k, v in typ.__dict__.items():
-                if k.startswith("test_"):
-                    modname = k.replace("test_", "")
-                    if k.startswith("test_graalpython_"):
-                        if not GRAALPYTHON:
-                            continue
-                        else:
-                            modname = k.replace("test_graalpython_", "")
-                    self.compile_module(modname)
+class CPyExtTestCase(unittest.TestCase):
+    pass
 
 
-def ccompile(self, name):
-    from distutils.core import setup, Extension
-    from distutils.sysconfig import get_config_var
-    from hashlib import sha256
-    EXT_SUFFIX = get_config_var("EXT_SUFFIX")
-
-    source_file = DIR / f'{name}.c'
-    file_not_empty(source_file)
-
-    # compute checksum of source file
-    m = sha256()
-    with open(source_file,"rb") as f:
-        # read 4K blocks
-        for block in iter(lambda: f.read(4096),b""):
-            m.update(block)
-    cur_checksum = m.hexdigest()
-
-    # see if there is already a checksum file
-    checksum_file = DIR / f'{name}{EXT_SUFFIX}.sha256'
-    available_checksum = ""
-    if checksum_file.exists():
-        # read checksum file
-        with open(checksum_file, "r") as f:
-            available_checksum = f.readline()
-
-    # note, the suffix is already a string like '.so'
-    lib_file = DIR / f'{name}{EXT_SUFFIX}'
-
-    # Compare checksums and only re-compile if different.
-    # Note: It could be that the C source file's checksum didn't change but someone
-    # manually deleted the shared library file.
-    if available_checksum != cur_checksum or not lib_file.exists():
-        module = Extension(name, sources=[str(source_file)])
-        verbosity = '--verbose' if sys.flags.verbose else '--quiet'
-        args = [verbosity, 'build', 'install_lib', '-f', f'--install-dir={DIR}', 'clean']
-        setup(
-            script_name='setup',
-            script_args=args,
-            name=name,
-            version='1.0',
-            description='',
-            ext_modules=[module]
-        )
-
-        # write new checksum
-        with open(checksum_file, "w") as f:
-            f.write(cur_checksum)
-
-        # IMPORTANT:
-        # Invalidate caches after creating the native module.
-        # FileFinder caches directory contents, and the check for directory
-        # changes has whole-second precision, so it can miss quick updates.
-        invalidate_caches()
-
-    # ensure file was really written
-    if GRAALPYTHON:
-        file_not_empty(lib_file)
-
-
-def file_not_empty(path):
-    for i in range(3):
-        try:
-            stat_result = os.stat(path)
-            if stat_result[6] != 0:
-                return
-        except FileNotFoundError:
-            pass
-    raise SystemError("file %s not available" % path)
-
-resulttype_mapping = {'s': 'const char *', 'y': 'const char *', 'z': 'const char *', 'u': 'const wchar_t *', 'U': 'const char *', 
+resulttype_mapping = {'s': 'const char *', 'y': 'const char *', 'z': 'const char *', 'u': 'const wchar_t *', 'U': 'const char *',
                       'i': 'int', 'b': 'char', 'h': 'short int', 'l': 'long int', 'B': 'unsigned char', 'H': 'unsigned short int',
-                      'I': 'unsigned int', 'k': 'unsigned long', 'L': 'long long', 'K': 'unsigned long long', 'n': 'Py_ssize_t', 
-                      'c': 'char', 'C': 'int', 'd': 'double', 'f': 'float', 'D': 'Py_complex *', 'O': 'PyObject *', 
+                      'I': 'unsigned int', 'k': 'unsigned long', 'L': 'long long', 'K': 'unsigned long long', 'n': 'Py_ssize_t',
+                      'c': 'char', 'C': 'int', 'd': 'double', 'f': 'float', 'D': 'Py_complex *', 'O': 'PyObject *',
                       'S': 'PyObject *', 'N': 'PyObject *'}
 
 c_template = """
@@ -301,6 +222,9 @@ static PyObject* test_{capifunction}(PyObject* module, PyObject* args) {{
 #endif
 
     res = {callfunction}({argumentnames}{resultvarlocations});
+    if (PyErr_Occurred()) {{
+        return NULL;
+    }}
 
     return Py_BuildValue("{resultspec}", res {resultvarnames});
 }}
@@ -327,13 +251,13 @@ PyInit_{capifunction}(void)
 """
 
 
-class CPyExtFunction():
+class CPyExtFunction:
 
     def __init__(self, pfunc, parameters, template=c_template, cmpfunc=None, stderr_validator=None, **kwargs):
         self.template = template
         self.pfunc = pfunc
         self.parameters = parameters
-        kwargs["name"] = kwargs["name"] if "name" in kwargs else None
+        kwargs.setdefault("name", None)
         self.name = kwargs["name"]
         if "code" in kwargs:
             kwargs["customcode"] = kwargs["code"]
@@ -388,12 +312,28 @@ class CPyExtFunction():
     def __repr__(self):
         return "<CPyExtFunction %s>" % self.name
 
-    def test(self):
-        sys.path.insert(0, str(DIR))
+    def __set_name__(self, owner, name):
+        if self.name:
+            raise RuntimeError(f"{type(self)} already assigned to a test suite. Use copy() method to duplicate a test")
+        self.name = name.removeprefix('test_')
+        self.__name__ = name
+        self.__qualname__ = f'{owner.__qualname__}.{name}'
+
+    def copy(self):
+        inst = deepcopy(self)
+        inst.name = None
+        return inst
+
+    @property
+    def __code__(self):
+        return type(self).__call__.__code__
+
+    def __call__(self):
         try:
-            cmodule = __import__(self.name)
-        finally:
-            sys.path.pop(0)
+            self.create_module(self.name)
+            cmodule = compile_module_from_file(self.name)
+        except Exception as e:
+            raise RuntimeError(f"{self.__qualname__}: Failed to create module") from e
         ctest = getattr(cmodule, "test_%s" % self.name)
         cargs = self.parameters()
         pargs = self.parameters()
@@ -403,7 +343,7 @@ class CPyExtFunction():
                 sys.stderr = StringIO()
             try:
                 cresult = ctest(cargs[i])
-            except BaseException as e:
+            except Exception as e:
                 cresult = e
             else:
                 if self.stderr_validator:
@@ -417,19 +357,12 @@ class CPyExtFunction():
             except BaseException as e:
                 presult = e
 
-            if not self.cmpfunc:
-                assert cresult == presult, ("%r == %r in %s(%s)" % (cresult, presult, self.name, pargs[i]))
+            if self.cmpfunc:
+                success = self.cmpfunc(cresult, presult)
             else:
-                assert self.cmpfunc(cresult, presult), ("%r == %r in %s(%s)" % (cresult, presult, self.name, pargs[i]))
+                success = cresult == presult
+            assert success, f"{self.__qualname__}: C result not equal to python reference implementation result.\n\tArguments: {pargs[i]!r}\n\tExpected result: {presult!r}\n\tActual C result: {cresult!r}"
         gc.collect()
-
-    def __get__(self, instance, typ=None):
-        if typ is None:
-            return self
-        else:
-            CPyExtFunction.test.__name__ = self.name
-            CPyExtFunction.test.__qualname__ = f'{CPyExtFunction.__name__}.test_{self.name}'
-            return self.test
 
 
 class CPyExtFunctionOutVars(CPyExtFunction):
@@ -497,7 +430,51 @@ class UnseenFormatter(Formatter):
 
 
 def CPyExtType(name, code='', **kwargs):
-    template = """
+    kwargs['set_base_code'] = ''
+    # We set tp_base later, because MSVC doesn't see the usual &PySomething_Type expressions as constants
+    if tp_base := kwargs.get('tp_base'):
+        kwargs['set_base_code'] = f'{name}Type.tp_base = {tp_base};'
+    mod_template = textwrap.dedent("""
+    static PyModuleDef {name}module = {{
+        PyModuleDef_HEAD_INIT,
+        "{name}",
+        "",
+        -1,
+        NULL, NULL, NULL, NULL, NULL
+    }};
+
+    PyMODINIT_FUNC
+    PyInit_{name}(void)
+    {{
+        PyObject* m = PyModule_Create(&{name}module);
+        if (m == NULL)
+            return NULL;
+
+        {set_base_code}
+        {ready_code}
+        if (PyType_Ready(&{name}Type) < 0)
+            return NULL;
+        {post_ready_code}
+
+
+        Py_INCREF(&{name}Type);
+        PyModule_AddObject(m, "{name}", (PyObject *)&{name}Type);
+        return m;
+    }}
+    """)
+    type_decl = CPyExtTypeDecl(name, code, **kwargs)
+
+    kwargs["name"] = name
+    kwargs.setdefault("ready_code", "")
+    kwargs.setdefault("post_ready_code", "")
+    c_source = type_decl + UnseenFormatter().format(mod_template, **kwargs)
+
+    cmodule = compile_module_from_string(c_source, name)
+    return getattr(cmodule, name)
+
+
+def CPyExtTypeDecl(name, code='', **kwargs):
+    template = textwrap.dedent("""
     #include "Python.h"
     /* structmember.h is not included by default in Python.h */
     #include "structmember.h"
@@ -557,15 +534,22 @@ def CPyExtType(name, code='', **kwargs):
     }};
 
     static PySequenceMethods {name}_sequence_methods = {{
-        {sq_length},        /* sq_length */
-        0,                  /* sq_concat */
-        0,                  /* sq_repeat */
-        {sq_item},          /* sq_item */
+        {sq_length},         /* sq_length */
+        {sq_concat},         /* sq_concat */
+        {sq_repeat},         /* sq_repeat */
+        {sq_item},           /* sq_item */
+        0,                   /* was_sq_slice */
+        {sq_ass_item},       /* sq_ass_item */
+        0,                   /* was_sq_ass_slice */
+        {sq_contains},       /* sq_contains */
+        {sq_inplace_concat}, /* sq_inplace_concat */
+        {sq_inplace_repeat}, /* sq_inplace_repeat */
     }};
 
     static PyMappingMethods {name}_mapping_methods = {{
         {mp_length},        /* mp_length */
         {mp_subscript},     /* mp_subscript */
+        {mp_ass_subscript}, /* mp_subscript */
     }};
 
     static struct PyMethodDef {name}_methods[] = {{
@@ -614,7 +598,7 @@ def CPyExtType(name, code='', **kwargs):
         {name}_methods,             /* tp_methods */
         {name}_members,             /* tp_members */
         {name}_getset,              /* tp_getset */
-        {tp_base},                  /* tp_base */
+        0, /* set later */          /* tp_base */
         {tp_dict},                  /* tp_dict */
         {tp_descr_get},             /* tp_descr_get */
         {tp_descr_set},             /* tp_descr_set */
@@ -623,6 +607,63 @@ def CPyExtType(name, code='', **kwargs):
         {tp_alloc},                 /* tp_alloc */
         {tp_new},                   /* tp_new */
         {tp_free},                  /* tp_free */
+    }};""")
+
+    kwargs["name"] = name
+    kwargs["code"] = textwrap.dedent(code)
+    kwargs.setdefault("tp_name", f"{name}.{name}")
+    kwargs.setdefault("tp_itemsize", "0")
+    kwargs.setdefault("tp_new", "PyType_GenericNew")
+    kwargs.setdefault("tp_alloc", "PyType_GenericAlloc")
+    # IMPORTANT: do not set 'tp_free'
+    kwargs.setdefault("tp_flags", "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE")
+    kwargs.setdefault("cmembers", "")
+    kwargs.setdefault("includes", "")
+    kwargs.setdefault("struct_base", "PyObject_HEAD")
+    return UnseenFormatter().format(template, **kwargs)
+
+
+def CPyExtHeapType(name, bases=(object), code='', slots=None, **kwargs):
+    '''
+    :param bases: tuple of baseclasses to be used for PyType_FromSpecWithBases
+    :param slots: array of slots as strings in format "{Py_sq_length, &my_sq_len}"
+    '''
+    template = textwrap.dedent("""
+    #include "Python.h"
+    /* structmember.h is not included by default in Python.h */
+    #include "structmember.h"
+
+    #if !GRAALVM_PYTHON && (PY_VERSION_HEX < 0x03090000)
+    #define Py_SET_REFCNT(ob, v) ((_PyObject_CAST(ob)->ob_refcnt = (v)))
+    #define Py_SET_TYPE(ob, v)   ((_PyObject_CAST(ob)->ob_type) = (v))
+    #define Py_SET_SIZE(ob, v)   ((_PyVarObject_CAST(ob)->ob_size = (Py_ssize_t) (v)))
+    #endif
+
+    {includes}
+
+    typedef struct {{
+        {struct_base}
+        {cmembers}
+    }} {name}Object;
+
+    {code}
+
+    static PyObject* create(PyObject* unused, PyObject* bases) {{
+        PyType_Slot slots[] = {{
+            {slots}
+        }};
+        PyType_Spec spec = {{ "{name}", sizeof({name}Object), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, slots }};
+        {ready_code}
+        PyObject* type = PyType_FromSpecWithBases(&spec, bases);
+        if (type == NULL)
+            return NULL;
+        {post_ready_code}
+        return type;
+    }}
+
+    static PyMethodDef ModMethods[] = {{
+        {{"create",  &create, METH_O, "Create the type."}},
+        {{NULL, NULL, 0, NULL}}
     }};
 
     static PyModuleDef {name}module = {{
@@ -630,7 +671,8 @@ def CPyExtType(name, code='', **kwargs):
         "{name}",
         "",
         -1,
-        NULL, NULL, NULL, NULL, NULL
+        ModMethods,
+        NULL, NULL, NULL, NULL
     }};
 
     PyMODINIT_FUNC
@@ -639,53 +681,21 @@ def CPyExtType(name, code='', **kwargs):
         PyObject* m = PyModule_Create(&{name}module);
         if (m == NULL)
             return NULL;
-
-        {ready_code}
-        if (PyType_Ready(&{name}Type) < 0)
-            return NULL;
-        {post_ready_code}
-
-
-        Py_INCREF(&{name}Type);
-        PyModule_AddObject(m, "{name}", (PyObject *)&{name}Type);
         return m;
     }}
-    """
-
+    """)
     kwargs["name"] = name
     kwargs["code"] = code
-    kwargs.setdefault("ready_code", "")
-    kwargs.setdefault("post_ready_code", "")
-    kwargs.setdefault("tp_name", f"{name}.{name}")
-    kwargs.setdefault("tp_itemsize", "0")
-    kwargs.setdefault("tp_new", "PyType_GenericNew")
-    kwargs.setdefault("tp_alloc", "PyType_GenericAlloc")
-    kwargs.setdefault("tp_free", "PyObject_Del")
-    kwargs.setdefault("tp_flags", "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE")
-    kwargs.setdefault("cmembers", "")
+    kwargs["slots"] = '{0}' if slots is None else ',\n'.join(slots + ['{0}'])
     kwargs.setdefault("includes", "")
     kwargs.setdefault("struct_base", "PyObject_HEAD")
-    c_source = UnseenFormatter().format(template, **kwargs)
-
-    source_file = DIR / f'{name}.c'
-    with open(source_file, "wb", buffering=0) as f:
-        f.write(bytes(c_source, 'utf-8'))
-
-    # ensure file was really written
-    try:
-        stat_result = os.stat(source_file)
-        if stat_result[6] == 0:
-            raise SystemError("empty source file %s" % (source_file,))
-    except FileNotFoundError:
-        raise SystemError("source file %s not available" % (source_file,))
-
-    ccompile(None, name)
-    sys.path.insert(0, str(DIR))
-    try:
-        cmodule = __import__(name)
-    finally:
-        sys.path.pop(0)
-    return getattr(cmodule, name)
+    kwargs.setdefault("cmembers", "")
+    kwargs.setdefault("ready_code", "")
+    kwargs.setdefault("post_ready_code", "")
+    code = UnseenFormatter().format(template, **kwargs)
+    mod = compile_module_from_string(code, name)
+    return mod.create(bases)
 
 
-CPyExtTestCase.compile_module = ccompile
+# Avoiding duplicate names requires larger refactoring
+CPyExtTestCase.compile_module = lambda self, name: ccompile(self, name, check_duplicate_name=False)

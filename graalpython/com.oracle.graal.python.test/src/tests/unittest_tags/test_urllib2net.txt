@@ -1,11 +1,16 @@
-*graalpython.lib-python.3.test.test_urllib2net.CloseSocketTest.test_close
-*graalpython.lib-python.3.test.test_urllib2net.OtherNetworkTests.test_custom_headers
-*graalpython.lib-python.3.test.test_urllib2net.OtherNetworkTests.test_file
-*graalpython.lib-python.3.test.test_urllib2net.OtherNetworkTests.test_ftp
-*graalpython.lib-python.3.test.test_urllib2net.OtherNetworkTests.test_redirect_url_withfrag
-*graalpython.lib-python.3.test.test_urllib2net.OtherNetworkTests.test_sites_no_connection_close
-*graalpython.lib-python.3.test.test_urllib2net.OtherNetworkTests.test_urlwithfrag
-*graalpython.lib-python.3.test.test_urllib2net.TimeoutTest.test_http_basic
-*graalpython.lib-python.3.test.test_urllib2net.TimeoutTest.test_http_default_timeout
-*graalpython.lib-python.3.test.test_urllib2net.TimeoutTest.test_http_no_timeout
-*graalpython.lib-python.3.test.test_urllib2net.TimeoutTest.test_http_timeout
+test.test_urllib2net.CloseSocketTest.test_close @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.OtherNetworkTests.test_custom_headers @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.OtherNetworkTests.test_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+# Connecting to external page that sometimes times out
+!test.test_urllib2net.OtherNetworkTests.test_ftp
+test.test_urllib2net.OtherNetworkTests.test_ftp_no_leak @ linux-aarch64-github,linux-x86_64-github
+test.test_urllib2net.OtherNetworkTests.test_redirect_url_withfrag @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.OtherNetworkTests.test_urlwithfrag @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_ftp_basic @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_ftp_default_timeout @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_ftp_no_timeout @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_ftp_timeout @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_http_basic @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_http_default_timeout @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_http_no_timeout @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github
+test.test_urllib2net.TimeoutTest.test_http_timeout @ linux-aarch64-github,linux-x86_64-github,win32-AMD64-github

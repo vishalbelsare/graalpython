@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,15 +52,15 @@ import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.set.PSet;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.runtime.PythonOptions;
-import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.util.ArrayBuilder;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -80,6 +80,11 @@ import com.oracle.truffle.api.nodes.Node;
 public abstract class ExecutePositionalStarargsNode extends Node {
     public abstract Object[] executeWith(Frame frame, Object starargs);
 
+    @TruffleBoundary
+    public static Object[] executeUncached(Object starargs) {
+        return getUncached().executeWith(null, starargs);
+    }
+
     @Specialization
     static Object[] doObjectArray(Object[] starargs) {
         return starargs;
@@ -87,14 +92,14 @@ public abstract class ExecutePositionalStarargsNode extends Node {
 
     @Specialization
     static Object[] doTuple(PTuple starargs,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("toArray") @Cached SequenceStorageNodes.ToArrayNode toArray) {
         return toArray.execute(inliningTarget, starargs.getSequenceStorage());
     }
 
     @Specialization
     static Object[] doList(PList starargs,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("toArray") @Cached SequenceStorageNodes.ToArrayNode toArray) {
         return toArray.execute(inliningTarget, starargs.getSequenceStorage());
     }
@@ -104,44 +109,43 @@ public abstract class ExecutePositionalStarargsNode extends Node {
 
     @Specialization
     static Object[] doDict(PDict starargs,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("doHashingStorage") @Cached ExecutePositionalStarargsDictStorageNode node) {
         return node.execute(inliningTarget, starargs.getDictStorage());
     }
 
     @Specialization
     static Object[] doSet(PSet starargs,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("doHashingStorage") @Cached ExecutePositionalStarargsDictStorageNode node) {
         return node.execute(inliningTarget, starargs.getDictStorage());
     }
 
     @Specialization
     static Object[] doNone(PNone none,
-                    @Shared("raise") @Cached PRaiseNode raise) {
-        throw raise.raise(PythonErrorType.TypeError, ErrorMessages.ARG_AFTER_MUST_BE_ITERABLE, none);
+                    @Bind Node inliningTarget) {
+        throw PRaiseNode.raiseStatic(inliningTarget, PythonErrorType.TypeError, ErrorMessages.ARG_AFTER_MUST_BE_ITERABLE, none);
     }
 
     @Specialization
     static Object[] starargs(VirtualFrame frame, Object object,
-                    @Bind("this") Node inliningTarget,
-                    @Shared("raise") @Cached PRaiseNode raise,
+                    @Bind Node inliningTarget,
+                    @Cached PRaiseNode raise,
                     @Cached PyObjectGetIter getIter,
-                    @Cached GetNextNode nextNode,
-                    @Cached IsBuiltinObjectProfile errorProfile) {
+                    @Cached PyIterNextNode nextNode) {
         Object iterator = getIter.execute(frame, inliningTarget, object);
         if (iterator != PNone.NO_VALUE && iterator != PNone.NONE) {
             ArrayBuilder<Object> internalStorage = new ArrayBuilder<>();
             while (true) {
                 try {
-                    internalStorage.add(nextNode.execute(frame, iterator));
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, errorProfile);
+                    Object next = nextNode.execute(frame, inliningTarget, iterator);
+                    internalStorage.add(next);
+                } catch (IteratorExhausted e) {
                     return internalStorage.toArray(new Object[0]);
                 }
             }
         }
-        throw raise.raise(PythonErrorType.TypeError, ErrorMessages.ARG_AFTER_MUST_BE_ITERABLE, object);
+        throw raise.raise(inliningTarget, PythonErrorType.TypeError, ErrorMessages.ARG_AFTER_MUST_BE_ITERABLE, object);
     }
 
     @NeverDefault

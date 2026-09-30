@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,14 +41,15 @@
 
 #include "capi.h"
 
-PyObject marker_struct = {
+static PyObject marker_struct = {
     _PyObject_EXTRA_INIT
-    1, &PyBaseObject_Type
+    { _Py_IMMORTAL_REFCNT },
+    &PyBaseObject_Type
 };
 
 int PyContextVar_Get(PyObject *var, PyObject *default_value, PyObject **value) {
     static void *error_marker = &marker_struct;
-    PyObject *res = GraalPyTruffleContextVar_Get(var, default_value, error_marker);
+    PyObject *res = GraalPyPrivate_ContextVar_Get(var, default_value, error_marker);
     if ((void *)res == error_marker) {
         *value = NULL;
         return -1;

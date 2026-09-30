@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import static com.oracle.graal.python.nodes.ErrorMessages.S_ENCODER_RETURNED_P_I
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.RuntimeWarning;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.modules.CodecsModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -53,7 +54,7 @@ import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
@@ -116,7 +117,7 @@ public abstract class PyUnicodeAsEncodedString extends PNodeWithContext {
     @Specialization(guards = {"isString(unicode)", "isCommon(encoding, toJavaStringNode)"})
     static Object doCommon(VirtualFrame frame, Object unicode, TruffleString encoding, TruffleString errors,
                     @Shared @Cached(inline = false) CodecsModuleBuiltins.CodecsEncodeNode encodeNode,
-                    @SuppressWarnings("unused") @Shared("ts2js") @Cached(inline = false) TruffleString.ToJavaStringNode toJavaStringNode) {
+                    @SuppressWarnings("unused") @Shared("ts2js") @Cached TruffleString.ToJavaStringNode toJavaStringNode) {
         return encodeNode.execute(frame, unicode, encoding, errors);
     }
 
@@ -127,8 +128,8 @@ public abstract class PyUnicodeAsEncodedString extends PNodeWithContext {
                     @Cached InlinedConditionProfile isByteArrayProfile,
                     @Cached SequenceStorageNodes.CopyNode copyNode,
                     @Cached(inline = false) WarningsModuleBuiltins.WarnNode warnNode,
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
-                    @SuppressWarnings("unused") @Shared("ts2js") @Cached(inline = false) TruffleString.ToJavaStringNode toJavaStringNode) {
+                    @Exclusive @Cached PRaiseNode raiseNode,
+                    @SuppressWarnings("unused") @Shared("ts2js") @Cached TruffleString.ToJavaStringNode toJavaStringNode) {
         final Object v = encodeNode.execute(frame, unicode, encoding, errors);
         // the normal path
         if (isBytesProfile.profile(inliningTarget, v instanceof PBytes)) {
@@ -137,10 +138,10 @@ public abstract class PyUnicodeAsEncodedString extends PNodeWithContext {
         // If the codec returns a buffer, raise a warning and convert to bytes
         if (isByteArrayProfile.profile(inliningTarget, v instanceof PByteArray)) {
             warnNode.warnFormat(frame, RuntimeWarning, ENCODER_S_RETURNED_S_INSTEAD_OF_BYTES, encoding, "bytearray");
-            return PythonContext.get(inliningTarget).factory().createBytes(copyNode.execute(inliningTarget, ((PByteArray) v).getSequenceStorage()));
+            return PFactory.createBytes(PythonLanguage.get(inliningTarget), copyNode.execute(inliningTarget, ((PByteArray) v).getSequenceStorage()));
         }
 
-        throw raiseNode.get(inliningTarget).raise(TypeError, S_ENCODER_RETURNED_P_INSTEAD_OF_BYTES, encoding, v);
+        throw raiseNode.raise(inliningTarget, TypeError, S_ENCODER_RETURNED_P_INSTEAD_OF_BYTES, encoding, v);
     }
 
     @Specialization(guards = {"isString(unicode)", "isNoValue(encoding)"})
@@ -150,9 +151,9 @@ public abstract class PyUnicodeAsEncodedString extends PNodeWithContext {
     }
 
     @Specialization(guards = "!isString(unicode)")
-    @SuppressWarnings({"unused", "truffle-static-method"})
+    @SuppressWarnings("unused")
     static Object doGeneric(VirtualFrame frame, Node inliningTarget, Object unicode, Object encoding, Object errors,
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-        throw raiseNode.get(inliningTarget).raiseBadInternalCall();
+                    @Exclusive @Cached PRaiseNode raiseNode) {
+        throw raiseNode.raiseBadInternalCall(inliningTarget);
     }
 }

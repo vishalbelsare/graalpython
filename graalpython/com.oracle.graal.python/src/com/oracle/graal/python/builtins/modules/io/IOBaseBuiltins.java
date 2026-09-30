@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -77,8 +77,6 @@ import static com.oracle.graal.python.nodes.ErrorMessages.S_SHOULD_RETURN_BYTES_
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_FILENO;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ENTER__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EXIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_FILENO;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.IOUnsupportedOperation;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.OSError;
@@ -87,8 +85,11 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueErr
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -96,29 +97,32 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.IteratorExhausted;
 import com.oracle.graal.python.lib.PyErrChainExceptions;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectIsTrueNode;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
+import com.oracle.graal.python.lib.PyObjectSetAttr;
 import com.oracle.graal.python.lib.PyObjectSizeNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.SetAttributeNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.object.IsNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.ArrayBuilder;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.dsl.Bind;
@@ -139,6 +143,7 @@ import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PIOBase)
 public final class IOBaseBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = IOBaseBuiltinsSlotsGen.SLOTS;
 
     // taken from usr/include/stdio.h
     public static final int BUFSIZ = 8192;
@@ -154,7 +159,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
 
         @Specialization
         static boolean closed(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectLookupAttr lookup) {
             return isClosed(inliningTarget, self, frame, lookup);
         }
@@ -200,9 +205,9 @@ public final class IOBaseBuiltins extends PythonBuiltins {
         static PNone doIt(VirtualFrame frame, Node inliningTarget, PythonObject self,
                         @Cached PyObjectGetAttr getAttr,
                         @Cached PyObjectIsTrueNode isTrueNode,
-                        @Cached PRaiseNode.Lazy lazyRaiseNode) {
-            if (isTrueNode.execute(frame, inliningTarget, getAttr.execute(frame, inliningTarget, self, T_CLOSED))) {
-                throw lazyRaiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.IO_CLOSED);
+                        @Cached PRaiseNode raiseNode) {
+            if (isTrueNode.execute(frame, getAttr.execute(frame, inliningTarget, self, T_CLOSED))) {
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.IO_CLOSED);
             }
             return PNone.NONE;
         }
@@ -213,7 +218,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class CheckClosedNode extends PythonUnaryBuiltinNode {
         @Specialization
         Object doCheckClosed(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckClosedHelperNode helper) {
             return helper.execute(frame, inliningTarget, self);
         }
@@ -241,14 +246,14 @@ public final class IOBaseBuiltins extends PythonBuiltins {
         static boolean doIt(VirtualFrame frame, Node inliningTarget, Object self, TruffleString method, TruffleString errorMessage,
                         @Cached PyObjectCallMethodObjArgs callMethod,
                         @Cached(inline = false) IsNode isNode,
-                        @Cached PRaiseNode.Lazy lazyRaiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             CompilerAsserts.partialEvaluationConstant(method);
             CompilerAsserts.partialEvaluationConstant(errorMessage);
             Object v = callMethod.execute(frame, inliningTarget, self, method);
             if (isNode.isTrue(v)) {
                 return true;
             }
-            throw unsupported(lazyRaiseNode.get(inliningTarget), errorMessage);
+            throw unsupported(inliningTarget, raiseNode, errorMessage);
         }
     }
 
@@ -257,7 +262,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class CheckSeekableNode extends PythonUnaryBuiltinNode {
         @Specialization
         boolean doCheckSeekable(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckBoolMethodHelperNode helper) {
             return helper.checkSeekable(frame, inliningTarget, self);
         }
@@ -268,7 +273,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class CheckReadableNode extends PythonUnaryBuiltinNode {
         @Specialization
         boolean doCheckReadable(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckBoolMethodHelperNode helper) {
             return helper.checkReadable(frame, inliningTarget, self);
         }
@@ -279,7 +284,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class CheckWritableNode extends PythonUnaryBuiltinNode {
         @Specialization
         boolean doCheckWritable(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckBoolMethodHelperNode helper) {
             return helper.checkWriteable(frame, inliningTarget, self);
         }
@@ -291,10 +296,10 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class CloseNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PNone close(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod,
                         @Cached PyObjectLookupAttr lookup,
-                        @Cached("create(T___IOBASE_CLOSED)") SetAttributeNode setAttributeNode,
+                        @Cached PyObjectSetAttr setAttributeNode,
                         @Cached InlinedBranchProfile errorProfile,
                         @Cached PyErrChainExceptions chainExceptions) {
             if (!isClosed(inliningTarget, self, frame, lookup)) {
@@ -303,13 +308,13 @@ public final class IOBaseBuiltins extends PythonBuiltins {
                 } catch (PException e) {
                     errorProfile.enter(inliningTarget);
                     try {
-                        setAttributeNode.execute(frame, self, true);
+                        setAttributeNode.execute(frame, inliningTarget, self, T___IOBASE_CLOSED, true);
                     } catch (PException e1) {
                         throw chainExceptions.execute(inliningTarget, e1, e);
                     }
                     throw e;
                 }
-                setAttributeNode.execute(frame, self, true);
+                setAttributeNode.execute(frame, inliningTarget, self, T___IOBASE_CLOSED, true);
             }
             return PNone.NONE;
         }
@@ -321,23 +326,24 @@ public final class IOBaseBuiltins extends PythonBuiltins {
 
         @Specialization
         static PNone flush(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectLookupAttr lookup,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             if (isClosed(inliningTarget, self, frame, lookup)) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.IO_CLOSED);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.IO_CLOSED);
             }
             return PNone.NONE;
         }
     }
 
-    @Builtin(name = J_SEEK, minNumOfPositionalArgs = 1, takesVarArgs = true)
+    @Builtin(name = J_SEEK, minNumOfPositionalArgs = 2, parameterNames = {"$self", "offset", "whence"})
     @GenerateNodeFactory
-    abstract static class SeekNode extends PythonBuiltinNode {
+    abstract static class SeekNode extends PythonTernaryBuiltinNode {
         @Specialization
-        static Object seek(@SuppressWarnings("unused") PythonObject self, @SuppressWarnings("unused") Object args,
+        static Object seek(@SuppressWarnings("unused") PythonObject self, @SuppressWarnings("unused") Object offset, @SuppressWarnings("unused") Object whence,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode) {
-            throw unsupported(raiseNode, T_SEEK);
+            throw unsupported(inliningTarget, raiseNode, T_SEEK);
         }
     }
 
@@ -346,8 +352,9 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class TruncateNode extends PythonBuiltinNode {
         @Specialization
         static Object truncate(@SuppressWarnings("unused") PythonObject self,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode) {
-            throw unsupported(raiseNode, T_TRUNCATE);
+            throw unsupported(inliningTarget, raiseNode, T_TRUNCATE);
         }
     }
 
@@ -356,7 +363,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class TellNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object tell(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self, T_SEEK, 0, 1);
         }
@@ -367,7 +374,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class EnterNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PythonObject enter(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckClosedHelperNode checkClosedNode) {
             checkClosedNode.execute(frame, inliningTarget, self);
             return self;
@@ -379,7 +386,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class ExitNode extends PythonBuiltinNode {
         @Specialization
         static Object exit(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self, T_CLOSE);
         }
@@ -390,8 +397,9 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class FilenoNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object fileno(@SuppressWarnings("unused") PythonObject self,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode) {
-            throw unsupported(raiseNode, T_FILENO);
+            throw unsupported(inliningTarget, raiseNode, T_FILENO);
         }
     }
 
@@ -400,37 +408,36 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class IsattyNode extends PythonUnaryBuiltinNode {
         @Specialization
         static boolean isatty(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckClosedHelperNode checkClosedNode) {
             checkClosedNode.execute(frame, inliningTarget, self);
             return false;
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PythonObject iter(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckClosedHelperNode checkClosedNode) {
             checkClosedNode.execute(frame, inliningTarget, self);
             return self;
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    abstract static class NextNode extends PythonUnaryBuiltinNode {
+    abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object next(VirtualFrame frame, PythonObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod,
-                        @Cached PyObjectSizeNode sizeNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PyObjectSizeNode sizeNode) {
             Object line = callMethod.execute(frame, inliningTarget, self, T_READLINE);
             if (sizeNode.execute(frame, inliningTarget, line) <= 0) {
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
             return line;
         }
@@ -441,20 +448,18 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     abstract static class WriteLinesNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object writeLines(VirtualFrame frame, PythonObject self, Object lines,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CheckClosedHelperNode checkClosedNode,
-                        @Cached GetNextNode getNextNode,
-                        @Cached IsBuiltinObjectProfile errorProfile,
                         @Cached PyObjectCallMethodObjArgs callMethod,
-                        @Cached PyObjectGetIter getIter) {
+                        @Cached PyObjectGetIter getIter,
+                        @Cached PyIterNextNode nextNode) {
             checkClosedNode.execute(frame, inliningTarget, self);
             Object iter = getIter.execute(frame, inliningTarget, lines);
             while (true) {
                 Object line;
                 try {
-                    line = getNextNode.execute(frame, iter);
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, errorProfile);
+                    line = nextNode.execute(frame, inliningTarget, iter);
+                } catch (IteratorExhausted e) {
                     break;
                 }
                 callMethod.execute(frame, inliningTarget, self, T_WRITE, line);
@@ -479,15 +484,15 @@ public final class IOBaseBuiltins extends PythonBuiltins {
          */
         @Specialization
         static PBytes readline(VirtualFrame frame, Object self, int limit,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached PyObjectLookupAttr lookupPeek,
                         @Cached CallNode callPeek,
                         @Cached PyObjectCallMethodObjArgs callRead,
                         @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib,
                         @Cached InlinedConditionProfile hasPeek,
                         @Cached InlinedConditionProfile isBytes,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             /* For backwards compatibility, a (slowish) readline(). */
             Object peek = lookupPeek.execute(frame, inliningTarget, self, T_PEEK);
             ByteArrayOutputStream buffer = createOutputStream();
@@ -497,7 +502,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
                     Object readahead = callPeek.execute(frame, peek, 1);
                     // TODO _PyIO_trap_eintr [GR-23297]
                     if (isBytes.profile(inliningTarget, !(readahead instanceof PBytes))) {
-                        throw raiseNode.get(inliningTarget).raise(OSError, S_SHOULD_RETURN_BYTES_NOT_P, "peek()", readahead);
+                        throw raiseNode.raise(inliningTarget, OSError, S_SHOULD_RETURN_BYTES_NOT_P, "peek()", readahead);
                     }
                     byte[] buf = bufferLib.getInternalOrCopiedByteArray(readahead);
                     int bufLen = bufferLib.getBufferLength(readahead);
@@ -514,7 +519,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
 
                 Object b = callRead.execute(frame, inliningTarget, self, T_READ, nreadahead);
                 if (isBytes.profile(inliningTarget, !(b instanceof PBytes))) {
-                    throw raiseNode.get(inliningTarget).raise(OSError, S_SHOULD_RETURN_BYTES_NOT_P, "read()", b);
+                    throw raiseNode.raise(inliningTarget, OSError, S_SHOULD_RETURN_BYTES_NOT_P, "read()", b);
                 }
                 byte[] bytes = bufferLib.getInternalOrCopiedByteArray(b);
                 int bytesLen = bufferLib.getBufferLength(b);
@@ -528,7 +533,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
                 }
             }
 
-            return factory.createBytes(toByteArray(buffer));
+            return PFactory.createBytes(language, toByteArray(buffer));
         }
     }
 
@@ -543,32 +548,31 @@ public final class IOBaseBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object withHint(VirtualFrame frame, Object self, int hintIn,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetNextNode next,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached InlinedConditionProfile isNegativeHintProfile,
-                        @Cached IsBuiltinObjectProfile errorProfile,
                         @Cached PyObjectGetIter getIter,
-                        @Cached PyObjectSizeNode sizeNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached PyIterNextNode nextNode,
+                        @Cached PyObjectSizeNode sizeNode) {
             int hint = isNegativeHintProfile.profile(inliningTarget, hintIn <= 0) ? Integer.MAX_VALUE : hintIn;
             int length = 0;
             Object iterator = getIter.execute(frame, inliningTarget, self);
             ArrayBuilder<Object> list = new ArrayBuilder<>();
             while (true) {
+                Object line;
                 try {
-                    Object line = next.execute(frame, iterator);
-                    list.add(line);
-                    int lineLength = sizeNode.execute(frame, inliningTarget, line);
-                    if (lineLength > hint - length) {
-                        break;
-                    }
-                    length += lineLength;
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, errorProfile);
+                    line = nextNode.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
                     break;
                 }
+                list.add(line);
+                int lineLength = sizeNode.execute(frame, inliningTarget, line);
+                if (lineLength > hint - length) {
+                    break;
+                }
+                length += lineLength;
             }
-            return factory.createList(list.toArray(new Object[0]));
+            return PFactory.createList(language, list.toArray(new Object[0]));
         }
     }
 
@@ -585,7 +589,7 @@ public final class IOBaseBuiltins extends PythonBuiltins {
     /**
      * Equivalent of {@code iobase_unsupported}.
      */
-    private static PException unsupported(PRaiseNode raiseNode, TruffleString message) {
-        throw raiseNode.raise(IOUnsupportedOperation, message);
+    private static PException unsupported(Node inliningTarget, PRaiseNode raiseNode, TruffleString message) {
+        throw raiseNode.raise(inliningTarget, IOUnsupportedOperation, message);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,19 +40,16 @@
  */
 package com.oracle.graal.python.lib;
 
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.complex.PComplex;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.util.LazyInteropLibrary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -64,9 +61,12 @@ import com.oracle.truffle.api.strings.TruffleString;
 @GenerateUncached
 @GenerateInline
 @GenerateCached(false)
-@ImportStatic(SpecialMethodSlot.class)
 public abstract class PyNumberCheckNode extends PNodeWithContext {
     public abstract boolean execute(Node inliningTarget, Object object);
+
+    public static boolean executeUncached(Object object) {
+        return PyNumberCheckNodeGen.getUncached().execute(null, object);
+    }
 
     @Specialization
     static boolean doString(@SuppressWarnings("unused") TruffleString object) {
@@ -103,18 +103,16 @@ public abstract class PyNumberCheckNode extends PNodeWithContext {
         return false;
     }
 
+    @Specialization
+    static boolean doComplex(@SuppressWarnings("unused") PComplex object) {
+        return true;
+    }
+
     @Fallback
     static boolean doOthers(Node inliningTarget, Object object,
-                    @Cached LazyInteropLibrary interopLibrary,
-                    @Cached GetClassNode getClassNode,
-                    @Cached(parameters = "Index", inline = false) LookupCallableSlotInMRONode lookupIndex,
-                    @Cached(parameters = "Float", inline = false) LookupCallableSlotInMRONode lookupFloat,
-                    @Cached(parameters = "Int", inline = false) LookupCallableSlotInMRONode lookupInt,
+                    @Cached GetObjectSlotsNode getSlots,
                     @Cached PyComplexCheckNode checkComplex) {
-        Object type = getClassNode.execute(inliningTarget, object);
-        if (type == PythonBuiltinClassType.ForeignObject) {
-            return interopLibrary.get(inliningTarget).isNumber(object);
-        }
-        return lookupIndex.execute(type) != PNone.NO_VALUE || lookupInt.execute(type) != PNone.NO_VALUE || lookupFloat.execute(type) != PNone.NO_VALUE || checkComplex.execute(inliningTarget, object);
+        TpSlots slots = getSlots.execute(inliningTarget, object);
+        return slots.nb_index() != null || slots.nb_int() != null || slots.nb_float() != null || checkComplex.execute(inliningTarget, object);
     }
 }

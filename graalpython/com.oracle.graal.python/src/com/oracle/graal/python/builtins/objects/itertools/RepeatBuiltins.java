@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,28 +43,36 @@ package com.oracle.graal.python.builtins.objects.itertools;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.nodes.ErrorMessages.LEN_OF_UNSIZED_OBJECT;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LENGTH_HINT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -73,18 +81,41 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PRepeat})
 public final class RepeatBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = RepeatBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return RepeatBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "repeat", minNumOfPositionalArgs = 2, parameterNames = {"$self", "object", "times"})
+    @GenerateNodeFactory
+    public abstract static class RepeatNode extends PythonTernaryBuiltinNode {
+
+        @Specialization
+        static Object construct(VirtualFrame frame, Object cls, Object object, Object timesObj,
+                        @Bind Node inliningTarget,
+                        @Cached PyNumberAsSizeNode asSizeNode,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            PRepeat self = PFactory.createRepeat(cls, getInstanceShape.execute(cls));
+            self.setElement(object);
+            if (timesObj != PNone.NO_VALUE) {
+                int times = asSizeNode.executeExact(frame, inliningTarget, timesObj);
+                self.setCnt(times > 0 ? times : 0);
+            } else {
+                self.setCnt(-1);
+            }
+            return self;
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -93,20 +124,18 @@ public final class RepeatBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization(guards = "self.getCnt() > 0")
         static Object nextPos(PRepeat self) {
             self.setCnt(self.getCnt() - 1);
             return self.getElement();
         }
 
-        @SuppressWarnings("unused")
         @Specialization(guards = "self.getCnt() == 0")
-        static Object nextZero(PRepeat self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raiseStopIteration();
+        static Object nextZero(@SuppressWarnings("unused") PRepeat self) {
+            throw iteratorExhausted();
         }
 
         @Specialization(guards = "self.getCnt() < 0")
@@ -126,38 +155,35 @@ public final class RepeatBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = "self.getCnt() < 0")
         static Object hintNeg(PRepeat self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, LEN_OF_UNSIZED_OBJECT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, LEN_OF_UNSIZED_OBJECT);
         }
     }
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         @Specialization
-        static Object reduce(PRepeat self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile negativeCountProfile,
-                        @Cached GetClassNode getClass,
-                        @Cached PythonObjectFactory factory) {
-            Object type = getClass.execute(inliningTarget, self);
+        static Object reduce(PRepeat self) {
+            PythonLanguage language = PythonLanguage.get(null);
+            Object type = GetClassNode.executeUncached(self);
             Object[] tupleElements;
-            if (negativeCountProfile.profile(inliningTarget, self.getCnt() < 0)) {
+            if (self.getCnt() < 0) {
                 tupleElements = new Object[]{self.getElement()};
             } else {
                 tupleElements = new Object[]{self.getElement(), self.getCnt()};
             }
-            PTuple tuple = factory.createTuple(tupleElements);
-            return factory.createTuple(new Object[]{type, tuple});
+            PTuple tuple = PFactory.createTuple(language, tupleElements);
+            return PFactory.createTuple(language, new Object[]{type, tuple});
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization(guards = "self.getCnt() >= 0")
         static TruffleString reprPos(VirtualFrame frame, PRepeat self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("getClass") @Cached GetClassNode getClass,
                         @Shared("getAttr") @Cached PyObjectGetAttr getAttrNode,
                         @Shared("repr") @Cached PyObjectReprAsObjectNode reprNode,
@@ -171,7 +197,7 @@ public final class RepeatBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "self.getCnt() < 0")
         static TruffleString reprNeg(VirtualFrame frame, PRepeat self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("getClass") @Cached GetClassNode getClass,
                         @Shared("getAttr") @Cached PyObjectGetAttr getAttrNode,
                         @Shared("repr") @Cached PyObjectReprAsObjectNode reprNode,

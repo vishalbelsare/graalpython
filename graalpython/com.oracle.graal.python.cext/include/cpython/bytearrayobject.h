@@ -1,4 +1,4 @@
-/* Copyright (c) 2022, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2022, 2024, Oracle and/or its affiliates.
  * Copyright (C) 1996-2022 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -16,12 +16,20 @@ typedef struct {
     Py_ssize_t ob_exports; /* How many buffer exports */
 } PyByteArrayObject;
 
-PyAPI_FUNC(char*) _PyByteArray_Start(PyObject*);
-
-/* Macros, trading safety for speed */
-#define PyByteArray_AS_STRING(self) \
-    (assert(PyByteArray_Check(self)), \
-     Py_SIZE(self) ? _PyByteArray_Start((PyObject *)self) : _PyByteArray_empty_string)
-#define PyByteArray_GET_SIZE(self) (assert(PyByteArray_Check(self)), Py_SIZE(self))
-
 PyAPI_DATA(char) _PyByteArray_empty_string[];
+
+/* Macros and static inline functions, trading safety for speed */
+#define _PyByteArray_CAST(op) \
+    (assert(PyByteArray_Check(op)), _Py_CAST(PyByteArrayObject*, op))
+
+static inline char* PyByteArray_AS_STRING(PyObject *op)
+{
+    return PyByteArray_AsString(op);
+}
+#define PyByteArray_AS_STRING(self) PyByteArray_AS_STRING(_PyObject_CAST(self))
+
+static inline Py_ssize_t PyByteArray_GET_SIZE(PyObject *op) {
+    PyByteArrayObject *self = _PyByteArray_CAST(op);
+    return Py_SIZE(self);
+}
+#define PyByteArray_GET_SIZE(self) PyByteArray_GET_SIZE(_PyObject_CAST(self))

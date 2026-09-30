@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -76,8 +76,10 @@ import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.tck.LanguageProvider;
 import org.graalvm.polyglot.tck.ResultVerifier;
+import org.graalvm.polyglot.tck.ResultVerifier.SnippetRun;
 import org.graalvm.polyglot.tck.Snippet;
 import org.graalvm.polyglot.tck.TypeDescriptor;
+import org.junit.Assert;
 
 public class PythonProvider implements LanguageProvider {
 
@@ -226,34 +228,43 @@ public class PythonProvider implements LanguageProvider {
     public Collection<? extends Snippet> createExpressions(Context context) {
         List<Snippet> snippets = new ArrayList<>();
 
+        TypeDescriptor numeric = union(BOOLEAN, NUMBER);
+        TypeDescriptor numericArray = array(numeric);
+
         // @formatter:off
-        addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", NUMBER, new NonPrimitiveNumberParameterThrows(AddVerifier.INSTANCE), union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
-        addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", union(STRING, array(ANY)), AddVerifier.INSTANCE, union(BOOLEAN, NUMBER), union(STRING, array(ANY)));
-        addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", union(STRING, array(ANY)), AddVerifier.INSTANCE, union(STRING, array(ANY)), union(BOOLEAN, NUMBER));
+        addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", NUMBER, new NonPrimitiveNumberParameterThrows(AddVerifier.INSTANCE), numeric, numeric);
+        addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", union(STRING, array(ANY)), AddVerifier.INSTANCE, numeric, union(STRING, array(ANY)));
+        addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", union(STRING, array(ANY)), AddVerifier.INSTANCE, union(STRING, array(ANY)), numeric);
         addExpressionSnippet(context, snippets, "+", "lambda x, y: x + y", union(STRING, array(ANY)), AddVerifier.INSTANCE, union(STRING, array(ANY)), union(STRING, array(ANY)));
-        addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", NUMBER, new NonPrimitiveNumberParameterThrows(MulVerifier.INSTANCE), union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
-        addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", union(STRING, array(ANY)), MulVerifier.INSTANCE, union(BOOLEAN, NUMBER), union(STRING, array(ANY)));
-        addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", union(STRING, array(ANY)), MulVerifier.INSTANCE, union(STRING, array(ANY)), union(BOOLEAN, NUMBER));
+
+        addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", NUMBER, new NonPrimitiveNumberParameterThrows(MulVerifier.INSTANCE), numeric, numeric);
+        addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", union(STRING, array(ANY)), MulVerifier.INSTANCE, numeric, union(STRING, array(ANY)));
+        addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", union(STRING, array(ANY)), MulVerifier.INSTANCE, union(STRING, array(ANY)), numeric);
         addExpressionSnippet(context, snippets, "*", "lambda x, y: x * y", union(STRING, array(ANY)), MulVerifier.INSTANCE, union(STRING, array(ANY)), union(STRING, array(ANY)));
 
-        addExpressionSnippet(context, snippets, "-", "lambda x, y: x - y", NUMBER, NonPrimitiveNumberParameterThrows.INSTANCE, union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
+        addExpressionSnippet(context, snippets, "-", "lambda x, y: x - y", NUMBER, NonPrimitiveNumberParameterThrows.INSTANCE, numeric, numeric);
 
-        addExpressionSnippet(context, snippets, "/", "lambda x, y: x / y", NUMBER, new NonPrimitiveNumberParameterThrows(PDivByZeroVerifier.INSTANCE), union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
+        addExpressionSnippet(context, snippets, "/", "lambda x, y: x / y", NUMBER, new NonPrimitiveNumberParameterThrows(PDivByZeroVerifier.INSTANCE), numeric, numeric);
 
         addExpressionSnippet(context, snippets, "list-from-foreign", "lambda x: list(x)", array(ANY), union(STRING, iterable(ANY), iterator(ANY), array(ANY), hash(ANY, ANY)));
 
         addExpressionSnippet(context, snippets, "==", "lambda x, y: x == y", BOOLEAN, ANY, ANY);
         addExpressionSnippet(context, snippets, "!=", "lambda x, y: x != y", BOOLEAN, ANY, ANY);
-        addExpressionSnippet(context, snippets, ">", "lambda x, y: x > y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
-        addExpressionSnippet(context, snippets, ">=", "lambda x, y: x >= y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
-        addExpressionSnippet(context, snippets, "<", "lambda x, y: x < y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
-        addExpressionSnippet(context, snippets, "<=", "lambda x, y: x <= y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, union(BOOLEAN, NUMBER), union(BOOLEAN, NUMBER));
+
+        addExpressionSnippet(context, snippets, ">", "lambda x, y: x > y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, numeric, numeric);
+        addExpressionSnippet(context, snippets, ">", "lambda x, y: x > y", BOOLEAN, ExpectTypeErrorForDifferentPythonSequenceTypes.INSTANCE, numericArray, numericArray);
+        addExpressionSnippet(context, snippets, ">=", "lambda x, y: x >= y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, numeric, numeric);
+        addExpressionSnippet(context, snippets, ">=", "lambda x, y: x >= y", BOOLEAN, ExpectTypeErrorForDifferentPythonSequenceTypes.INSTANCE, numericArray, numericArray);
+        addExpressionSnippet(context, snippets, "<", "lambda x, y: x < y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, numeric, numeric);
+        addExpressionSnippet(context, snippets, "<", "lambda x, y: x < y", BOOLEAN, ExpectTypeErrorForDifferentPythonSequenceTypes.INSTANCE, numericArray, numericArray);
+        addExpressionSnippet(context, snippets, "<=", "lambda x, y: x <= y", BOOLEAN, NonPrimitiveNumberParameterThrows.INSTANCE, numeric, numeric);
+        addExpressionSnippet(context, snippets, "<=", "lambda x, y: x <= y", BOOLEAN, ExpectTypeErrorForDifferentPythonSequenceTypes.INSTANCE, numericArray, numericArray);
 
         addExpressionSnippet(context, snippets, "isinstance", "lambda x, y: isinstance(x, y)", BOOLEAN, ANY, META_OBJECT);
         addExpressionSnippet(context, snippets, "issubclass", "lambda x, y: issubclass(x, y)", BOOLEAN, META_OBJECT, META_OBJECT);
 
-        addExpressionSnippet(context, snippets, "[]", "lambda x, y: x[y]", ANY, GetItemVerifier.INSTANCE, union(array(ANY), STRING, hash(ANY, ANY)), ANY);
-        addExpressionSnippet(context, snippets, "[a:b]", "lambda x: x[:]", union(STRING, array(ANY)), union(STRING, array(ANY)));
+        addExpressionSnippet(context, snippets, "[]", "lambda x, y: x[y]", ANY, GetItemVerifier.INSTANCE, union(array(ANY), STRING, hash(ANY, ANY), META_OBJECT), ANY);
+        addExpressionSnippet(context, snippets, "[a:b]", "lambda x: x[:]", union(STRING, array(ANY)), SliceVerifier.INSTANCE, union(STRING, array(ANY), META_OBJECT));
 
         // @formatter:on
         return snippets;
@@ -360,6 +371,35 @@ public class PythonProvider implements LanguageProvider {
     private abstract static class PResultVerifier implements ResultVerifier {
     }
 
+    private static class ExpectTypeErrorForDifferentPythonSequenceTypes extends PResultVerifier {
+
+        public void accept(SnippetRun snippetRun) throws PolyglotException {
+            List<? extends Value> parameters = snippetRun.getParameters();
+            assert parameters.size() == 2;
+
+            Value a = parameters.get(0);
+            Value b = parameters.get(1);
+
+            // If both parameter values are Python sequences, then ignore if they have different
+            // types. E.g. ignore '(1,2) < [3,4]'.
+            if (a.hasArrayElements() && b.hasArrayElements() && isPythonObject(a) && isPythonObject(b) && !a.getMetaObject().equals(b.getMetaObject())) {
+                // Expect TypeError
+                var exception = snippetRun.getException();
+                assert exception != null;
+                Assert.assertEquals("TypeError", exception.getGuestObject().getMetaObject().getMetaQualifiedName());
+            } else {
+                ResultVerifier.getDefaultResultVerifier().accept(snippetRun);
+            }
+        }
+
+        private static boolean isPythonObject(Value value) {
+            var metaObject = value.getMetaObject();
+            return metaObject.hasMember("__mro__");
+        }
+
+        private static final ExpectTypeErrorForDifferentPythonSequenceTypes INSTANCE = new ExpectTypeErrorForDifferentPythonSequenceTypes();
+    }
+
     /**
      * Only accepts exact matches of types.
      */
@@ -378,16 +418,16 @@ public class PythonProvider implements LanguageProvider {
                 if (par0.getMetaObject() == par1.getMetaObject()) {
                     assert snippetRun.getException() == null;
                     TypeDescriptor resultType = TypeDescriptor.forValue(snippetRun.getResult());
-                    assert array(ANY).isAssignable(resultType);
+                    assert array(ANY).isAssignable(resultType) : resultType;
                 }
             } else if (par0.isString() && par1.isString()) {
                 assert snippetRun.getException() == null;
                 TypeDescriptor resultType = TypeDescriptor.forValue(snippetRun.getResult());
-                assert STRING.isAssignable(resultType);
+                assert STRING.isAssignable(resultType) : resultType;
             } else if ((par0.isNumber() || par0.isBoolean()) && (par1.isNumber() || par1.isBoolean())) {
                 assert snippetRun.getException() == null;
                 TypeDescriptor resultType = TypeDescriptor.forValue(snippetRun.getResult());
-                assert NUMBER.isAssignable(resultType);
+                assert NUMBER.isAssignable(resultType) : resultType;
             } else {
                 assert snippetRun.getException() != null;
                 TypeDescriptor argType = union(STRING, BOOLEAN, NUMBER, array(ANY));
@@ -426,17 +466,17 @@ public class PythonProvider implements LanguageProvider {
                 // string * number => string
                 assert snippetRun.getException() == null;
                 TypeDescriptor resultType = TypeDescriptor.forValue(snippetRun.getResult());
-                assert STRING.isAssignable(resultType);
+                assert STRING.isAssignable(resultType) : resultType;
             } else if ((par0.isNumber() || par0.isBoolean()) && (par1.isNumber() || par1.isBoolean())) {
-                // number * number has greater precendence than array * number
+                // number * number has greater precedence than array * number
                 assert snippetRun.getException() == null;
                 TypeDescriptor resultType = TypeDescriptor.forValue(snippetRun.getResult());
-                assert NUMBER.isAssignable(resultType) : resultType.toString();
+                assert NUMBER.isAssignable(resultType) : resultType;
             } else if (isArrayMul(par0, par1) || isArrayMul(par1, par0)) {
                 // array * number => array
                 assert snippetRun.getException() == null;
                 TypeDescriptor resultType = TypeDescriptor.forValue(snippetRun.getResult());
-                assert array(ANY).isAssignable(resultType);
+                assert array(ANY).isAssignable(resultType) : resultType;
             } else {
                 assert snippetRun.getException() != null;
                 TypeDescriptor argType = union(STRING, BOOLEAN, NUMBER, array(ANY));
@@ -454,6 +494,30 @@ public class PythonProvider implements LanguageProvider {
         private static final MulVerifier INSTANCE = new MulVerifier();
     }
 
+    private static void checkTypeSubscripting(SnippetRun snippetRun, Value self) {
+        if (snippetRun.getException() != null) {
+            // only specific Python types allow parameterization
+            String metaName = self.getMetaQualifiedName();
+            assert metaName.equals("object") || metaName.equals("type_user") : metaName;
+        } else {
+            assert snippetRun.getResult().getMetaObject().getMetaQualifiedName().equals("types.GenericAlias");
+        }
+    }
+
+    private static class SliceVerifier extends PResultVerifier {
+        @Override
+        public void accept(SnippetRun snippetRun) throws PolyglotException {
+            Value self = snippetRun.getParameters().get(0);
+            if (self.isMetaObject()) {
+                checkTypeSubscripting(snippetRun, self);
+            } else {
+                ResultVerifier.getDefaultResultVerifier().accept(snippetRun);
+            }
+        }
+
+        private static final SliceVerifier INSTANCE = new SliceVerifier();
+    }
+
     private static class GetItemVerifier extends PResultVerifier {
         private static final String[] UNHASHABLE_TYPES = new String[]{"list", "dict", "bytearray", "set"};
 
@@ -461,34 +525,34 @@ public class PythonProvider implements LanguageProvider {
             List<? extends Value> parameters = snippetRun.getParameters();
             assert parameters.size() == 2;
 
-            Value par0 = parameters.get(0);
-            Value par1 = parameters.get(1);
+            Value self = parameters.get(0);
+            Value index = parameters.get(1);
 
             long len = -1;
 
-            if (par0.hasArrayElements()) {
-                len = par0.getArraySize();
-            } else if (par0.isString()) {
-                len = par0.asString().length();
+            if (self.isString()) {
+                len = self.asString().length();
+            } else if (self.hasArrayElements()) {
+                len = self.getArraySize();
             }
             if (len >= 0) {
                 int idx;
-                if (par1.isBoolean()) {
-                    idx = par1.asBoolean() ? 1 : 0;
-                } else if (par1.isNumber() && par1.fitsInInt()) {
-                    idx = par1.asInt();
+                if (index.isBoolean()) {
+                    idx = index.asBoolean() ? 1 : 0;
+                } else if (index.isNumber() && index.fitsInInt()) {
+                    idx = index.asInt();
                 } else {
-                    assert snippetRun.getException() != null;
+                    assert snippetRun.getException() != null : snippetRun.getResult();
                     return;
                 }
-                if ((idx >= 0 && len > idx) || (idx < 0 && idx + len >= 0 && len > idx + len)) {
-                    assert snippetRun.getException() == null : snippetRun.getException().toString();
+                if ((idx >= 0 && idx < len) || (idx < 0 && idx + len >= 0 && idx + len < len)) {
+                    assert snippetRun.getException() == null : snippetRun.getException();
                 } else {
-                    assert snippetRun.getException() != null;
+                    assert snippetRun.getException() != null : snippetRun.getResult();
                 }
-            } else if (par0.hasHashEntries()) {
-                if (par1.getMetaObject() != null) {
-                    String metaName = par1.getMetaObject().getMetaQualifiedName();
+            } else if (self.hasHashEntries()) {
+                if (index.getMetaObject() != null) {
+                    String metaName = index.getMetaObject().getMetaQualifiedName();
                     for (String s : UNHASHABLE_TYPES) {
                         if (metaName.equals(s)) {
                             // those don't work, but that's expected
@@ -497,12 +561,14 @@ public class PythonProvider implements LanguageProvider {
                         }
                     }
                 }
-                Value v = par0.getHashValueOrDefault(par1, PythonProvider.class.getName());
+                Value v = self.getHashValueOrDefault(index, PythonProvider.class.getName());
                 if (v.isString() && v.asString().equals(PythonProvider.class.getName())) {
-                    assert snippetRun.getException() != null;
+                    assert snippetRun.getException() != null : snippetRun.getResult();
                 } else {
-                    assert snippetRun.getException() == null : snippetRun.getException().toString();
+                    assert snippetRun.getException() == null : snippetRun.getException();
                 }
+            } else if (self.isMetaObject()) {
+                checkTypeSubscripting(snippetRun, self);
             } else {
                 // argument type error, rethrow
                 throw snippetRun.getException();

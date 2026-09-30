@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,31 +41,36 @@
 package com.oracle.graal.python.builtins.objects.contextvars;
 
 import static com.oracle.graal.python.nodes.PGuards.isNoValue;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CONTAINS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LEN__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.HashNotImplemented;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryFunc.MpSubscriptBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotLen.LenBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSqContains.SqContainsBuiltinNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -73,40 +78,54 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.ContextVarsContext)
+@HashNotImplemented
 public final class ContextBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = ContextBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ContextBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___LEN__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "Context", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class LenNode extends PythonUnaryBuiltinNode {
+    public abstract static class ContextNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static Object construct(@SuppressWarnings("unused") Object cls,
+                        @Bind PythonLanguage language) {
+            return PFactory.createContextVarsContext(language);
+        }
+    }
+
+    @Slot(SlotKind.mp_length)
+    @GenerateUncached
+    @GenerateNodeFactory
+    public abstract static class LenNode extends LenBuiltinNode {
         @Specialization
         int len(@SuppressWarnings("unused") PContextVarsContext self) {
             return self.contextVarValues.size();
         }
     }
 
-    @Builtin(name = J___GETITEM__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.mp_subscript, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class GetContextVar extends PythonBinaryBuiltinNode {
+    public abstract static class GetContextVar extends MpSubscriptBuiltinNode {
         @Specialization
         Object get(PContextVarsContext self, Object key,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raise) {
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raise) {
             return getContextVar(inliningTarget, self, key, null, raise);
         }
     }
 
-    @Builtin(name = J___ITER__, declaresExplicitSelf = true, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class Iter extends PythonUnaryBuiltinNode {
         @Specialization
         static Object iter(PContextVarsContext self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createContextIterator(self, PContextIterator.ItemKind.KEYS);
+                        @Bind PythonLanguage language) {
+            return PFactory.createContextIterator(language, self, PContextIterator.ItemKind.KEYS);
         }
     }
 
@@ -115,8 +134,8 @@ public final class ContextBuiltins extends PythonBuiltins {
     public abstract static class Keys extends PythonUnaryBuiltinNode {
         @Specialization
         static Object keys(PContextVarsContext self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createContextIterator(self, PContextIterator.ItemKind.KEYS);
+                        @Bind PythonLanguage language) {
+            return PFactory.createContextIterator(language, self, PContextIterator.ItemKind.KEYS);
         }
     }
 
@@ -125,8 +144,8 @@ public final class ContextBuiltins extends PythonBuiltins {
     public abstract static class Values extends PythonUnaryBuiltinNode {
         @Specialization
         static Object values(PContextVarsContext self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createContextIterator(self, PContextIterator.ItemKind.VALUES);
+                        @Bind PythonLanguage language) {
+            return PFactory.createContextIterator(language, self, PContextIterator.ItemKind.VALUES);
         }
     }
 
@@ -135,8 +154,8 @@ public final class ContextBuiltins extends PythonBuiltins {
     public abstract static class Items extends PythonUnaryBuiltinNode {
         @Specialization
         static Object items(PContextVarsContext self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createContextIterator(self, PContextIterator.ItemKind.ITEMS);
+                        @Bind PythonLanguage language) {
+            return PFactory.createContextIterator(language, self, PContextIterator.ItemKind.ITEMS);
         }
     }
 
@@ -144,11 +163,12 @@ public final class ContextBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class Run extends PythonBuiltinNode {
         @Specialization
-        Object get(VirtualFrame frame, PContextVarsContext self, Object fun, Object[] args, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+        static Object get(VirtualFrame frame, PContextVarsContext self, Object fun, Object[] args, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached CallNode call,
-                        @Cached PRaiseNode.Lazy raise) {
-            PythonContext.PythonThreadState threadState = getContext().getThreadState(getLanguage());
+                        @Cached PRaiseNode raise) {
+            PythonContext.PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
             self.enter(inliningTarget, threadState, raise);
             try {
                 return call.execute(frame, fun, args, keywords);
@@ -163,8 +183,8 @@ public final class ContextBuiltins extends PythonBuiltins {
     public abstract static class Copy extends PythonUnaryBuiltinNode {
         @Specialization
         static Object doCopy(PContextVarsContext self,
-                        @Cached PythonObjectFactory factory) {
-            PContextVarsContext ret = factory.createContextVarsContext();
+                        @Bind PythonLanguage language) {
+            PContextVarsContext ret = PFactory.createContextVarsContext(language);
             ret.contextVarValues = self.contextVarValues;
             return ret;
         }
@@ -176,34 +196,35 @@ public final class ContextBuiltins extends PythonBuiltins {
 
         @Specialization
         Object doGetDefault(PContextVarsContext self, Object key, Object def,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedConditionProfile noValueProfile,
-                        @Cached PRaiseNode.Lazy raise) {
+                        @Cached PRaiseNode raise) {
             Object defVal = noValueProfile.profile(inliningTarget, isNoValue(def)) ? PNone.NONE : def;
             return getContextVar(inliningTarget, self, key, defVal, raise);
         }
 
     }
 
-    @Builtin(name = J___CONTAINS__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.sq_contains, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class Contains extends PythonBuiltinNode {
+    public abstract static class Contains extends SqContainsBuiltinNode {
         @Specialization
         boolean doIn(PContextVarsContext self, Object key,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raise) {
             if (key instanceof PContextVar var) {
                 return self.contextVarValues.lookup(var, var.getHash()) != null;
             }
-            throw raise.raise(PythonBuiltinClassType.TypeError, ErrorMessages.CONTEXTVAR_KEY_EXPECTED, key);
+            throw raise.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.CONTEXTVAR_KEY_EXPECTED, key);
         }
     }
 
-    private static Object getContextVar(Node inliningTarget, PContextVarsContext self, Object key, Object def, PRaiseNode.Lazy raise) {
+    private static Object getContextVar(Node inliningTarget, PContextVarsContext self, Object key, Object def, PRaiseNode raise) {
         if (key instanceof PContextVar ctxVar) {
             Object value = self.contextVarValues.lookup(key, ctxVar.getHash());
             if (value == null) {
                 if (def == null) {
-                    throw raise.get(inliningTarget).raise(PythonBuiltinClassType.KeyError, new Object[]{key});
+                    throw raise.raise(inliningTarget, PythonBuiltinClassType.KeyError, new Object[]{key});
                 } else {
                     return def;
                 }
@@ -211,7 +232,7 @@ public final class ContextBuiltins extends PythonBuiltins {
                 return value;
             }
         } else {
-            throw raise.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.CONTEXTVAR_KEY_EXPECTED, key);
+            throw raise.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.CONTEXTVAR_KEY_EXPECTED, key);
         }
     }
 }

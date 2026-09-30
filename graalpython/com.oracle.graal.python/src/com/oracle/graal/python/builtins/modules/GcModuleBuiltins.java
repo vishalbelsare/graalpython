@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -29,49 +29,176 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.ArgumentClinic;
+import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.GcModuleBuiltinsClinicProviders.GcCollectNodeClinicProviderGen;
+import com.oracle.graal.python.builtins.modules.GcModuleBuiltinsClinicProviders.SetDebugNodeClinicProviderGen;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.CheckPrimitiveFunctionResultNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.list.PList;
+import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
+import com.oracle.graal.python.lib.PyObjectGetAttr;
+import com.oracle.graal.python.lib.PyObjectGetIter;
+import com.oracle.graal.python.runtime.nativeaccess.NativeFunctionPointer;
+import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
+import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
 import com.oracle.graal.python.runtime.GilNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.PythonContext.GetThreadStateNode;
+import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
+import com.oracle.graal.python.runtime.PythonOptions;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(defineModule = "gc")
 public final class GcModuleBuiltins extends PythonBuiltins {
 
+    private static final TruffleString CALLBACKS = PythonUtils.tsLiteral("callbacks");
+    private static final TruffleString START = PythonUtils.tsLiteral("start");
+    private static final TruffleString STOP = PythonUtils.tsLiteral("stop");
+    private static final TruffleString GENERATION = PythonUtils.tsLiteral("generation");
+    private static final TruffleString COLLECTED = PythonUtils.tsLiteral("collected");
+    private static final TruffleString UNCOLLECTABLE = PythonUtils.tsLiteral("uncollectable");
+    private static final int DEBUG_STATS = 1;
+    private static final int DEBUG_COLLECTABLE = 1 << 1;
+    private static final int DEBUG_UNCOLLECTABLE = 1 << 2;
+    private static final int DEBUG_SAVEALL = 1 << 5;
+    private static final int DEBUG_LEAK = DEBUG_COLLECTABLE | DEBUG_UNCOLLECTABLE | DEBUG_SAVEALL;
+
     @Override
-    protected List<com.oracle.truffle.api.dsl.NodeFactory<? extends PythonBuiltinNode>> getNodeFactories() {
+    protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return GcModuleBuiltinsFactory.getFactories();
     }
 
     @Override
     public void initialize(Python3Core core) {
-        addBuiltinConstant("DEBUG_LEAK", 0);
-        addBuiltinConstant("DEBUG_UNCOLLECTABLE", 0);
+        addBuiltinConstant("DEBUG_STATS", DEBUG_STATS);
+        addBuiltinConstant("DEBUG_COLLECTABLE", DEBUG_COLLECTABLE);
+        addBuiltinConstant("DEBUG_UNCOLLECTABLE", DEBUG_UNCOLLECTABLE);
+        addBuiltinConstant("DEBUG_SAVEALL", DEBUG_SAVEALL);
+        addBuiltinConstant("DEBUG_LEAK", DEBUG_LEAK);
+        addBuiltinConstant(CALLBACKS, PFactory.createList(core.getLanguage()));
         super.initialize(core);
     }
 
-    @Builtin(name = "collect", minNumOfPositionalArgs = 0, maxNumOfPositionalArgs = 1)
+    @Builtin(name = "collect", parameterNames = {"$self", "generation"}, declaresExplicitSelf = true)
+    @ArgumentClinic(name = "generation", conversion = ClinicConversion.Int, defaultValue = "2")
     @GenerateNodeFactory
-    abstract static class GcCollectNode extends PythonBuiltinNode {
+    abstract static class GcCollectNode extends PythonBinaryClinicBuiltinNode {
+        private static final NativeCAPISymbol SYMBOL = NativeCAPISymbol.FUN_GRAALPY_GC_COLLECT;
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, SYMBOL.getName());
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return GcCollectNodeClinicProviderGen.INSTANCE;
+        }
+
         @Specialization
+        static long collect(VirtualFrame frame, PythonModule self, Object level,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached(neverDefault = true) PyIterNextNode next,
+                        @Bind PythonLanguage language,
+                        @Cached CallBinaryMethodNode call,
+                        @Cached GilNode gil,
+                        @Cached GetThreadStateNode getThreadStateNode,
+                        @Cached CastToJavaIntExactNode castToJavaInt,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached CheckPrimitiveFunctionResultNode checkPrimitiveFunctionResultNode) {
+            Object callbacks = getAttr.execute(frame, inliningTarget, self, CALLBACKS);
+            Object iter = getIter.execute(frame, inliningTarget, callbacks);
+            TruffleString phase = null;
+            Object info;
+            long res = 0;
+            Object cb;
+            try {
+                cb = next.execute(frame, inliningTarget, iter);
+                phase = START;
+                info = PFactory.createDict(language, new PKeyword[]{
+                                new PKeyword(GENERATION, 2),
+                                new PKeyword(COLLECTED, 0),
+                                new PKeyword(UNCOLLECTABLE, 0),
+                });
+                while (true) {
+                    try {
+                        call.executeObject(frame, cb, phase, info);
+                        cb = next.execute(frame, inliningTarget, iter);
+                    } catch (IteratorExhausted e) {
+                        break;
+                    }
+                }
+            } catch (IteratorExhausted e) {
+                // fallthrough
+            }
+            long freedMemory = javaCollect(inliningTarget, gil);
+            PythonContext pythonContext = PythonContext.get(inliningTarget);
+            // call native 'gc_collect' if C API context is already available
+            if (pythonContext.getCApiContext() != null && pythonContext.getLanguage(inliningTarget).getEngineOption(PythonOptions.PythonGC)) {
+                NativeFunctionPointer executable = CApiContext.getNativeSymbol(inliningTarget, SYMBOL);
+                PythonThreadState threadState = getThreadStateNode.execute(inliningTarget);
+                long lresult = ExternalFunctionInvoker.invokeGCCOLLECT(frame, C_API_TIMING, pythonContext.ensureNativeContext(), boundaryCallData, threadState, executable,
+                                castToJavaInt.execute(inliningTarget, level));
+                res = checkPrimitiveFunctionResultNode.executeLong(inliningTarget, threadState, SYMBOL.getTsName(), lresult);
+            }
+            if (phase != null) {
+                phase = STOP;
+                info = PFactory.createDict(language, new PKeyword[]{
+                                new PKeyword(GENERATION, 2),
+                                new PKeyword(COLLECTED, freedMemory),
+                                new PKeyword(UNCOLLECTABLE, 0),
+                });
+                iter = getIter.execute(frame, inliningTarget, callbacks);
+                while (true) {
+                    try {
+                        cb = next.execute(frame, inliningTarget, iter);
+                        call.executeObject(frame, cb, phase, info);
+                    } catch (IteratorExhausted e) {
+                        break;
+                    }
+                }
+            }
+            return res;
+        }
+
         @TruffleBoundary
-        int collect(@SuppressWarnings("unused") Object level,
-                        @Cached GilNode gil) {
+        static long javaCollect(Node inliningTarget, GilNode gil) {
             gil.release(true);
+            Runtime runtime = Runtime.getRuntime();
+            long freeMemory = runtime.freeMemory();
             try {
                 PythonUtils.forceFullGC();
                 try {
@@ -83,9 +210,14 @@ public final class GcModuleBuiltins extends PythonBuiltins {
                 gil.acquire();
             }
             // collect some weak references now
-            PythonContext.triggerAsyncActions(this);
-            CApiTransitions.pollReferenceQueue();
-            return 0;
+            PythonContext.triggerAsyncActions(inliningTarget);
+            CApiTransitions.pollReferenceQueueIfPending(PythonContext.get(null));
+            /*
+             * CPython's GC returns the number of collected cycles. This is not something we can
+             * determine, but to return some useful info to the Python program, we return the amount
+             * of memory gained.
+             */
+            return Math.max(0, runtime.freeMemory() - freeMemory);
         }
     }
 
@@ -93,8 +225,8 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     abstract static class GcIsEnabledNode extends PythonBuiltinNode {
         @Specialization
-        boolean isenabled() {
-            return getContext().isGcEnabled();
+        boolean doGeneric() {
+            return getContext().getGcState().isEnabled();
         }
     }
 
@@ -102,8 +234,14 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     abstract static class DisableNode extends PythonBuiltinNode {
         @Specialization
-        PNone disable() {
-            getContext().setGcEnabled(false);
+        @TruffleBoundary
+        static PNone disable() {
+            PythonContext context = PythonContext.get(null);
+            context.getGcState().setEnabled(false);
+            CApiContext cApiContext = context.getCApiContext();
+            if (cApiContext != null) {
+                CStructAccess.writeIntField(cApiContext.getGCState(), CFields.GCState__enabled, 0);
+            }
             return PNone.NONE;
         }
     }
@@ -112,8 +250,14 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     abstract static class EnableNode extends PythonBuiltinNode {
         @Specialization
-        PNone enable() {
-            getContext().setGcEnabled(true);
+        @TruffleBoundary
+        static PNone enable() {
+            PythonContext context = PythonContext.get(null);
+            context.getGcState().setEnabled(true);
+            CApiContext cApiContext = context.getCApiContext();
+            if (cApiContext != null) {
+                CStructAccess.writeIntField(cApiContext.getGCState(), CFields.GCState__enabled, 1);
+            }
             return PNone.NONE;
         }
     }
@@ -123,15 +267,28 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     abstract static class GetDebugNode extends PythonBuiltinNode {
         @Specialization
         int getDebug() {
-            return 0;
+            return getContext().getGcState().getDebug();
         }
     }
 
-    @Builtin(name = "set_debug", minNumOfPositionalArgs = 1)
+    @Builtin(name = "set_debug", minNumOfPositionalArgs = 1, parameterNames = {"flags"})
     @GenerateNodeFactory
-    abstract static class SetDebugNode extends PythonBuiltinNode {
+    @ArgumentClinic(name = "flags", conversion = ClinicConversion.Int)
+    abstract static class SetDebugNode extends PythonUnaryClinicBuiltinNode {
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return SetDebugNodeClinicProviderGen.INSTANCE;
+        }
+
         @Specialization
-        PNone setDebug(@SuppressWarnings("unused") Object ignored) {
+        @TruffleBoundary
+        static PNone doGeneric(int flags) {
+            PythonContext context = PythonContext.get(null);
+            context.getGcState().setDebug(flags);
+            CApiContext cApiContext = context.getCApiContext();
+            if (cApiContext != null) {
+                CStructAccess.writeIntField(cApiContext.getGCState(), CFields.GCState__debug, flags);
+            }
             return PNone.NONE;
         }
     }
@@ -141,7 +298,7 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     abstract static class GcCountNode extends PythonBuiltinNode {
         @Specialization
         @TruffleBoundary
-        public PTuple count() {
+        static PTuple count() {
             List<GarbageCollectorMXBean> garbageCollectorMXBeans = ManagementFactory.getGarbageCollectorMXBeans();
             long count = 0;
             for (GarbageCollectorMXBean gcbean : garbageCollectorMXBeans) {
@@ -150,7 +307,7 @@ public final class GcModuleBuiltins extends PythonBuiltins {
                     count += cc;
                 }
             }
-            return PythonObjectFactory.getUncached().createTuple(new Object[]{count, 0, 0});
+            return PFactory.createTuple(PythonLanguage.get(null), new Object[]{count, 0, 0});
         }
     }
 
@@ -158,12 +315,12 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     abstract static class GcIsTrackedNode extends PythonBuiltinNode {
         @Specialization
-        public boolean isTracked(@SuppressWarnings("unused") PythonNativeObject object) {
+        static boolean doNative(@SuppressWarnings("unused") PythonNativeObject object) {
             return false;
         }
 
         @Fallback
-        public boolean isTracked(@SuppressWarnings("unused") Object object) {
+        static boolean doManaged(@SuppressWarnings("unused") Object object) {
             return true;
         }
     }
@@ -172,11 +329,22 @@ public final class GcModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     abstract static class GcGetReferentsNode extends PythonBuiltinNode {
         @Specialization
-        static PList getReferents(@SuppressWarnings("unused") Object objects,
-                        @Cached PythonObjectFactory factory) {
+        @TruffleBoundary
+        static PList getReferents(@SuppressWarnings("unused") Object objects) {
             // TODO: this is just a dummy implementation; for native objects, this should actually
             // use 'tp_traverse'
-            return factory.createList();
+            return PFactory.createList(PythonLanguage.get(null));
+        }
+    }
+
+    @Builtin(name = "get_referrers", takesVarArgs = true)
+    @GenerateNodeFactory
+    abstract static class GcGetReferrersNode extends PythonBuiltinNode {
+        @Specialization
+        @TruffleBoundary
+        static PList doGeneric(@SuppressWarnings("unused") Object objects) {
+            // dummy implementation
+            return PFactory.createList(PythonLanguage.get(null));
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,24 +45,26 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 
-public class DefaultConsoleHandler extends ConsoleHandler {
+class DefaultConsoleHandler extends ConsoleHandler {
 
     private final BufferedReader in;
+    private final boolean eofOnIOException;
 
-    public DefaultConsoleHandler(InputStream in) {
+    DefaultConsoleHandler(InputStream in, boolean eofOnIOException) {
         this.in = new BufferedReader(new InputStreamReader(in));
+        this.eofOnIOException = eofOnIOException;
     }
 
     @Override
-    public String readLine(boolean showPrompt) {
+    public String readLine(String prompt) {
         try {
             return in.readLine();
         } catch (IOException e) {
+            if (eofOnIOException) {
+                return null;
+            }
             throw new RuntimeException(e);
         }
     }
 
-    @Override
-    public void setPrompt(String prompt) {
-    }
 }

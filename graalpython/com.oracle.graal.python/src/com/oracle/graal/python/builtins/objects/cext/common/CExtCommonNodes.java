@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,62 +40,67 @@
  */
 package com.oracle.graal.python.builtins.objects.cext.common;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readPtrField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.writePtrField;
+import static com.oracle.graal.python.builtins.objects.str.StringUtils.byteIndexToCodepointIndex;
+import static com.oracle.graal.python.nodes.ErrorMessages.RETURNED_NULL_WO_SETTING_EXCEPTION;
+import static com.oracle.graal.python.nodes.ErrorMessages.RETURNED_RESULT_WITH_EXCEPTION_SET;
+import static com.oracle.graal.python.nodes.StringLiterals.T_IGNORE;
+import static com.oracle.graal.python.nodes.StringLiterals.T_REPLACE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_STRICT;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.SystemError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.UnicodeEncodeError;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readByteArrayElement;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readByteArrayElements;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readIntArrayElement;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readShortArrayElement;
+import static com.oracle.graal.python.util.PythonUtils.SURROGATE_CODE_POINT_SET;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
-import java.io.PrintWriter;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.Charset;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
+import java.util.logging.Level;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.bytes.BytesBuiltins;
-import com.oracle.graal.python.builtins.objects.cext.PythonNativeVoidPtr;
-import com.oracle.graal.python.builtins.objects.cext.capi.CApiGuards;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.FromCharPointerNode;
-import com.oracle.graal.python.builtins.objects.cext.capi.PrimitiveNativeWrapper;
-import com.oracle.graal.python.builtins.objects.cext.common.CArrayWrappers.CByteArrayWrapper;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.bytes.BytesCommonBuiltins;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.PThreadState;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
 import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodesFactory.GetIndexNodeGen;
 import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodesFactory.ReadUnicodeArrayNodeGen;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
-import com.oracle.graal.python.builtins.objects.common.IndexNodes.NormalizeIndexNode;
+import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodesFactory.TransformPExceptionToNativeCachedNodeGen;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
-import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotLen.CallSlotLenNode;
 import com.oracle.graal.python.lib.PyNumberAsSizeNode;
-import com.oracle.graal.python.lib.PyObjectSizeNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.SpecialMethodNames;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.PosixSupportLibrary;
 import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.PythonContext.GetThreadStateNode;
 import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
-import com.oracle.graal.python.runtime.exception.PythonExitException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.nativeaccess.NativeFunctionPointer;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -103,108 +108,13 @@ import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.interop.InteropException;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.interop.UnknownIdentifierException;
-import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.UnexpectedResultException;
-import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public abstract class CExtCommonNodes {
-    @TruffleBoundary
-    public static void fatalError(Node location, PythonContext context, TruffleString prefix, TruffleString msg, int status) {
-        fatalError(location, context, prefix != null ? prefix.toJavaStringUncached() : null, msg.toJavaStringUncached(), status);
-    }
-
-    @TruffleBoundary
-    public static void fatalError(Node location, PythonContext context, String prefix, String msg, int status) {
-        PrintWriter stderr = new PrintWriter(context.getStandardErr());
-        stderr.print("Fatal Python error: ");
-        if (prefix != null) {
-            stderr.print(prefix);
-            stderr.print(": ");
-        }
-        if (msg != null) {
-            stderr.print(msg);
-        } else {
-            stderr.print("<message not set>");
-        }
-        stderr.println();
-        stderr.flush();
-
-        if (status < 0) {
-            PosixSupportLibrary posixLib = PosixSupportLibrary.getUncached();
-            Object posixSupport = context.getPosixSupport();
-            posixLib.abort(posixSupport);
-            // abort does not return
-        }
-        throw new PythonExitException(location, status);
-    }
-
-    @GenerateUncached
-    @GenerateInline
-    @GenerateCached(false)
-    public abstract static class ImportCExtSymbolNode extends PNodeWithContext {
-
-        public abstract Object execute(Node inliningTarget, CExtContext nativeContext, NativeCExtSymbol symbol);
-
-        @Specialization(guards = {"isSingleContext()", "cachedSymbol == symbol"}, limit = "1")
-        static Object doSymbolCached(@SuppressWarnings("unused") Node inliningTarget, @SuppressWarnings("unused") CExtContext nativeContext, @SuppressWarnings("unused") NativeCExtSymbol symbol,
-                        @Cached("symbol") @SuppressWarnings("unused") NativeCExtSymbol cachedSymbol,
-                        @Cached("importCAPISymbolUncached(inliningTarget, nativeContext, symbol)") Object llvmSymbol) {
-            return llvmSymbol;
-        }
-
-        // n.b. if 'singleContextAssumption' is valid, we may also cache the native context
-        @Specialization(guards = {"isSingleContext()", "nativeContext == cachedNativeContext"}, limit = "1", //
-                        replaces = "doSymbolCached")
-        static Object doWithSymbolCacheSingleContext(Node inliningTarget, @SuppressWarnings("unused") CExtContext nativeContext, NativeCExtSymbol symbol,
-                        @Cached("nativeContext") CExtContext cachedNativeContext,
-                        @Cached("nativeContext.getSymbolCache()") DynamicObject cachedSymbolCache,
-                        @CachedLibrary("cachedSymbolCache") DynamicObjectLibrary dynamicObjectLib) {
-            return doWithSymbolCache(inliningTarget, cachedNativeContext, symbol, cachedSymbolCache, dynamicObjectLib);
-        }
-
-        @Specialization(replaces = {"doSymbolCached", "doWithSymbolCacheSingleContext"}, limit = "1")
-        static Object doWithSymbolCache(Node inliningTarget, CExtContext nativeContext, NativeCExtSymbol symbol,
-                        @Bind("nativeContext.getSymbolCache()") DynamicObject symbolCache,
-                        @CachedLibrary("symbolCache") DynamicObjectLibrary dynamicObjectLib) {
-            Object nativeSymbol = dynamicObjectLib.getOrDefault(symbolCache, symbol, PNone.NO_VALUE);
-            if (nativeSymbol == PNone.NO_VALUE) {
-                nativeSymbol = importCAPISymbolUncached(inliningTarget, nativeContext, symbol, symbolCache, dynamicObjectLib);
-            }
-            return nativeSymbol;
-        }
-
-        protected static Object importCAPISymbolUncached(Node location, CExtContext nativeContext, NativeCExtSymbol symbol) {
-            CompilerAsserts.neverPartOfCompilation();
-            return importCAPISymbolUncached(location, nativeContext, symbol, nativeContext.getSymbolCache(), DynamicObjectLibrary.getUncached());
-        }
-
-        @TruffleBoundary
-        protected static Object importCAPISymbolUncached(Node location, CExtContext nativeContext, NativeCExtSymbol symbol, DynamicObject symbolCache, DynamicObjectLibrary dynamicObjectLib) {
-            Object llvmLibrary = nativeContext.getLLVMLibrary();
-            String name = symbol.getName();
-            try {
-                Object nativeSymbol = InteropLibrary.getUncached().readMember(llvmLibrary, name);
-                nativeSymbol = NativeCExtSymbol.ensureExecutable(nativeSymbol, symbol);
-                dynamicObjectLib.put(symbolCache, symbol, nativeSymbol);
-                return nativeSymbol;
-            } catch (UnknownIdentifierException e) {
-                throw PRaiseNode.raiseUncached(location, PythonBuiltinClassType.SystemError, ErrorMessages.INVALID_CAPI_FUNC, symbol.getTsName());
-            } catch (UnsupportedMessageException e) {
-                throw PRaiseNode.raiseUncached(location, PythonBuiltinClassType.SystemError, ErrorMessages.CORRUPTED_CAPI_LIB_OBJ, llvmLibrary);
-            }
-        }
-    }
 
     @GenerateUncached
     @GenerateInline
@@ -214,7 +124,7 @@ public abstract class CExtCommonNodes {
 
         @Specialization
         static TruffleString doString(String s,
-                        @Cached(inline = false) TruffleString.FromJavaStringNode fromJavaStringNode) {
+                        @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
             return fromJavaStringNode.execute(s, TS_ENCODING);
         }
 
@@ -227,274 +137,276 @@ public abstract class CExtCommonNodes {
     @GenerateInline(false) // footprint reduction 40 -> 22
     @GenerateUncached
     public abstract static class EncodeNativeStringNode extends PNodeWithContext {
-
-        public abstract byte[] execute(Charset charset, Object unicodeObject, TruffleString errors);
+        public abstract TruffleString execute(TruffleString.Encoding encoding, Object unicodeObject, TruffleString errors);
 
         @Specialization
-        static byte[] doGeneric(Charset charset, Object unicodeObject, TruffleString errors,
-                        @Bind("this") Node inliningTarget,
+        static TruffleString doGeneric(TruffleString.Encoding encoding, Object unicodeObject, TruffleString errors,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode castToTruffleStringNode,
                         @Cached TruffleString.EqualNode eqNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached TruffleString.IsValidNode isValidNode,
+                        @Cached TruffleString.GetCodeRangeNode getCodeRangeNode,
+                        @Cached TruffleString.SwitchEncodingNode switchEncodingNode,
+                        @Cached TruffleString.ByteIndexOfCodePointSetNode byteIndexOfCodePointSetNode,
+                        @Cached TruffleString.CodePointLengthNode codePointLengthNode,
+                        @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
+                        @Cached InlinedConditionProfile strictProfile,
+                        @Cached InlinedConditionProfile ignoreProfile,
+                        @Cached InlinedConditionProfile replaceProfile,
+                        @Cached PConstructAndRaiseNode constructAndRaiseNode,
+                        @Cached PRaiseNode raiseNode) {
+            assert encoding == TruffleString.Encoding.US_ASCII ||
+                            encoding == TruffleString.Encoding.ISO_8859_1 ||
+                            encoding == TruffleString.Encoding.UTF_8 ||
+                            encoding == TruffleString.Encoding.UTF_16LE ||
+                            encoding == TruffleString.Encoding.UTF_16BE ||
+                            encoding == TruffleString.Encoding.UTF_32LE ||
+                            encoding == TruffleString.Encoding.UTF_32BE : encoding;
             TruffleString str;
             try {
                 str = castToTruffleStringNode.execute(inliningTarget, unicodeObject);
             } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.S_MUST_BE_S_NOT_P, "argument", "a string", unicodeObject);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_MUST_BE_S_NOT_P, "argument", "a string", unicodeObject);
             }
-            try {
-                CodingErrorAction action = BytesBuiltins.toCodingErrorAction(inliningTarget, errors, raiseNode, eqNode);
-                return BytesBuiltins.doEncode(charset, str, action);
-            } catch (CharacterCodingException e) {
-                throw raiseNode.get(inliningTarget).raise(UnicodeEncodeError, ErrorMessages.M, e);
-            }
-        }
-    }
-
-    public abstract static class Charsets {
-        private static final int NATIVE_ORDER = 0;
-        private static Charset UTF32;
-        private static Charset UTF32LE;
-        private static Charset UTF32BE;
-
-        private static final TruffleString T_UTF_32 = tsLiteral("UTF-32");
-        private static final TruffleString T_UTF_32LE = tsLiteral("UTF-32LE");
-        private static final TruffleString T_UTF_32BE = tsLiteral("UTF-32BE");
-
-        @TruffleBoundary
-        public static Charset getUTF32Charset(int byteorder) {
-            String utf32Name = getUTF32Name(byteorder).toJavaStringUncached();
-            if (byteorder == NATIVE_ORDER) {
-                if (UTF32 == null) {
-                    UTF32 = Charset.forName(utf32Name);
-                }
-                return UTF32;
-            } else if (byteorder < NATIVE_ORDER) {
-                if (UTF32LE == null) {
-                    UTF32LE = Charset.forName(utf32Name);
-                }
-                return UTF32LE;
-            }
-            if (UTF32BE == null) {
-                UTF32BE = Charset.forName(utf32Name);
-            }
-            return UTF32BE;
-        }
-
-        public static TruffleString getUTF32Name(int byteorder) {
-            TruffleString csName;
-            if (byteorder == 0) {
-                csName = T_UTF_32;
-            } else if (byteorder < 0) {
-                csName = T_UTF_32LE;
+            // deliberate individual branches to ensure the error handlers are partial
+            // evaluation constant
+            if (ignoreProfile.profile(inliningTarget, eqNode.execute(T_IGNORE, errors, TS_ENCODING))) {
+                return switchEncodingNode.execute(str, encoding, BytesCommonBuiltins.TS_TRANSCODE_ERROR_HANDLER_IGNORE);
             } else {
-                csName = T_UTF_32BE;
+                if (strictProfile.profile(inliningTarget, eqNode.execute(T_STRICT, errors, TS_ENCODING))) {
+                    if (!isValidNode.execute(str, TS_ENCODING)) {
+                        // any invalid string will trigger an exception when strict mode is used, so
+                        // we don't even need to try
+                        throw raiseSurrogatesEncodeError(constructAndRaiseNode, str, byteIndexOfCodePointSetNode, codePointLengthNode, codePointAtIndexNode);
+                    }
+                    if (encoding == TruffleString.Encoding.ISO_8859_1 || encoding == TruffleString.Encoding.US_ASCII) {
+                        // if the target encoding is ASCII or LATIN-1, transcoding will still fail
+                        // if the source string is in any UTF-* encoding and contains characters
+                        // outside the target encoding's value range
+                        TruffleString.CodeRange codeRange = getCodeRangeNode.execute(str, TS_ENCODING);
+                        if (!codeRange.isSubsetOf(encoding == TruffleString.Encoding.ISO_8859_1 ? TruffleString.CodeRange.LATIN_1 : TruffleString.CodeRange.ASCII)) {
+                            throw raiseNode.raise(inliningTarget, UnicodeEncodeError, ErrorMessages.M);
+                        }
+                    }
+                } else if (replaceProfile.profile(inliningTarget, !eqNode.execute(T_REPLACE, errors, TS_ENCODING))) {
+                    throw raiseNode.raise(inliningTarget, PythonErrorType.LookupError, ErrorMessages.UNKNOWN_ERROR_HANDLER, errors);
+                }
+                return switchEncodingNode.execute(str, encoding);
             }
-            return csName;
+        }
+
+        private static PException raiseSurrogatesEncodeError(PConstructAndRaiseNode constructAndRaiseNode, TruffleString str,
+                        TruffleString.ByteIndexOfCodePointSetNode byteIndexOfCodePointSetNode,
+                        TruffleString.CodePointLengthNode codePointLengthNode,
+                        TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode) {
+            int start = findFirstSurrogateIndex(str, byteIndexOfCodePointSetNode);
+            int end = findSurrogateRangeEnd(str, start, codePointLengthNode, codePointAtIndexNode);
+            return constructAndRaiseNode.raiseUnicodeEncodeError(null, "utf-8", str, start, end,
+                            "surrogates not allowed");
+        }
+
+        private static int findFirstSurrogateIndex(TruffleString str, TruffleString.ByteIndexOfCodePointSetNode byteIndexOfCodePointSetNode) {
+            int byteIndex = byteIndexOfCodePointSetNode.execute(str, 0, str.byteLength(TS_ENCODING), SURROGATE_CODE_POINT_SET);
+            return byteIndex < 0 ? 0 : byteIndexToCodepointIndex(byteIndex);
+        }
+
+        private static int findSurrogateRangeEnd(TruffleString str, int start, TruffleString.CodePointLengthNode codePointLengthNode,
+                        TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode) {
+            int length = codePointLengthNode.execute(str, TS_ENCODING);
+            int end = start + 1;
+            while (end < length) {
+                if (!isSurrogate(codePointAtIndexNode.execute(str, end))) {
+                    break;
+                }
+                end++;
+            }
+            return end;
+        }
+
+        private static boolean isSurrogate(int codePoint) {
+            return Character.MIN_SURROGATE <= codePoint && codePoint <= Character.MAX_SURROGATE;
         }
     }
 
     @GenerateInline
     @GenerateCached(false)
     @GenerateUncached
-    @ImportStatic(CApiGuards.class)
     public abstract static class ReadUnicodeArrayNode extends PNodeWithContext {
 
-        public abstract int[] execute(Node inliningTarget, Object array, int length, int elementSize);
+        public abstract int[] execute(Node inliningTarget, long array, int length, int elementSize);
 
-        public static int[] executeUncached(Object array, int length, int elementSize) {
+        public static int[] executeUncached(long array, int length, int elementSize) {
             return ReadUnicodeArrayNodeGen.getUncached().execute(null, array, length, elementSize);
         }
 
         @Specialization(guards = "elementSize == 1")
-        static int[] read1(Node inliningTarget, Object array, int length, @SuppressWarnings("unused") int elementSize,
-                        @Shared @Cached InlinedConditionProfile calcLength,
-                        @Cached(inline = false) CStructAccess.ReadByteNode read) {
+        static int[] read1(Node inliningTarget, long array, int length, @SuppressWarnings("unused") int elementSize,
+                        @Shared @Cached InlinedConditionProfile calcLength) {
             int len = length;
             if (calcLength.profile(inliningTarget, len == -1)) {
                 do {
                     len++;
-                } while (read.readArrayElement(array, len) != 0);
+                } while (readByteArrayElement(array, len) != 0);
             }
             int[] result = new int[len];
             for (int i = 0; i < len; i++) {
-                result[i] = read.readArrayElement(array, i) & 0xFF;
+                result[i] = readByteArrayElement(array, i) & 0xFF;
             }
             return result;
         }
 
         @Specialization(guards = "elementSize == 2")
-        static int[] read2(Node inliningTarget, Object array, int length, @SuppressWarnings("unused") int elementSize,
-                        @Shared @Cached InlinedConditionProfile calcLength,
-                        @Cached(inline = false) CStructAccess.ReadI16Node read) {
+        static int[] read2(Node inliningTarget, long array, int length, @SuppressWarnings("unused") int elementSize,
+                        @Shared @Cached InlinedConditionProfile calcLength) {
             int len = length;
             if (calcLength.profile(inliningTarget, len == -1)) {
                 do {
                     len++;
-                } while (read.readArrayElement(array, len) != 0);
+                } while (readShortArrayElement(array, len) != 0);
             }
             int[] result = new int[len];
             for (int i = 0; i < len; i++) {
-                result[i] = read.readArrayElement(array, i) & 0xFFFF;
+                result[i] = readShortArrayElement(array, i) & 0xFFFF;
             }
             return result;
         }
 
         @Specialization(guards = "elementSize == 4")
-        static int[] read4(Node inliningTarget, Object array, int length, @SuppressWarnings("unused") int elementSize,
-                        @Shared @Cached InlinedConditionProfile calcLength,
-                        @Cached(inline = false) CStructAccess.ReadI32Node read) {
+        static int[] read4(Node inliningTarget, long array, int length, @SuppressWarnings("unused") int elementSize,
+                        @Shared @Cached InlinedConditionProfile calcLength) {
             int len = length;
             if (calcLength.profile(inliningTarget, len == -1)) {
                 do {
                     len++;
-                } while (read.readArrayElement(array, len) != 0);
+                } while (readIntArrayElement(array, len) != 0);
             }
             int[] result = new int[len];
             for (int i = 0; i < len; i++) {
-                result[i] = read.readArrayElement(array, i);
+                result[i] = readIntArrayElement(array, i);
             }
             return result;
         }
     }
 
-    @GenerateInline(inlineByDefault = true)
-    @GenerateCached
+    /**
+     * Use this node to transform an exception to native if a Python exception was thrown during an
+     * upcall and before returning to native code. This node will reify the exception appropriately
+     * and register the exception as the current exception.
+     */
+    @GenerateInline
+    @GenerateCached(false)
     @GenerateUncached
-    @ImportStatic({PGuards.class, CApiGuards.class})
-    public abstract static class ConvertPIntToPrimitiveNode extends Node {
+    public abstract static class TransformExceptionToNativeNode extends Node {
 
-        public abstract Object execute(Node inliningTarget, Object o, int signed, int targetTypeSize, boolean exact);
+        public abstract void execute(Node inliningTarget, Object pythonException);
 
-        public final Object execute(Node inliningTarget, Object o, int signed, int targetTypeSize) {
-            return execute(inliningTarget, o, signed, targetTypeSize, true);
-        }
-
-        public final long executeLongCached(Object o, int signed, int targetTypeSize, boolean exact) throws UnexpectedResultException {
-            return PGuards.expectLong(execute(this, o, signed, targetTypeSize, exact));
-        }
-
-        public final int executeIntCached(Object o, int signed, int targetTypeSize, boolean exact) throws UnexpectedResultException {
-            return PGuards.expectInteger(execute(this, o, signed, targetTypeSize, exact));
-        }
-
-        public final long executeLongCached(Object o, int signed, int targetTypeSize) throws UnexpectedResultException {
-            return PGuards.expectLong(execute(this, o, signed, targetTypeSize, true));
-        }
-
-        public final int executeIntCached(Object o, int signed, int targetTypeSize) throws UnexpectedResultException {
-            return PGuards.expectInteger(execute(this, o, signed, targetTypeSize, true));
-        }
-
-        @Specialization(guards = {"targetTypeSize == 4", "signed != 0", "fitsInInt32(nativeWrapper)"})
-        @SuppressWarnings("unused")
-        static int doWrapperToInt32(PrimitiveNativeWrapper nativeWrapper, int signed, int targetTypeSize, boolean exact) {
-            return nativeWrapper.getInt();
-        }
-
-        @Specialization(guards = {"targetTypeSize == 4", "signed == 0", "fitsInUInt32(nativeWrapper)"})
-        @SuppressWarnings("unused")
-        static int doWrapperToUInt32Pos(PrimitiveNativeWrapper nativeWrapper, int signed, int targetTypeSize, boolean exact) {
-            return nativeWrapper.getInt();
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed != 0", "fitsInInt64(nativeWrapper)"})
-        @SuppressWarnings("unused")
-        static long doWrapperToInt64(PrimitiveNativeWrapper nativeWrapper, int signed, int targetTypeSize, boolean exact) {
-            return nativeWrapper.getLong();
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed == 0", "fitsInUInt64(nativeWrapper)"})
-        @SuppressWarnings("unused")
-        static long doWrapperToUInt64Pos(PrimitiveNativeWrapper nativeWrapper, int signed, int targetTypeSize, boolean exact) {
-            return nativeWrapper.getLong();
+        @TruffleBoundary
+        public static void executeUncached(Object pythonException) {
+            CExtCommonNodesFactory.TransformExceptionToNativeNodeGen.getUncached().execute(null, pythonException);
         }
 
         @Specialization
-        @SuppressWarnings("unused")
-        static Object doWrapperGeneric(PrimitiveNativeWrapper nativeWrapper, int signed, int targetTypeSize, boolean exact,
-                        @Shared @Cached(inline = false) AsNativePrimitiveNode asNativePrimitiveNode) {
-            return asNativePrimitiveNode.execute(nativeWrapper.getLong(), signed, targetTypeSize, exact);
-        }
-
-        @Specialization
-        static Object doInt(int value, int signed, int targetTypeSize, boolean exact,
-                        @Shared @Cached(inline = false) AsNativePrimitiveNode asNativePrimitiveNode) {
-            return asNativePrimitiveNode.execute(value, signed, targetTypeSize, exact);
-        }
-
-        @Specialization
-        static Object doLong(long value, int signed, int targetTypeSize, boolean exact,
-                        @Shared @Cached(inline = false) AsNativePrimitiveNode asNativePrimitiveNode) {
-            return asNativePrimitiveNode.execute(value, signed, targetTypeSize, exact);
-        }
-
-        @Specialization(guards = {"!isPrimitiveNativeWrapper(obj)"}, replaces = {"doInt", "doLong"})
-        static Object doOther(Object obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared @Cached(inline = false) AsNativePrimitiveNode asNativePrimitiveNode) {
-            return asNativePrimitiveNode.execute(obj, signed, targetTypeSize, exact);
-        }
-
-        static boolean fitsInInt32(PrimitiveNativeWrapper nativeWrapper) {
-            return nativeWrapper.isBool() || nativeWrapper.isInt();
-        }
-
-        static boolean fitsInInt64(PrimitiveNativeWrapper nativeWrapper) {
-            return nativeWrapper.isIntLike() || nativeWrapper.isBool();
-        }
-
-        static boolean fitsInUInt32(PrimitiveNativeWrapper nativeWrapper) {
-            return (nativeWrapper.isBool() || nativeWrapper.isInt()) && nativeWrapper.getInt() >= 0;
-        }
-
-        static boolean fitsInUInt64(PrimitiveNativeWrapper nativeWrapper) {
-            return (nativeWrapper.isIntLike() || nativeWrapper.isBool()) && nativeWrapper.getLong() >= 0;
+        static void setCurrentException(Node inliningTarget, Object pythonException,
+                        @Cached GetThreadStateNode getThreadStateNode,
+                        @Cached CExtNodes.XDecRefPointerNode decRefPointerNode,
+                        @Cached EnsurePythonObjectNode ensurePythonObjectNode,
+                        @Cached PythonToNativeInternalNode pythonToNativeNode) {
+            /*
+             * Run the ToNative conversion early so that the reference poll won't interrupt between
+             * the read and write.
+             */
+            Object promotedException = ensurePythonObjectNode.execute(PythonContext.get(inliningTarget), pythonException, false);
+            long currentException = pythonToNativeNode.executeNewRef(inliningTarget, promotedException);
+            long nativeThreadState = PThreadState.getOrCreateNativeThreadState(getThreadStateNode.execute(inliningTarget));
+            long oldException = readPtrField(nativeThreadState, CFields.PyThreadState__current_exception);
+            writePtrField(nativeThreadState, CFields.PyThreadState__current_exception, currentException);
+            decRefPointerNode.execute(inliningTarget, oldException);
         }
     }
 
     /**
-     * Converts a Python object to a Java double value (which is compatible to a C double).<br/>
-     * This node is, for example, used to implement {@code PyFloat_AsDouble} or similar C API
-     * functions and does coercion and may raise a Python exception if coercion fails.<br/>
-     * Please note: In most cases, it is sufficient to use {@link PyFloatAsDoubleNode} but you might
-     * want to use this node if the argument can be an object of type {@link PrimitiveNativeWrapper}
-     * .
+     * This node acts as a branch profile.
      */
-    @GenerateInline(false) // footprint reduction 28 -> 10, inherits non-inlineable execute()
+    @GenerateInline
+    @GenerateCached(false)
     @GenerateUncached
-    @ImportStatic({SpecialMethodNames.class, CApiGuards.class})
-    public abstract static class AsNativeDoubleNode extends CExtToNativeNode {
-        public abstract double executeDouble(Object arg);
+    public abstract static class TransformPExceptionToNativeNode extends Node {
+        public abstract void execute(Node inliningTarget, PException e);
 
-        @Specialization(guards = "!isNativeWrapper(value)")
-        static double runGeneric(Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyFloatAsDoubleNode asDoubleNode) {
-            // IMPORTANT: this should implement the behavior like 'PyFloat_AsDouble'. So, if it
-            // is a float object, use the value and do *NOT* call '__float__'.
-            return asDoubleNode.execute(null, inliningTarget, value);
+        @TruffleBoundary(allowInlining = true)
+        public static void executeUncached(PException ex) {
+            CExtCommonNodesFactory.TransformPExceptionToNativeNodeGen.getUncached().execute(null, ex);
         }
 
-        @Specialization(guards = "!object.isDouble()")
-        static double doLongNativeWrapper(PrimitiveNativeWrapper object) {
-            return object.getLong();
-        }
-
-        @Specialization(guards = "object.isDouble()")
-        static double doDoubleNativeWrapper(PrimitiveNativeWrapper object) {
-            return object.getDouble();
+        @Specialization
+        static void setCurrentException(Node inliningTarget, PException ex,
+                        @Cached TransformExceptionToNativeNode transformNode) {
+            transformNode.execute(inliningTarget, ex.getEscapedException());
         }
     }
 
-    public abstract static class CheckFunctionResultNode extends PNodeWithContext {
-        public static void checkFunctionResult(Node inliningTarget, TruffleString name, boolean indicatesError, boolean strict, PythonLanguage language, PythonContext context,
-                        InlinedConditionProfile errOccurredProfile, TruffleString nullButNoErrorMessage, TruffleString resultWithErrorMessage) {
-            PythonThreadState threadState = context.getThreadState(language);
-            checkFunctionResult(inliningTarget, threadState, name, indicatesError, strict, errOccurredProfile, nullButNoErrorMessage, resultWithErrorMessage);
+    /**
+     * This node acts as a branch profile.
+     */
+    @GenerateInline(false)
+    @GenerateCached
+    public abstract static class TransformPExceptionToNativeCachedNode extends Node {
+        public static TransformPExceptionToNativeCachedNode create() {
+            return TransformPExceptionToNativeCachedNodeGen.create();
+        }
+
+        public abstract void execute(PException e);
+
+        @Specialization
+        static void setCurrentException(PException ex,
+                        @Bind Node inliningTarget,
+                        @Cached TransformExceptionToNativeNode transformNode) {
+            transformNode.execute(inliningTarget, ex.getEscapedException());
+        }
+    }
+
+    /**
+     * Equivalent of native {@code _PyErr_GetRaisedException}. Returns {@link PNone#NO_VALUE} if
+     * there is no exception.
+     */
+    @GenerateUncached
+    @GenerateInline
+    @GenerateCached(false)
+    public abstract static class ReadAndClearNativeException extends Node {
+        public abstract Object execute(Node inliningTarget, PythonThreadState threadState);
+
+        public static Object executeUncached(PythonThreadState threadState) {
+            return CExtCommonNodesFactory.ReadAndClearNativeExceptionNodeGen.getUncached().execute(null, threadState);
+        }
+
+        @Specialization
+        static Object getException(Node inliningTarget, PythonThreadState threadState,
+                        @Cached CApiTransitions.NativeToPythonInternalNode nativeToPythonNode) {
+            long nativeThreadState = threadState.getNativePointer();
+            if (nativeThreadState != PythonAbstractObject.UNINITIALIZED) {
+                assert nativeThreadState != PythonAbstractObject.NATIVE_POINTER_FREED;
+                Object exception = nativeToPythonNode.executeTransfer(inliningTarget, readPtrField(nativeThreadState, CFields.PyThreadState__current_exception));
+                writePtrField(nativeThreadState, CFields.PyThreadState__current_exception, 0L);
+                return exception;
+            }
+            return PNone.NO_VALUE;
+        }
+    }
+
+    @GenerateUncached
+    @GenerateInline
+    @GenerateCached(false)
+    public abstract static class TransformExceptionFromNativeNode extends Node {
+
+        @TruffleBoundary
+        public static void executeUncached(PythonThreadState threadState, TruffleString name, boolean indicatesError, boolean strict) {
+            TransformExceptionFromNativeNode.getUncached().execute(null, threadState, name, indicatesError, strict);
         }
 
         /**
-         * Check the result of a C extension function.
+         * Checks the current exception state with respect to flag {@code indicatesError} (and
+         * {@code strict}).
+         *
          *
          * @param inliningTarget The processing node (also needed for the source location if a
          *            {@code SystemError} is raised).
@@ -507,594 +419,74 @@ public abstract class CExtCommonNodes {
          *            indicates an error but no exception was set. Setting this to {@code false}
          *            mostly makes sense for primitive return values with semantics
          *            {@code if (res != -1 && PyErr_Occurred()}.
-         * @param errOccurredProfile Profiles if a Python exception occurred and is set in the
-         *            context.
          * @param nullButNoErrorMessage Error message used if the value indicates an error and is
          *            not primitive but no error was set.
          * @param resultWithErrorMessage Error message used if an error was set but the value does
          *            not indicate and error.
          */
-        public static void checkFunctionResult(Node inliningTarget, PythonThreadState threadState, TruffleString name, boolean indicatesError, boolean strict,
-                        InlinedConditionProfile errOccurredProfile, TruffleString nullButNoErrorMessage, TruffleString resultWithErrorMessage) {
-            PException currentException = threadState.getCurrentException();
-            boolean errOccurred = errOccurredProfile.profile(inliningTarget, currentException != null);
+        public abstract void execute(Node inliningTarget, PythonThreadState threadState, TruffleString name, boolean indicatesError, boolean strict,
+                        TruffleString nullButNoErrorMessage, TruffleString resultWithErrorMessage);
+
+        public final void execute(Node inliningTarget, PythonThreadState threadState, TruffleString name, boolean indicatesError, boolean strict) {
+            execute(inliningTarget, threadState, name, indicatesError, strict, RETURNED_NULL_WO_SETTING_EXCEPTION, RETURNED_RESULT_WITH_EXCEPTION_SET);
+        }
+
+        public final void reraise(Node inliningTarget, PythonThreadState threadState) {
+            execute(inliningTarget, threadState, null, true, true, null, null);
+        }
+
+        @Specialization
+        static void doGeneric(Node inliningTarget, PythonThreadState threadState, TruffleString name, boolean indicatesError, boolean strict,
+                        TruffleString nullButNoErrorMessage, TruffleString resultWithErrorMessage,
+                        @Cached InlinedConditionProfile errOccurredProfile,
+                        @Cached InlinedConditionProfile indicatesErrorProfile,
+                        @Cached ReadAndClearNativeException readAndClearNativeException) {
+            Object currentException = readAndClearNativeException.execute(inliningTarget, threadState);
+            boolean errOccurred = errOccurredProfile.profile(inliningTarget, currentException != PNone.NO_VALUE);
+            boolean indicatesErrorProfiled = indicatesErrorProfile.profile(inliningTarget, indicatesError);
+            if (indicatesErrorProfiled || errOccurred) {
+                checkFunctionResultSlowpath(inliningTarget, name, indicatesErrorProfiled, strict,
+                                nullButNoErrorMessage, resultWithErrorMessage, errOccurred, currentException);
+            }
+        }
+
+        @InliningCutoff
+        private static void checkFunctionResultSlowpath(Node inliningTarget, TruffleString name, boolean indicatesError, boolean strict,
+                        TruffleString nullButNoErrorMessage, TruffleString resultWithErrorMessage, boolean errOccurred, Object currentException) {
             if (indicatesError) {
-                // consume exception
-                threadState.setCurrentException(null);
                 if (errOccurred) {
-                    assert currentException != null;
-                    throw currentException.getExceptionForReraise(false);
+                    assert currentException != PNone.NO_VALUE;
+                    throw PException.fromObjectFixUncachedLocation(currentException, inliningTarget, false);
                 } else if (strict) {
+                    assert currentException == PNone.NO_VALUE;
                     throw raiseNullButNoError(inliningTarget, name, nullButNoErrorMessage);
                 }
             } else if (errOccurred) {
                 assert currentException != null;
-                // consume exception
-                threadState.setCurrentException(null);
                 throw raiseResultWithError(inliningTarget, name, currentException, resultWithErrorMessage);
             }
         }
 
         @TruffleBoundary
         private static PException raiseNullButNoError(Node node, TruffleString name, TruffleString nullButNoErrorMessage) {
-            throw PRaiseNode.raiseUncached(node, SystemError, nullButNoErrorMessage, name);
+            throw PRaiseNode.raiseStatic(node, SystemError, nullButNoErrorMessage, name);
         }
 
         @TruffleBoundary
-        private static PException raiseResultWithError(Node node, TruffleString name, PException currentException, TruffleString resultWithErrorMessage) {
-            PBaseException sysExc = PythonObjectFactory.getUncached().createBaseException(SystemError, resultWithErrorMessage, new Object[]{name});
-            sysExc.setCause(currentException.getEscapedException());
-            throw PRaiseNode.raiseExceptionObject(node, sysExc, PythonOptions.isPExceptionWithJavaStacktrace(PythonLanguage.get(null)));
+        private static PException raiseResultWithError(Node node, TruffleString name, Object currentException, TruffleString resultWithErrorMessage) {
+            PythonLanguage language = PythonLanguage.get(null);
+            PBaseException sysExc = PFactory.createBaseException(language, SystemError, resultWithErrorMessage, new Object[]{name});
+            sysExc.setCause(currentException);
+            throw PRaiseNode.raiseExceptionObjectStatic(node, sysExc, PythonOptions.isPExceptionWithJavaStacktrace(language));
         }
 
-        public abstract Object execute(PythonContext context, TruffleString name, Object result);
-    }
-
-    @GenerateInline
-    @GenerateCached(false)
-    @GenerateUncached
-    public abstract static class GetByteArrayNode extends Node {
-
-        public abstract byte[] execute(Node inliningTarget, Object obj, long n) throws InteropException, OverflowException;
-
-        @Specialization
-        static byte[] doCArrayWrapper(CByteArrayWrapper obj, long n) {
-            return subRangeIfNeeded(obj.getByteArray(), n);
-        }
-
-        @Specialization
-        static byte[] doForeign(Object obj, long n,
-                        @Cached(inline = false) CStructAccess.ReadByteNode readNode) {
-            return readNode.readByteArray(obj, (int) n);
-        }
-
-        private static byte[] subRangeIfNeeded(byte[] bytes, long n) {
-            if (bytes.length > n && n >= 0) {
-                // cast to int is guaranteed because of 'bytes.length > n'
-                return PythonUtils.arrayCopyOf(bytes, (int) n);
-            } else {
-                return bytes;
-            }
+        public static TransformExceptionFromNativeNode getUncached() {
+            return CExtCommonNodesFactory.TransformExceptionFromNativeNodeGen.getUncached();
         }
     }
 
-    /**
-     * Converts a Python object (i.e. {@code PyObject*}) to a C integer value ({@code int} or
-     * {@code long}).<br/>
-     * This node is used to implement {@code PyLong_AsLong} or similar C API functions and does
-     * coercion and may raise a Python exception if coercion fails. <br/>
-     * Allowed {@code targetTypeSize} values are {@code 4} and {@code 8}. <br/>
-     * If {@code exact} is {@code false}, then casting can be lossy without raising an error.
-     */
-    @GenerateUncached
-    @ImportStatic({PGuards.class, SpecialMethodSlot.class})
-    @GenerateInline(false) // footprint reduction 32 -> 15, triggers GR-44020
-    public abstract static class AsNativePrimitiveNode extends Node {
-
-        public final int toInt32(Object value, boolean exact) {
-            return (int) execute(value, 1, 4, exact);
-        }
-
-        public final int toUInt32(Object value, boolean exact) {
-            return (int) execute(value, 0, 4, exact);
-        }
-
-        public final long toInt64(Object value, boolean exact) {
-            return (long) execute(value, 1, 8, exact);
-        }
-
-        public final long toUInt64(Object value, boolean exact) {
-            return (long) execute(value, 0, 8, exact);
-        }
-
-        public abstract Object execute(byte value, int signed, int targetTypeSize, boolean exact);
-
-        public abstract Object execute(int value, int signed, int targetTypeSize, boolean exact);
-
-        public abstract Object execute(long value, int signed, int targetTypeSize, boolean exact);
-
-        public abstract Object execute(Object value, int signed, int targetTypeSize, boolean exact);
-
-        @Specialization(guards = {"targetTypeSize == 4", "signed != 0"})
-        @SuppressWarnings("unused")
-        static int doIntToInt32(int value, int signed, int targetTypeSize, boolean exact) {
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 4", "signed == 0", "value >= 0"})
-        @SuppressWarnings("unused")
-        static int doIntToUInt32Pos(int value, int signed, int targetTypeSize, boolean exact) {
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 4", "signed == 0"}, replaces = "doIntToUInt32Pos")
-        @SuppressWarnings("unused")
-        static int doIntToUInt32(int value, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNativeNode") @Cached PRaiseNode raiseNativeNode) {
-            if (exact && value < 0) {
-                throw raiseNegativeValue(raiseNativeNode);
-            }
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed != 0"})
-        @SuppressWarnings("unused")
-        static long doIntToInt64(int obj, int signed, int targetTypeSize, boolean exact) {
-            return obj;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed == 0", "value >= 0"})
-        @SuppressWarnings("unused")
-        static long doIntToUInt64Pos(int value, int signed, int targetTypeSize, boolean exact) {
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed == 0"}, replaces = "doIntToUInt64Pos")
-        @SuppressWarnings("unused")
-        static long doIntToUInt64(int value, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNativeNode") @Cached PRaiseNode raiseNativeNode) {
-            if (exact && value < 0) {
-                throw raiseNegativeValue(raiseNativeNode);
-            }
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed != 0"})
-        @SuppressWarnings("unused")
-        static long doLongToInt64(long value, int signed, int targetTypeSize, boolean exact) {
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed == 0", "value >= 0"})
-        @SuppressWarnings("unused")
-        static long doLongToUInt64Pos(long value, int signed, int targetTypeSize, boolean exact) {
-            return value;
-        }
-
-        @Specialization(guards = {"targetTypeSize == 8", "signed == 0"}, replaces = "doLongToUInt64Pos")
-        @SuppressWarnings("unused")
-        static long doLongToUInt64(long value, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNativeNode") @Cached PRaiseNode raiseNativeNode) {
-            if (exact && value < 0) {
-                throw raiseNegativeValue(raiseNativeNode);
-            }
-            return value;
-        }
-
-        @Specialization(guards = {"exact", "targetTypeSize == 4", "signed != 0"})
-        @SuppressWarnings("unused")
-        static int doLongToInt32Exact(long obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-            try {
-                return PInt.intValueExact(obj);
-            } catch (OverflowException e) {
-                throw raiseNode.raise(PythonErrorType.OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO_C_TYPE, targetTypeSize);
-            }
-        }
-
-        @Specialization(guards = {"exact", "targetTypeSize == 4", "signed == 0", "obj >= 0"})
-        @SuppressWarnings("unused")
-        static int doLongToUInt32PosExact(long obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-            if (Integer.toUnsignedLong((int) obj) == obj) {
-                return (int) obj;
-            } else {
-                throw raiseNode.raise(PythonErrorType.OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO_C_TYPE, targetTypeSize);
-            }
-        }
-
-        @Specialization(guards = {"exact", "targetTypeSize == 4", "signed == 0"}, replaces = "doLongToUInt32PosExact")
-        @SuppressWarnings("unused")
-        static int doLongToUInt32Exact(long obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-            if (obj < 0) {
-                throw raiseNegativeValue(raiseNode);
-            }
-            return doLongToUInt32PosExact(obj, signed, targetTypeSize, exact, raiseNode);
-        }
-
-        @Specialization(guards = {"!exact", "targetTypeSize == 4"})
-        @SuppressWarnings("unused")
-        static int doLongToInt32Lossy(long obj, int signed, int targetTypeSize, boolean exact) {
-            return (int) obj;
-        }
-
-        @Specialization(guards = "targetTypeSize == 8")
-        @SuppressWarnings("unused")
-        static Object doVoidPtrToI64(PythonNativeVoidPtr obj, int signed, int targetTypeSize, boolean exact) {
-            return obj;
-        }
-
-        @Specialization(guards = {"exact", "targetTypeSize == 4"})
-        @SuppressWarnings("unused")
-        @TruffleBoundary
-        static int doPIntTo32Bit(PInt obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-            try {
-                if (signed != 0) {
-                    return obj.intValueExact();
-                } else if (obj.bitLength() <= 32) {
-                    if (obj.isNegative()) {
-                        throw raiseNegativeValue(raiseNode);
-                    }
-                    return obj.intValue();
-                }
-            } catch (OverflowException e) {
-                // fall through
-            }
-            throw raiseNode.raise(PythonErrorType.OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO_C_TYPE, targetTypeSize);
-        }
-
-        @Specialization(guards = {"exact", "targetTypeSize == 8"})
-        @SuppressWarnings("unused")
-        @TruffleBoundary
-        static long doPIntTo64Bit(PInt obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-            try {
-                if (signed != 0) {
-                    return obj.longValueExact();
-                } else if (obj.bitLength() <= 64) {
-                    if (obj.isNegative()) {
-                        throw raiseNegativeValue(raiseNode);
-                    }
-                    return obj.longValue();
-                }
-            } catch (OverflowException e) {
-                // fall through
-            }
-            throw raiseNode.raise(PythonErrorType.OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO_C_TYPE, targetTypeSize);
-        }
-
-        @Specialization(guards = {"!exact", "targetTypeSize == 4"})
-        @SuppressWarnings("unused")
-        static int doPIntToInt32Lossy(PInt obj, int signed, int targetTypeSize, boolean exact) {
-            return obj.intValue();
-        }
-
-        @Specialization(guards = {"!exact", "targetTypeSize == 8"})
-        @SuppressWarnings("unused")
-        static long doPIntToInt64Lossy(PInt obj, int signed, int targetTypeSize, boolean exact) {
-            return obj.longValue();
-        }
-
-        @Specialization(guards = {"targetTypeSize == 4 || targetTypeSize == 8"}, //
-                        replaces = {"doIntToInt32", "doIntToUInt32Pos", "doIntToUInt32", //
-                                        "doIntToInt64", "doIntToUInt64Pos", "doIntToUInt64", //
-                                        "doLongToInt64", "doLongToUInt64Pos", "doLongToUInt64", //
-                                        "doLongToInt32Exact", "doLongToUInt32PosExact", "doLongToUInt32Exact", "doLongToInt32Lossy", //
-                                        "doVoidPtrToI64", //
-                                        "doPIntTo32Bit", "doPIntTo64Bit", "doPIntToInt32Lossy", "doPIntToInt64Lossy"})
-        static Object doGeneric(Object obj, int signed, int targetTypeSize, boolean exact,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClassNode,
-                        @Cached(parameters = "Index") LookupSpecialMethodSlotNode lookupIndex,
-                        @Cached CallUnaryMethodNode call,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-
-            Object type = getClassNode.execute(inliningTarget, obj);
-            Object indexDescr = lookupIndex.execute(null, type, obj);
-
-            Object result;
-            if (indexDescr != PNone.NO_VALUE) {
-                result = call.executeObject(null, indexDescr, obj);
-            } else {
-                throw raiseNode.raise(PythonBuiltinClassType.TypeError, ErrorMessages.INTEGER_REQUIRED_GOT, obj);
-            }
-
-            /*
-             * The easiest would be to recursively use this node and ensure that this generic case
-             * isn't taken but we cannot guarantee that because the uncached version will always try
-             * the generic case first. Hence, the 'toInt32' and 'toInt64' handle all cases in
-             * if-else style. This won't be as bad as it looks in source code because arguments
-             * 'signed', 'targetTypeSize', and 'exact' are usually constants.
-             */
-            if (targetTypeSize == 4) {
-                return toInt32(result, signed, exact, raiseNode);
-            } else if (targetTypeSize == 8) {
-                return toInt64(result, signed, exact, raiseNode);
-            }
-            throw raiseNode.raise(SystemError, ErrorMessages.UNSUPPORTED_TARGET_SIZE, targetTypeSize);
-        }
-
-        @Specialization(guards = {"targetTypeSize != 4", "targetTypeSize != 8"})
-        @SuppressWarnings("unused")
-        static int doUnsupportedTargetSize(Object obj, int signed, int targetTypeSize, boolean exact,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(SystemError, ErrorMessages.UNSUPPORTED_TARGET_SIZE, targetTypeSize);
-        }
-
-        private static PException raiseNegativeValue(PRaiseNode raiseNativeNode) {
-            throw raiseNativeNode.raise(OverflowError, ErrorMessages.CANNOT_CONVERT_NEGATIVE_VALUE_TO_UNSIGNED_INT);
-        }
-
-        /**
-         * Slow-path conversion of an object to a signed or unsigned 32-bit value.
-         */
-        private static int toInt32(Object object, int signed, boolean exact,
-                        PRaiseNode raiseNode) {
-            if (object instanceof Integer) {
-                int ival = (int) object;
-                if (signed != 0) {
-                    return ival;
-                }
-                return doIntToUInt32(ival, signed, 4, exact, raiseNode);
-            } else if (object instanceof Long) {
-                long lval = (long) object;
-                if (exact) {
-                    if (signed != 0) {
-                        return doLongToInt32Exact(lval, 1, 4, true, raiseNode);
-                    }
-                    return doLongToUInt32Exact(lval, signed, 4, true, raiseNode);
-                }
-                return doLongToInt32Lossy(lval, 0, 4, false);
-            } else if (object instanceof PInt) {
-                PInt pval = (PInt) object;
-                if (exact) {
-                    return doPIntTo32Bit(pval, signed, 4, true, raiseNode);
-                }
-                return doPIntToInt32Lossy(pval, signed, 4, false);
-            } else if (object instanceof PythonNativeVoidPtr) {
-                // that's just not possible
-                throw raiseNode.raise(PythonErrorType.OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO_C_TYPE, 4);
-            }
-            throw raiseNode.raise(PythonErrorType.TypeError, ErrorMessages.INDEX_RETURNED_NON_INT, object);
-        }
-
-        /**
-         * Slow-path conversion of an object to a signed or unsigned 64-bit value.
-         */
-        private static Object toInt64(Object object, int signed, boolean exact,
-                        PRaiseNode raiseNode) {
-            if (object instanceof Integer) {
-                Integer ival = (Integer) object;
-                if (signed != 0) {
-                    return ival.longValue();
-                }
-                return doIntToUInt64(ival, signed, 8, exact, raiseNode);
-            } else if (object instanceof Long) {
-                long lval = (long) object;
-                if (signed != 0) {
-                    return doLongToInt64(lval, 1, 8, exact);
-                }
-                return doLongToUInt64(lval, signed, 8, exact, raiseNode);
-            } else if (object instanceof PInt) {
-                PInt pval = (PInt) object;
-                if (exact) {
-                    return doPIntTo64Bit(pval, signed, 8, true, raiseNode);
-                }
-                return doPIntToInt64Lossy(pval, signed, 8, false);
-            } else if (object instanceof PythonNativeVoidPtr) {
-                return doVoidPtrToI64((PythonNativeVoidPtr) object, signed, 8, exact);
-            }
-            throw raiseNode.raise(PythonErrorType.TypeError, ErrorMessages.INDEX_RETURNED_NON_INT, object);
-        }
-    }
-
-    /**
-     * This node converts a {@link String} object to a {@link TruffleString} or it converts a
-     * {@code NULL} pointer to {@link PNone#NONE}. This is a very special use case and certainly
-     * only good for reading a member of type
-     * {@link com.oracle.graal.python.builtins.objects.cext.hpy.GraalHPyDef#HPY_MEMBER_STRING} or
-     * {@link com.oracle.graal.python.builtins.objects.cext.capi.CApiMemberAccessNodes#T_STRING}.
-     */
-    @GenerateInline(false) // footprint reduction 32 -> 13, inherits non-inlineable execute()
-    @GenerateUncached
-    public abstract static class StringAsPythonStringNode extends CExtToJavaNode {
-
-        @Specialization
-        static TruffleString doJavaString(String value,
-                        @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
-            // TODO review with GR-37896
-            return fromJavaStringNode.execute(value, TS_ENCODING);
-        }
-
-        @Specialization
-        static TruffleString doTruffleString(TruffleString value) {
-            return value;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "interopLib.isNull(value)", limit = "3")
-        static Object doGeneric(Object value,
-                        @CachedLibrary("value") InteropLibrary interopLib) {
-            return PNone.NONE;
-        }
-
-        @Specialization
-        static TruffleString doNative(Object value,
-                        @Cached FromCharPointerNode fromPtr) {
-            return fromPtr.execute(value);
-        }
-    }
-
-    /**
-     * This node converts a C Boolean value to Python Boolean.
-     */
-    @GenerateInline(false) // footprint reduction 24 -> 5, inherits non-inlineable execute()
-    @GenerateUncached
-    public abstract static class NativePrimitiveAsPythonBooleanNode extends CExtToJavaNode {
-
-        @Specialization
-        static Boolean doBoolean(Boolean b) {
-            return b;
-        }
-
-        @Specialization
-        static Object doByte(byte b) {
-            return b != 0;
-        }
-
-        @Specialization
-        static Object doShort(short i) {
-            return i != 0;
-        }
-
-        @Specialization
-        static Object doLong(long l) {
-            // If the integer is out of byte range, we just to a lossy cast since that's the same
-            // semantics as we should just read a single byte.
-            return l != 0;
-        }
-
-        @Specialization(replaces = {"doBoolean", "doByte", "doShort", "doLong"}, limit = "1")
-        static Object doGeneric(Object n,
-                        @CachedLibrary("n") InteropLibrary lib) {
-            if (lib.fitsInLong(n)) {
-                try {
-                    return lib.asLong(n) != 0;
-                } catch (UnsupportedMessageException e) {
-                    // fall through
-                }
-            }
-            throw CompilerDirectives.shouldNotReachHere();
-        }
-    }
-
-    /**
-     * This node converts a native primitive value to an appropriate Python char value (a
-     * single-char Python string).
-     */
-    @GenerateInline(false) // footprint reduction 36 -> 17
-    @GenerateUncached
-    public abstract static class NativePrimitiveAsPythonCharNode extends CExtToJavaNode {
-
-        @Specialization
-        static TruffleString doByte(byte b,
-                        @Shared("fromInt") @Cached TruffleString.FromIntArrayUTF32Node fromIntArrayNode,
-                        @Shared("switchEnc") @Cached TruffleString.SwitchEncodingNode switchEncodingNode) {
-            // fromIntArrayNode return utf32, thich is at this point the same as TS_ENCODING,
-            // but might change in the future
-            return switchEncodingNode.execute(fromIntArrayNode.execute(new int[]{b}), TS_ENCODING);
-        }
-
-        @Specialization
-        static TruffleString doShort(short i,
-                        @Shared("fromInt") @Cached TruffleString.FromIntArrayUTF32Node fromIntArrayNode,
-                        @Shared("switchEnc") @Cached TruffleString.SwitchEncodingNode switchEncodingNode) {
-            // fromIntArrayNode return utf32, thich is at this point the same as TS_ENCODING,
-            // but might change in the future
-            return switchEncodingNode.execute(fromIntArrayNode.execute(new int[]{i}, 0, 1), TS_ENCODING);
-        }
-
-        @Specialization
-        static TruffleString doLong(long l,
-                        @Cached TruffleString.FromLongNode fromLongNode) {
-            return fromLongNode.execute(l, TS_ENCODING, true);
-        }
-
-        @Specialization(replaces = {"doByte", "doShort", "doLong"}, limit = "1")
-        static Object doGeneric(Object n,
-                        @CachedLibrary("n") InteropLibrary lib,
-                        @Shared("fromInt") @Cached TruffleString.FromIntArrayUTF32Node fromIntArrayNode,
-                        @Shared("switchEnc") @Cached TruffleString.SwitchEncodingNode switchEncodingNode) {
-            if (lib.fitsInShort(n)) {
-                try {
-                    // fromIntArrayNode return utf32, thich is at this point the same as
-                    // TS_ENCODING,
-                    // but might change in the future
-                    return switchEncodingNode.execute(fromIntArrayNode.execute(new int[]{lib.asShort(n)}, 0, 1), TS_ENCODING);
-                } catch (UnsupportedMessageException e) {
-                    // fall through
-                }
-            }
-            throw CompilerDirectives.shouldNotReachHere();
-        }
-    }
-
-    @GenerateInline(false) // footprint reduction 20 -> 1, inherits non-inlineable execute()
-    @GenerateUncached
-    public abstract static class NativeUnsignedByteNode extends CExtToJavaNode {
-
-        @Specialization
-        static int doUnsignedIntPositive(int n) {
-            return n & 0xff;
-        }
-    }
-
-    @GenerateInline(false) // footprint reduction 20 -> 1, inherits non-inlineable execute()
-    @GenerateUncached
-    public abstract static class NativeUnsignedShortNode extends CExtToJavaNode {
-
-        @Specialization
-        static int doUnsignedIntPositive(int n) {
-            return n & 0xffff;
-        }
-    }
-
-    /**
-     * This node converts a native primitive value to an appropriate Python value considering the
-     * native value as unsigned. For example, a negative {@code int} value will be converted to a
-     * positive {@code long} value.
-     */
-    @GenerateInline(false) // footprint reduction 24 -> 5, inherits non-inlineable execute()
-
-    @GenerateUncached
-    public abstract static class NativeUnsignedPrimitiveAsPythonObjectNode extends CExtToJavaNode {
-
-        @Specialization(guards = "n >= 0")
-        static int doUnsignedIntPositive(int n) {
-            return n;
-        }
-
-        @Specialization(replaces = "doUnsignedIntPositive")
-        static long doUnsignedInt(int n) {
-            if (n < 0) {
-                return n & 0xffffffffL;
-            }
-            return n;
-        }
-
-        @Specialization(guards = "n >= 0")
-        static long doUnsignedLongPositive(long n) {
-            return n;
-        }
-
-        @Specialization(guards = "n < 0")
-        static Object doUnsignedLongNegative(long n,
-                        @Shared("factory") @Cached PythonObjectFactory factory) {
-            return factory.createInt(PInt.longToUnsignedBigInteger(n));
-        }
-
-        @Specialization(replaces = {"doUnsignedIntPositive", "doUnsignedInt", "doUnsignedLongPositive", "doUnsignedLongNegative"})
-        static Object doGeneric(Object n,
-                        @Shared("factory") @Cached PythonObjectFactory factory) {
-            if (n instanceof Integer) {
-                int i = (int) n;
-                if (i >= 0) {
-                    return i;
-                } else {
-                    return doUnsignedInt(i);
-                }
-            } else if (n instanceof Long) {
-                long l = (long) n;
-                if (l >= 0) {
-                    return l;
-                } else {
-                    return doUnsignedLongNegative(l, factory);
-                }
-            }
-            throw CompilerDirectives.shouldNotReachHere();
-        }
+    public static byte[] getByteArray(long ptr, long n) throws OverflowException {
+        return readByteArrayElements(ptr, 0, PInt.intValueExact(n));
     }
 
     /**
@@ -1104,47 +496,25 @@ public abstract class CExtCommonNodes {
      */
     @GenerateInline(false) // footprint reduction 28 -> 9, inherits non-inlineable execute()
     @GenerateUncached
-    public abstract static class AsNativeCharNode extends CExtToNativeNode {
+    public abstract static class AsNativeCharNode extends Node {
 
         public abstract byte executeByte(Object value);
 
         @Specialization
         static byte doGeneric(Object value,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached EncodeNativeStringNode encodeNativeStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            byte[] encoded = encodeNativeStringNode.execute(StandardCharsets.UTF_8, value, T_STRICT);
-            if (encoded.length != 1) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.BAD_ARG_TYPE_FOR_BUILTIN_OP);
+                        @Cached TruffleString.ReadByteNode readByteNode,
+                        @Cached PRaiseNode raiseNode) {
+            TruffleString encoded = encodeNativeStringNode.execute(TruffleString.Encoding.UTF_8, value, T_STRICT);
+            if (encoded.byteLength(TruffleString.Encoding.UTF_8) != 1) {
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.BAD_ARG_TYPE_FOR_BUILTIN_OP);
             }
-            return encoded[0];
+            return (byte) readByteNode.execute(encoded, 0, TruffleString.Encoding.UTF_8);
         }
     }
 
     /**
-     * Converts a Python object to a C primitive value with a fixed size and sign.
-     *
-     * @see AsNativePrimitiveNode
-     */
-    public abstract static class AsFixedNativePrimitiveNode extends CExtToNativeNode {
-
-        private final int targetTypeSize;
-        private final int signed;
-
-        protected AsFixedNativePrimitiveNode(int targetTypeSize, boolean signed) {
-            this.targetTypeSize = targetTypeSize;
-            this.signed = PInt.intValue(signed);
-        }
-
-        // Adding specializations for primitives does not make a lot of sense just to avoid
-        // un-/boxing in the interpreter since interop will force un-/boxing anyway.
-        @Specialization
-        Object doGeneric(Object value,
-                        @Cached AsNativePrimitiveNode asNativePrimitiveNode) {
-            return asNativePrimitiveNode.execute(value, signed, targetTypeSize, true);
-        }
-    }
-
     /**
      * Implements semantics of function {@code typeobject.c: getindex}.
      */
@@ -1154,15 +524,19 @@ public abstract class CExtCommonNodes {
 
         @Specialization
         static int doIt(Object self, Object indexObj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedBranchProfile indexLt0Branch,
                         @Cached PyNumberAsSizeNode asSizeNode,
-                        @Cached PyObjectSizeNode sizeNode,
-                        @Cached NormalizeIndexNode normalizeIndexNode) {
+                        @Cached CallSlotLenNode callLenNode,
+                        @Cached GetObjectSlotsNode getObjectSlotsNode) {
             int index = asSizeNode.executeExact(null, inliningTarget, indexObj);
             if (index < 0) {
                 indexLt0Branch.enter(inliningTarget);
-                return normalizeIndexNode.execute(index, sizeNode.execute(null, inliningTarget, self));
+                TpSlots slots = getObjectSlotsNode.execute(inliningTarget, self);
+                if (slots.sq_length() != null) {
+                    int len = callLenNode.execute(null, inliningTarget, slots.sq_length(), self);
+                    index += len;
+                }
             }
             return index;
         }
@@ -1170,5 +544,27 @@ public abstract class CExtCommonNodes {
         public static GetIndexNode create() {
             return GetIndexNodeGen.create();
         }
+    }
+
+    private static final TruffleLogger LOGGER = CApiContext.getLogger(CExtCommonNodes.class);
+
+    /**
+     * Binds a native pointer with a signature to a typed native function pointer.
+     *
+     * <p>
+     * <b>NOTE:</b> This method will fail if {@link PythonContext#isNativeAccessAllowed() native
+     * access} is not allowed
+     * </p>
+     */
+    public static NativeFunctionPointer bindFunctionPointer(long pointer, NativeCExtSymbol descriptor) {
+        CompilerAsserts.neverPartOfCompilation();
+        PythonContext pythonContext = PythonContext.get(null);
+        if (!pythonContext.isNativeAccessAllowed()) {
+            LOGGER.severe(PythonUtils.formatJString("Attempting to bind %s to a native callable but native access is not allowed", pointer));
+        }
+        if (LOGGER.isLoggable(Level.FINER)) {
+            LOGGER.finer(PythonUtils.formatJString("Binding %s to native callable %s", pointer, descriptor.getName()));
+        }
+        return descriptor.bind(pythonContext.ensureNativeContext(), pointer);
     }
 }

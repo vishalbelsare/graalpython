@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -57,16 +57,17 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAcquireLibrary;
-import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
@@ -74,9 +75,8 @@ import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltin
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.runtime.IndirectCallData;
-import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
@@ -103,31 +103,31 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
     abstract static class ReadNode extends PythonTernaryClinicBuiltinNode {
         @Specialization(guards = "isNoValue(buffer)")
         static Object read(VirtualFrame frame, PSSLSocket self, int len, @SuppressWarnings("unused") PNone buffer,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Shared @Cached SSLOperationNode sslOperationNode,
-                        @Cached PythonObjectFactory factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             if (len == 0) {
-                return factory.createBytes(new byte[0]);
+                return PFactory.createBytes(language, new byte[0]);
             } else if (len < 0) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.SIZE_SHOULD_NOT_BE_NEGATIVE);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.SIZE_SHOULD_NOT_BE_NEGATIVE);
             }
             ByteBuffer output = PythonUtils.allocateByteBuffer(len);
             sslOperationNode.read(frame, inliningTarget, self, output);
             PythonUtils.flipBuffer(output);
-            return factory.createBytes(PythonUtils.getBufferArray(output), PythonUtils.getBufferLimit(output));
+            return PFactory.createBytes(language, PythonUtils.getBufferArray(output), PythonUtils.getBufferLimit(output));
         }
 
         @Specialization(guards = "!isNoValue(bufferObj)", limit = "3")
         static Object readInto(VirtualFrame frame, PSSLSocket self, int len, Object bufferObj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @CachedLibrary("bufferObj") PythonBufferAcquireLibrary bufferAcquireLib,
                         @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib,
                         @Shared @Cached SSLOperationNode sslOperationNode,
                         // unused node to avoid mixing shared and non-shared inlined nodes
-                        @SuppressWarnings("unused") @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            Object buffer = bufferAcquireLib.acquireWritableWithTypeError(bufferObj, "read", frame, indirectCallData);
+                        @SuppressWarnings("unused") @Shared @Cached PRaiseNode raiseNode) {
+            Object buffer = bufferAcquireLib.acquireWritableWithTypeError(bufferObj, "read", frame, callData);
             try {
                 int bufferLen = bufferLib.getBufferLength(buffer);
                 int toReadLen = len;
@@ -153,7 +153,7 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
                 }
                 return readBytes;
             } finally {
-                bufferLib.release(buffer, frame, indirectCallData);
+                bufferLib.release(buffer, frame, callData);
             }
         }
 
@@ -169,8 +169,8 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
     abstract static class WriteNode extends PythonBinaryClinicBuiltinNode {
         @Specialization(limit = "3")
         static Object write(VirtualFrame frame, PSSLSocket self, Object buffer,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @CachedLibrary("buffer") PythonBufferAccessLibrary bufferLib,
                         @Cached SSLOperationNode sslOperationNode) {
             try {
@@ -180,7 +180,7 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
                 sslOperationNode.write(frame, inliningTarget, self, input);
                 return length;
             } finally {
-                bufferLib.release(buffer, frame, indirectCallData);
+                bufferLib.release(buffer, frame, callData);
             }
         }
 
@@ -195,9 +195,10 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
     abstract static class DoHandshakeNode extends PythonUnaryBuiltinNode {
         @Specialization
         Object doHandshake(VirtualFrame frame, PSSLSocket self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
                         @Cached SSLOperationNode sslOperationNode) {
-            sslOperationNode.handshake(frame, inliningTarget, self);
+            sslOperationNode.handshake(frame, inliningTarget, constructAndRaiseNode, self);
             return PNone.NONE;
         }
     }
@@ -207,7 +208,7 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
     abstract static class ShutdownNode extends PythonUnaryBuiltinNode {
         @Specialization
         Object shutdown(VirtualFrame frame, PSSLSocket self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached SSLOperationNode sslOperationNode) {
             sslOperationNode.shutdown(frame, inliningTarget, self);
             return self.getSocket() != null ? self.getSocket() : PNone.NONE;
@@ -294,9 +295,9 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNoValue(obj)")
         static Object set(@SuppressWarnings("unused") PSSLSocket self, @SuppressWarnings("unused") Object obj,
-                        @Cached PRaiseNode raiseNode) {
+                        @Bind Node inliningTarget) {
             // JDK API doesn't support setting session ID
-            throw raiseNode.raise(NotImplementedError);
+            throw PRaiseNode.raiseStatic(inliningTarget, NotImplementedError);
         }
     }
 
@@ -313,68 +314,88 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
     @ArgumentClinic(name = "der", conversion = ArgumentClinic.ClinicConversion.Boolean, defaultValue = "false")
     @GenerateNodeFactory
     abstract static class GetPeerCertNode extends PythonBinaryClinicBuiltinNode {
-        @Specialization(guards = "der")
-        static Object getPeerCertDER(PSSLSocket self, @SuppressWarnings("unused") boolean der,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PythonObjectFactory.Lazy factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            if (!self.isHandshakeComplete()) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.HANDSHAKE_NOT_DONE_YET);
-            }
-            Certificate certificate = getCertificate(self.getEngine());
-            if (certificate != null) {
-                try {
-                    return factory.get(inliningTarget).createBytes(getEncoded(certificate));
-                } catch (CertificateEncodingException e) {
-                    // Fallthrough
-                }
-            }
-            // msimacek: In CPython, this is able to return unverified certificates. I don't see a
-            // way to do it in the Java API
-            return PNone.NONE;
-        }
-
-        @Specialization(guards = "!der")
-        static PDict getPeerCertDict(PSSLSocket self, @SuppressWarnings("unused") boolean der,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PythonObjectFactory.Lazy factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            if (!self.isHandshakeComplete()) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.HANDSHAKE_NOT_DONE_YET);
-            }
-            Certificate certificate = getCertificate(self.getEngine());
-            if (certificate instanceof X509Certificate) {
-                try {
-                    return CertUtils.decodeCertificate(PythonContext.get(inliningTarget).factory(), (X509Certificate) certificate);
-                } catch (CertificateParsingException e) {
-                    return factory.get(inliningTarget).createDict();
-                }
-            }
-            return factory.get(inliningTarget).createDict();
-        }
-
+        @Specialization
         @TruffleBoundary
-        private static Certificate getCertificate(SSLEngine engine) {
+        static Object getPeerCertDER(PSSLSocket self, boolean der,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached PConstructAndRaiseNode.Lazy raiseNode) {
+            if (!self.isHandshakeComplete()) {
+                throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.HANDSHAKE_NOT_DONE_YET);
+            }
+            Certificate certificate;
             try {
-                Certificate[] certificates = engine.getSession().getPeerCertificates();
+                Certificate[] certificates = self.getEngine().getSession().getPeerCertificates();
                 if (certificates.length != 0) {
-                    return certificates[0];
+                    certificate = certificates[0];
                 } else {
-                    return null;
+                    certificate = null;
                 }
-            } catch (SSLPeerUnverifiedException e) {
-                return null;
+            } catch (SSLPeerUnverifiedException e1) {
+                certificate = null;
             }
-        }
-
-        @TruffleBoundary
-        private static byte[] getEncoded(Certificate certificate) throws CertificateEncodingException {
-            return certificate.getEncoded();
+            if (der) {
+                if (certificate != null) {
+                    try {
+                        return PFactory.createBytes(language, certificate.getEncoded());
+                    } catch (CertificateEncodingException e) {
+                        // Fallthrough
+                    }
+                }
+                /*
+                 * msimacek: In CPython, this is able to return unverified certificates. I don't see
+                 * a way to do it in the Java API
+                 */
+                return PNone.NONE;
+            } else {
+                if (certificate instanceof X509Certificate) {
+                    try {
+                        return CertUtils.decodeCertificate(inliningTarget, raiseNode, (X509Certificate) certificate, language);
+                    } catch (CertificateParsingException e) {
+                        return PFactory.createDict(language);
+                    }
+                }
+                return PFactory.createDict(language);
+            }
         }
 
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
             return SSLSocketBuiltinsClinicProviders.GetPeerCertNodeClinicProviderGen.INSTANCE;
+        }
+    }
+
+    @Builtin(name = "get_unverified_chain", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class GetUnverifiedChainNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        @TruffleBoundary
+        static Object getCertificateChain(PSSLSocket self,
+                        @Bind PythonLanguage language) {
+            try {
+                Certificate[] certificates = self.getEngine().getSession().getPeerCertificates();
+                Object[] result = new Object[certificates.length];
+                for (int i = 0; i < certificates.length; i++) {
+                    if (!(certificates[i] instanceof X509Certificate)) {
+                        return PNone.NONE;
+                    }
+                    result[i] = PFactory.createSSLCertificate(language, (X509Certificate) certificates[i]);
+                }
+                return PFactory.createList(language, result);
+            } catch (SSLPeerUnverifiedException e) {
+                return PNone.NONE;
+            }
+        }
+    }
+
+    @Builtin(name = "get_verified_chain", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class GetVerifiedChainNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static Object getVerifiedChain(@SuppressWarnings("unused") PSSLSocket self,
+                        @Bind Node inliningTarget) {
+            /* Doesn't seem possible to implement on JSSE */
+            throw PRaiseNode.raiseStatic(inliningTarget, NotImplementedError);
         }
     }
 
@@ -387,9 +408,9 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
         @Specialization
         @SuppressWarnings("unused")
         static Object getChannelBinding(PSSLSocket self, TruffleString sbType,
-                        @Cached PRaiseNode raiseNode) {
+                        @Bind Node inliningTarget) {
             // JDK doesn't have an API to access what we need. BouncyCastle could provide this
-            throw raiseNode.raise(ValueError, ErrorMessages.S_CHANNEL_BINDING_NOT_IMPLEMENTED, sbType);
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.S_CHANNEL_BINDING_NOT_IMPLEMENTED, sbType);
         }
 
         @Override
@@ -403,7 +424,7 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
     abstract static class CipherNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object getCipher(PSSLSocket self,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             if (!self.isHandshakeComplete()) {
                 return PNone.NONE;
             }
@@ -411,7 +432,7 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
             if (cipher == null) {
                 return PNone.NONE;
             }
-            return factory.createTuple(new Object[]{cipher.getOpensslName(), cipher.getProtocol(), cipher.getStrengthBits()});
+            return PFactory.createTuple(language, new Object[]{cipher.getOpensslName(), cipher.getProtocol(), cipher.getStrengthBits()});
         }
 
         @TruffleBoundary
@@ -434,13 +455,14 @@ public final class SSLSocketBuiltins extends PythonBuiltins {
             if (!socket.isHandshakeComplete()) {
                 return PNone.NONE;
             }
+            PythonLanguage language = PythonLanguage.get(null);
             List<SSLCipher> ciphers = socket.getContext().computeEnabledCiphers(socket.getEngine());
             Object[] result = new Object[ciphers.size()];
             for (int i = 0; i < ciphers.size(); i++) {
                 SSLCipher cipher = ciphers.get(i);
-                result[i] = PythonObjectFactory.getUncached().createTuple(new Object[]{cipher.getOpensslName(), cipher.getProtocol(), cipher.getStrengthBits()});
+                result[i] = PFactory.createTuple(language, new Object[]{cipher.getOpensslName(), cipher.getProtocol(), cipher.getStrengthBits()});
             }
-            return PythonObjectFactory.getUncached().createList(result);
+            return PFactory.createList(language, result);
         }
     }
 

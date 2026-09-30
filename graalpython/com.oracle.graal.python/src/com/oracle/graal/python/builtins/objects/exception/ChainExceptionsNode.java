@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,22 +48,44 @@ import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 
 @GenerateInline(false) // Used in BCI
 public abstract class ChainExceptionsNode extends Node {
     public abstract void execute(PException currentException, PException contextException);
 
+    private static boolean compare(PBaseExceptionGroup currentGroup, PBaseExceptionGroup contextGroup, Node inliningTarget, InlinedConditionProfile conditionProfile) {
+        return conditionProfile.profile(
+                        inliningTarget,
+                        currentGroup != contextGroup && ((currentGroup.getParent() == null || contextGroup.getParent() == null) || currentGroup.getParent() != contextGroup.getParent()));
+    }
+
     @Specialization
     public static void chainExceptions(PException currentException, PException contextException,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached ExceptionNodes.GetContextNode getContextNode,
                     @Cached ExceptionNodes.SetContextNode setContextNode,
                     @Cached InlinedLoopConditionProfile p1,
-                    @Cached InlinedLoopConditionProfile p2) {
+                    @Cached InlinedLoopConditionProfile p2,
+                    @Cached InlinedConditionProfile areExceptionGroups,
+                    @Cached InlinedConditionProfile compareCurrentAndContext) {
         Object current = currentException.getUnreifiedException();
         Object context = contextException.getUnreifiedException();
-        if (current != context) {
+        boolean shouldChain = false;
+        boolean checkAreExceptionGroups = areExceptionGroups.profile(
+                        inliningTarget,
+                        current instanceof PBaseExceptionGroup && context instanceof PBaseExceptionGroup);
+        if (checkAreExceptionGroups) {
+            // for exception groups, the check needs to be done for parent, and not the original,
+            // since some exceptions may be filtered out from `current` when evaluating the except*
+            // match
+            shouldChain = compare((PBaseExceptionGroup) current, (PBaseExceptionGroup) context, inliningTarget, compareCurrentAndContext);
+        } else if (compareCurrentAndContext.profile(inliningTarget, current != context)) {
+            shouldChain = true;
+        }
+
+        if (shouldChain) {
             Object e = current;
             while (p1.profile(inliningTarget, e != PNone.NONE)) {
                 Object eContext = getContextNode.execute(inliningTarget, e);

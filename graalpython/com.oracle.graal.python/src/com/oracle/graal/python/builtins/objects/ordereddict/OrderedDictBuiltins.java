@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,36 +41,33 @@
 package com.oracle.graal.python.builtins.objects.ordereddict;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.KeyError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.RuntimeError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DICT__;
-import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DICT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_ITEMS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_KEYS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_VALUES;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___DELITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EQ__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___IOR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REVERSED__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ROR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETITEM__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SIZEOF__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_ITEMS;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T_KEYS;
 import static com.oracle.graal.python.nodes.StringLiterals.T_ELLIPSIS;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_PARENS;
+import static com.oracle.graal.python.nodes.StringLiterals.T_LBRACE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_LPAREN;
+import static com.oracle.graal.python.nodes.StringLiterals.T_RBRACE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_RPAREN;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -79,24 +76,35 @@ import com.oracle.graal.python.builtins.objects.PNotImplemented;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes;
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.dict.DictReprBuiltin.ReprOrderedDictItemsNode;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.ordereddict.POrderedDict.ODictNode;
+import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotMpAssSubscript.MpAssSubscriptBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectDelItem;
-import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectGetItem;
 import com.oracle.graal.python.lib.PyObjectGetIter;
+import com.oracle.graal.python.lib.PyObjectGetStateNode;
 import com.oracle.graal.python.lib.PyObjectHashNode;
-import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
+import com.oracle.graal.python.lib.PyObjectLookupAttr;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
 import com.oracle.graal.python.lib.PyObjectSetItem;
-import com.oracle.graal.python.lib.PyObjectSizeNode;
 import com.oracle.graal.python.lib.PySequenceContainsNode;
+import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.builtins.ListNodes;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
@@ -110,10 +118,12 @@ import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
 import com.oracle.graal.python.nodes.object.SetDictNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
@@ -121,47 +131,52 @@ import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.POrderedDict)
 public class OrderedDictBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = OrderedDictBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return OrderedDictBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @Builtin(name = "update", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     abstract static class InitNode extends PythonBuiltinNode {
         @Specialization
         static PNone update(VirtualFrame frame, PDict self, Object[] args, PKeyword[] kwargs,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached UpdateFromArgsNode update,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Object mapping = PNone.NO_VALUE;
             if (args.length == 1) {
                 mapping = args[0];
             } else if (args.length > 1) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.EXPECTED_AT_MOST_D_ARGS_GOT_D, 1, args.length);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.EXPECTED_AT_MOST_D_ARGS_GOT_D, 1, args.length);
             }
             update.execute(frame, inliningTarget, self, mapping, kwargs);
             return PNone.NONE;
         }
     }
 
-    @Builtin(name = J___SETITEM__, minNumOfPositionalArgs = 3)
+    @Slot(value = SlotKind.mp_ass_subscript, isComplex = true)
     @GenerateNodeFactory
-    abstract static class SetItemNode extends PythonTernaryBuiltinNode {
-        @Specialization
-        static PNone setitem(VirtualFrame frame, POrderedDict self, Object key, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectHashNode hashNode,
+    abstract static class SetItemNode extends MpAssSubscriptBuiltinNode {
+        // @Exclusive for truffle-interpreted-performance
+        @Specialization(guards = "!isNoValue(value)")
+        static void setitem(VirtualFrame frame, POrderedDict self, Object key, Object value,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PyObjectHashNode hashNode,
                         @Cached HashingStorageNodes.HashingStorageSetItemWithHash setItemWithHash,
                         @Cached InlinedBranchProfile storageUpdated,
                         @Cached ObjectHashMap.GetNode getNode,
@@ -177,29 +192,131 @@ public class OrderedDictBuiltins extends PythonBuiltins {
                 self.append(node);
                 putNode.put(frame, inliningTarget, self.nodes, key, hash, node);
             }
-            return PNone.NONE;
         }
-    }
 
-    @Builtin(name = J___DELITEM__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    abstract static class DelItemNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static PNone delitem(VirtualFrame frame, POrderedDict self, Object key,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectHashNode hashNode,
+        @Specialization(guards = "isNoValue(value)")
+        static void delitem(VirtualFrame frame, POrderedDict self, Object key, @SuppressWarnings("unused") Object value,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PyObjectHashNode hashNode,
                         @Cached HashingStorageNodes.HashingStorageDelItem delItem,
                         @Cached ObjectHashMap.RemoveNode removeNode,
                         @Cached PRaiseNode raiseNode) {
             long hash = hashNode.execute(frame, inliningTarget, key);
             ODictNode node = (ODictNode) removeNode.execute(frame, inliningTarget, self.nodes, key, hash);
             if (node == null) {
-                throw raiseNode.raise(KeyError, new Object[]{key});
+                throw raiseNode.raise(inliningTarget, KeyError, new Object[]{key});
             }
             self.remove(node);
             // TODO with hash
             delItem.execute(frame, inliningTarget, self.getDictStorage(), key, self);
-            return PNone.NONE;
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    abstract static class UpdateMappingNode extends PNodeWithContext {
+        abstract void execute(VirtualFrame frame, Node inliningTarget, Object target, Object mapping, Object keysMethod);
+
+        @Specialization
+        static void doMerge(VirtualFrame frame, Node inliningTarget, Object target, Object mapping, Object keysMethod,
+                        @Cached CallNode callKeys,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached PyIterNextNode next,
+                        @Cached PyObjectGetItem getItem,
+                        @Cached PyObjectSetItem setItem) {
+            Object keys = callKeys.execute(frame, keysMethod);
+            Object iterator = getIter.execute(frame, inliningTarget, keys);
+            while (true) {
+                Object key;
+                try {
+                    key = next.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
+                    break;
+                }
+                Object value = getItem.execute(frame, inliningTarget, mapping, key);
+                setItem.execute(frame, inliningTarget, target, key, value);
+            }
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    abstract static class UpdateFromSequenceNode extends PNodeWithContext {
+        abstract void execute(VirtualFrame frame, Node inliningTarget, Object target, Object iterable);
+
+        @Specialization
+        static void doIterable(VirtualFrame frame, Node inliningTarget, Object target, Object iterable,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached PyIterNextNode next,
+                        @Cached SetItemFromSequenceNode setItemFromSequence) {
+            Object iterator = getIter.execute(frame, inliningTarget, iterable);
+            while (true) {
+                Object element;
+                try {
+                    element = next.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
+                    break;
+                }
+                setItemFromSequence.execute(frame, inliningTarget, target, element);
+            }
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    abstract static class SetItemFromSequenceNode extends PNodeWithContext {
+        abstract void execute(VirtualFrame frame, Node inliningTarget, Object target, Object element);
+
+        @Specialization
+        static void doGeneric(VirtualFrame frame, Node inliningTarget, Object target, Object element,
+                        @Cached SequenceStorageNodes.GetItemScalarNode getItem,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached PyIterNextNode next,
+                        @Cached PyObjectSetItem setItem,
+                        @Cached InlinedBranchProfile tupleProfile,
+                        @Cached InlinedBranchProfile listProfile,
+                        @Cached PRaiseNode raiseNode) {
+            Object key, value;
+            SequenceStorage storage = null;
+            if (element instanceof PTuple tuple && PGuards.isBuiltinTuple(tuple)) {
+                tupleProfile.enter(inliningTarget);
+                storage = tuple.getSequenceStorage();
+            } else if (element instanceof PList list && PGuards.isBuiltinList(list)) {
+                listProfile.enter(inliningTarget);
+                storage = list.getSequenceStorage();
+            }
+            if (storage != null) {
+                int length = storage.length();
+                if (length == 0) {
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NEED_MORE_THAN_D_VALUES_TO_UNPACK, 0);
+                } else if (length == 1) {
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NEED_MORE_THAN_D_VALUES_TO_UNPACK, 1);
+                } else if (length > 2) {
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.TOO_MANY_VALUES_TO_UNPACK, 2);
+                }
+                key = getItem.execute(inliningTarget, storage, 0);
+                value = getItem.execute(inliningTarget, storage, 1);
+            } else {
+                // Acts as a profile
+                Object iterator = getIter.execute(frame, inliningTarget, element);
+                try {
+                    key = next.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NEED_MORE_THAN_D_VALUES_TO_UNPACK, 0);
+                }
+                try {
+                    value = next.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NEED_MORE_THAN_D_VALUES_TO_UNPACK, 1);
+                }
+                try {
+                    next.execute(frame, inliningTarget, iterator);
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.TOO_MANY_VALUES_TO_UNPACK, 2);
+                } catch (IteratorExhausted e) {
+                    // Expected
+                }
+            }
+            setItem.execute(frame, inliningTarget, target, key, value);
         }
     }
 
@@ -212,43 +329,54 @@ public class OrderedDictBuiltins extends PythonBuiltins {
 
         abstract void execute(VirtualFrame frame, Node inliningTarget, Object self, Object mapping, PKeyword[] kwargs);
 
-        @GenerateInline(false)
-        abstract static class ForEachNode extends HashingStorageNodes.HashingStorageForEachCallback<Object> {
-
-            @Override
-            public abstract Object execute(Frame frame, Node inliningTarget, HashingStorage storage, HashingStorageNodes.HashingStorageIterator it, Object dict);
-
-            @Specialization
-            static Object each(Frame frame, @SuppressWarnings("unused") Node node, HashingStorage storage, HashingStorageNodes.HashingStorageIterator it, Object dict,
-                            @Bind("this") Node inliningTarget,
-                            @Cached HashingStorageNodes.HashingStorageIteratorKey itKey,
-                            @Cached HashingStorageNodes.HashingStorageIteratorValue itValue,
-                            @Cached PyObjectSetItem setItem) {
-                Object key = itKey.execute(inliningTarget, storage, it);
-                Object value = itValue.execute(inliningTarget, storage, it);
-                setItem.execute(frame, inliningTarget, dict, key, value);
-                return dict;
-            }
-        }
-
         @Specialization
         static void update(VirtualFrame frame, Node inliningTarget, Object self, Object mapping, PKeyword[] kwargs,
-                        @Cached(inline = false) HashingStorage.InitNode initNode,
-                        @Cached HashingStorageNodes.HashingStorageForEach forEach,
-                        @Cached(inline = false) ForEachNode callbackNode) {
-            // Utilize the fact that normal dict is also ordered
-            HashingStorage newStorage = initNode.execute(frame, mapping, kwargs);
-            forEach.execute(frame, inliningTarget, newStorage, callbackNode, self);
+                        @Cached PyObjectLookupAttr lookupKeys,
+                        @Cached UpdateMappingNode updateMapping,
+                        @Cached UpdateFromSequenceNode updateFromSequence,
+                        @Cached PyObjectSetItem setItem,
+                        @Cached HashingStorageNodes.HashingStorageGetIterator getIterator,
+                        @Cached HashingStorageNodes.HashingStorageIteratorNext iteratorNext,
+                        @Cached HashingStorageNodes.HashingStorageIteratorKey iteratorKey,
+                        @Cached HashingStorageNodes.HashingStorageIteratorValue iteratorValue,
+                        @Cached HashingStorageNodes.HashingStorageLen lenNode,
+                        @Cached PRaiseNode raiseNode,
+                        @Cached InlinedConditionProfile builtinDictProfile) {
+            if (mapping != PNone.NO_VALUE) {
+                if (builtinDictProfile.profile(inliningTarget, mapping instanceof PDict dict && PGuards.isBuiltinDict(dict))) {
+                    PDict dict = (PDict) mapping;
+                    HashingStorage storage = dict.getDictStorage();
+                    int initialSize = lenNode.execute(inliningTarget, storage);
+                    HashingStorageNodes.HashingStorageIterator iterator = getIterator.execute(inliningTarget, storage);
+                    while (iteratorNext.execute(inliningTarget, storage, iterator)) {
+                        Object key = iteratorKey.execute(inliningTarget, storage, iterator);
+                        Object value = iteratorValue.execute(inliningTarget, storage, iterator);
+                        setItem.execute(frame, inliningTarget, self, key, value);
+                        if (initialSize != lenNode.execute(inliningTarget, storage)) {
+                            throw raiseNode.raise(inliningTarget, RuntimeError, ErrorMessages.MUTATED_DURING_UPDATE, "dict");
+                        }
+                    }
+                } else {
+                    Object keysAttribute = lookupKeys.execute(frame, inliningTarget, mapping, T_KEYS);
+                    if (keysAttribute != PNone.NO_VALUE) {
+                        updateMapping.execute(frame, inliningTarget, self, mapping, keysAttribute);
+                    } else {
+                        updateFromSequence.execute(frame, inliningTarget, self, mapping);
+                    }
+                }
+            }
+            for (PKeyword keyword : kwargs) {
+                setItem.execute(frame, inliningTarget, self, keyword.getName(), keyword.getValue());
+            }
         }
     }
 
-    @Builtin(name = J___OR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___ROR__, minNumOfPositionalArgs = 2, reverseOperation = true)
+    @Slot(value = SlotKind.nb_or, isComplex = true)
     @GenerateNodeFactory
-    abstract static class OrNode extends PythonBinaryBuiltinNode {
+    abstract static class OrNode extends BinaryOpBuiltinNode {
         @Specialization
         static Object or(VirtualFrame frame, POrderedDict left, PDict right,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached GetClassNode getClassNode,
                         @Shared @Cached CallNode callNode,
                         @Shared @Cached UpdateFromArgsNode update) {
@@ -259,7 +387,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object or(VirtualFrame frame, PDict left, POrderedDict right,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached GetClassNode getClassNode,
                         @Shared @Cached CallNode callNode,
                         @Shared @Cached UpdateFromArgsNode update) {
@@ -275,12 +403,12 @@ public class OrderedDictBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___IOR__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.nb_inplace_or, isComplex = true)
     @GenerateNodeFactory
     abstract static class IOrNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object or(VirtualFrame frame, POrderedDict self, Object other,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached UpdateFromArgsNode update) {
             update.execute(frame, inliningTarget, self, other);
             return self;
@@ -292,24 +420,19 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class ReduceNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object reduce(VirtualFrame frame, POrderedDict self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
-                        @Cached PyObjectGetAttr getAttr,
-                        @Cached PyObjectSizeNode sizeNode,
+                        @Cached PyObjectGetStateNode getStateNode,
                         @Cached PyObjectCallMethodObjArgs callMethod,
                         @Cached PyObjectGetIter getIter,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object type = getClassNode.execute(inliningTarget, self);
-            // Might be overridden
-            Object dict = getAttr.execute(frame, inliningTarget, self, T___DICT__);
-            if (sizeNode.execute(frame, inliningTarget, dict) == 0) {
-                dict = PNone.NONE;
-            }
-            Object args = factory.createEmptyTuple();
+            Object state = getStateNode.execute(frame, inliningTarget, self);
+            Object args = PFactory.createEmptyTuple(language);
             // Might be overridden
             Object items = callMethod.execute(frame, inliningTarget, self, T_ITEMS);
             Object itemsIter = getIter.execute(frame, inliningTarget, items);
-            return factory.createTuple(new Object[]{type, args, dict, PNone.NONE, itemsIter});
+            return PFactory.createTuple(language, new Object[]{type, args, state, PNone.NONE, itemsIter});
         }
     }
 
@@ -319,7 +442,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class SetDefaultNode extends PythonTernaryClinicBuiltinNode {
         @Specialization
         static Object setdefault(VirtualFrame frame, POrderedDict self, Object key, Object defaultValue,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PySequenceContainsNode containsNode,
                         @Cached PyObjectGetItem getItem,
                         @Cached PyObjectSetItem setItem) {
@@ -343,11 +466,11 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class PopNode extends PythonTernaryBuiltinNode {
         @Specialization
         static Object pop(VirtualFrame frame, POrderedDict self, Object key, Object defaultValue,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PySequenceContainsNode containsNode,
                         @Cached PyObjectGetItem getItem,
                         @Cached PyObjectDelItem delItem,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             // XXX the CPython implementation is weird when self is a subclass
             if (containsNode.execute(frame, inliningTarget, self, key)) {
                 Object value = getItem.execute(frame, inliningTarget, self, key);
@@ -356,7 +479,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
             } else if (defaultValue != PNone.NO_VALUE) {
                 return defaultValue;
             } else {
-                throw raiseNode.get(inliningTarget).raise(KeyError, new Object[]{key});
+                throw raiseNode.raise(inliningTarget, KeyError, new Object[]{key});
             }
         }
     }
@@ -367,18 +490,20 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class PopItemNode extends PythonBinaryClinicBuiltinNode {
         @Specialization
         static Object popitem(VirtualFrame frame, POrderedDict self, boolean last,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached HashingStorageNodes.HashingStorageDelItem delItem,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raise) {
+                        @Cached ObjectHashMap.RemoveNode removeNode,
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raise) {
             ODictNode node = last ? self.last : self.first;
             if (node == null) {
-                throw raise.get(inliningTarget).raise(KeyError, ErrorMessages.IS_EMPTY, "dictionary");
+                throw raise.raise(inliningTarget, KeyError, ErrorMessages.IS_EMPTY, "dictionary");
             }
             self.remove(node);
+            removeNode.execute(frame, inliningTarget, self.nodes, node.key, node.hash);
             // TODO with hash
             Object value = delItem.executePop(frame, inliningTarget, self.getDictStorage(), node.key, self);
-            return factory.createTuple(new Object[]{node.key, value});
+            return PFactory.createTuple(language, new Object[]{node.key, value});
         }
 
         @Override
@@ -392,7 +517,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class CopyNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object copy(VirtualFrame frame, POrderedDict self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached CallNode callNode) {
             Object type = getClassNode.execute(inliningTarget, self);
@@ -405,7 +530,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class ClearNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PNone clear(POrderedDict self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached HashingStorageNodes.HashingStorageClear clearNode) {
             HashingStorage storage = clearNode.execute(inliningTarget, self.getDictStorage());
             self.setDictStorage(storage);
@@ -421,15 +546,19 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class MoveToEndNode extends PythonTernaryClinicBuiltinNode {
         @Specialization
         static PNone move(VirtualFrame frame, POrderedDict self, Object key, boolean last,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectHashNode hashNode,
                         @Cached ObjectHashMap.GetNode getNode,
                         @Cached PRaiseNode raiseNode) {
+            if (self.first == null) {
+                // Empty
+                throw raiseNode.raise(inliningTarget, KeyError, new Object[]{key});
+            }
             if ((last ? self.last : self.first).key != key) {
                 long hash = hashNode.execute(frame, inliningTarget, key);
                 ODictNode node = (ODictNode) getNode.execute(frame, inliningTarget, self.nodes, key, hash);
                 if (node == null) {
-                    throw raiseNode.raise(KeyError, new Object[]{key});
+                    throw raiseNode.raise(inliningTarget, KeyError, new Object[]{key});
                 }
                 if (last) {
                     if (self.last != node) {
@@ -457,8 +586,8 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class KeysNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object keys(POrderedDict self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictKeys(self);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictKeys(language, self);
         }
     }
 
@@ -467,8 +596,8 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class ValuesNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object values(POrderedDict self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictValues(self);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictValues(language, self);
         }
     }
 
@@ -477,18 +606,18 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class ItemsNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object items(POrderedDict self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictItems(self);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictItems(language, self);
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object iter(POrderedDict self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictIterator(self, POrderedDictIterator.IteratorType.KEYS, false);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictIterator(language, self, POrderedDictIterator.IteratorType.KEYS, false);
         }
     }
 
@@ -497,27 +626,25 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class ReversedNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object iter(POrderedDict self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictIterator(self, POrderedDictIterator.IteratorType.KEYS, true);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictIterator(language, self, POrderedDictIterator.IteratorType.KEYS, true);
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object repr(VirtualFrame frame, POrderedDict self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached TypeNodes.GetNameNode getNameNode,
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode,
-                        @Cached PyObjectCallMethodObjArgs callMethod,
-                        @Cached ListNodes.ConstructListNode constructListNode,
-                        @Cached PyObjectReprAsTruffleStringNode repr) {
+                        @Cached ReprOrderedDictItemsNode reprDictItems) {
             TruffleString typeName = getNameNode.execute(inliningTarget, getClassNode.execute(inliningTarget, self));
             if (self.first == null) {
-                TruffleStringBuilder builder = TruffleStringBuilder.create(TS_ENCODING);
+                TruffleStringBuilderUTF32 builder = TruffleStringBuilder.createUTF32();
                 appendStringNode.execute(builder, typeName);
                 appendStringNode.execute(builder, T_EMPTY_PARENS);
                 return toStringNode.execute(builder);
@@ -527,12 +654,12 @@ public class OrderedDictBuiltins extends PythonBuiltins {
                 return T_ELLIPSIS;
             }
             try {
-                TruffleStringBuilder builder = TruffleStringBuilder.create(TS_ENCODING);
+                TruffleStringBuilderUTF32 builder = TruffleStringBuilder.createUTF32();
                 appendStringNode.execute(builder, typeName);
-                Object items = callMethod.execute(frame, inliningTarget, self, T_ITEMS);
-                TruffleString itemsRepr = repr.execute(frame, inliningTarget, constructListNode.execute(frame, items));
                 appendStringNode.execute(builder, T_LPAREN);
-                appendStringNode.execute(builder, itemsRepr);
+                appendStringNode.execute(builder, T_LBRACE);
+                reprDictItems.execute(frame, self, builder);
+                appendStringNode.execute(builder, T_RBRACE);
                 appendStringNode.execute(builder, T_RPAREN);
                 return toStringNode.execute(builder);
             } finally {
@@ -549,7 +676,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
         @Specialization
         static boolean cmp(VirtualFrame frame, Node inliningTarget, POrderedDict self, POrderedDict other,
                         @Cached HashingStorageNodes.HashingStorageGetItemWithHash getItem,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode) {
+                        @Cached PyObjectRichCompareBool eqNode) {
             ODictNode lnode = self.first;
             ODictNode rnode = other.first;
             do {
@@ -559,12 +686,12 @@ public class OrderedDictBuiltins extends PythonBuiltins {
                 if (lnode == null || rnode == null) {
                     return false;
                 }
-                if (!eqNode.compare(frame, inliningTarget, lnode.key, rnode.key)) {
+                if (!eqNode.executeEq(frame, inliningTarget, lnode.key, rnode.key)) {
                     return false;
                 }
                 Object lvalue = getItem.execute(frame, inliningTarget, self.getDictStorage(), lnode.key, lnode.hash);
                 Object rvalue = getItem.execute(frame, inliningTarget, other.getDictStorage(), rnode.key, rnode.hash);
-                if (!eqNode.compare(frame, inliningTarget, lvalue, rvalue)) {
+                if (!eqNode.executeEq(frame, inliningTarget, lvalue, rvalue)) {
                     return false;
                 }
                 lnode = lnode.next;
@@ -579,36 +706,19 @@ public class OrderedDictBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___EQ__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
-    abstract static class EqNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static boolean cmp(VirtualFrame frame, POrderedDict self, PDict other,
-                        @Bind("this") Node inliningTarget,
+    abstract static class EqNode extends RichCmpBuiltinNode {
+        @Specialization(guards = "op.isEqOrNe()")
+        static boolean cmp(VirtualFrame frame, POrderedDict self, PDict other, RichCmpOp op,
+                        @Bind Node inliningTarget,
                         @Cached EqHelperNode eqHelperNode) {
-            return eqHelperNode.execute(frame, inliningTarget, self, other);
+            return eqHelperNode.execute(frame, inliningTarget, self, other) == op.isEq();
         }
 
         @Fallback
         @SuppressWarnings("unused")
-        static Object cmp(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-    }
-
-    @Builtin(name = J___NE__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    abstract static class NeNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static boolean cmp(VirtualFrame frame, POrderedDict self, PDict other,
-                        @Bind("this") Node inliningTarget,
-                        @Cached EqHelperNode eqHelperNode) {
-            return !eqHelperNode.execute(frame, inliningTarget, self, other);
-        }
-
-        @Fallback
-        @SuppressWarnings("unused")
-        static Object cmp(Object self, Object other) {
+        static Object cmp(Object self, Object other, RichCmpOp op) {
             return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
@@ -618,7 +728,7 @@ public class OrderedDictBuiltins extends PythonBuiltins {
     abstract static class DictNode extends PythonBinaryBuiltinNode {
         @Specialization
         static PNone dict(Object self, PDict mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached SetDictNode setDict) {
             setDict.execute(inliningTarget, self, mapping);
             return PNone.NONE;
@@ -626,15 +736,15 @@ public class OrderedDictBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isNoValue(mapping)")
         static Object dict(Object self, @SuppressWarnings("unused") PNone mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetOrCreateDictNode getDict) {
             return getDict.execute(inliningTarget, self);
         }
 
         @Specialization(guards = {"!isNoValue(mapping)", "!isDict(mapping)"})
         static PNone dict(@SuppressWarnings("unused") Object self, Object mapping,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
         }
     }
 

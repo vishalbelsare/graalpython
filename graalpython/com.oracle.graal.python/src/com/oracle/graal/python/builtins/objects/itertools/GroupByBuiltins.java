@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,29 +42,45 @@ package com.oracle.graal.python.builtins.objects.itertools;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.nodes.ErrorMessages.IS_NOT_A;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.ArgumentClinic;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinFunctions;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedSetStateBuiltin;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.itertools.GroupByBuiltinsClinicProviders.GroupByNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyIterNextNode;
+import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -79,12 +95,42 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PGroupBy})
 public final class GroupByBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = GroupByBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return GroupByBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "groupby", minNumOfPositionalArgs = 2, parameterNames = {"cls", "iterable", "key"})
+    @ArgumentClinic(name = "key", defaultValue = "PNone.NONE")
+    @GenerateNodeFactory
+    public abstract static class GroupByNode extends PythonTernaryClinicBuiltinNode {
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return GroupByNodeClinicProviderGen.INSTANCE;
+        }
+
+        @Specialization
+        static PGroupBy construct(VirtualFrame frame, Object cls, Object iterable, Object key,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
+            if (!isTypeNode.execute(inliningTarget, cls)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+            }
+            PGroupBy self = PFactory.createGroupBy(cls, getInstanceShape.execute(cls));
+            self.setKeyFunc(PGuards.isNone(key) ? null : key);
+            self.setIt(getIter.execute(frame, inliningTarget, iterable));
+            return self;
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -93,36 +139,36 @@ public final class GroupByBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object next(VirtualFrame frame, PGroupBy self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached BuiltinFunctions.NextNode nextNode,
+                        @Bind Node inliningTarget,
+                        @Cached PyIterNextNode nextNode,
                         @Cached CallNode callNode,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode,
+                        @Cached PyObjectRichCompareBool eqNode,
                         @Cached InlinedBranchProfile eqProfile,
                         @Cached InlinedConditionProfile hasFuncProfile,
                         @Cached InlinedLoopConditionProfile loopConditionProfile,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             self.setCurrGrouper(null);
             while (loopConditionProfile.profile(inliningTarget, doGroupByStep(frame, inliningTarget, self, eqProfile, eqNode))) {
                 self.groupByStep(frame, inliningTarget, nextNode, callNode, hasFuncProfile);
             }
             self.setTgtKey(self.getCurrKey());
-            PGrouper grouper = factory.createGrouper(self, self.getTgtKey());
-            return factory.createTuple(new Object[]{self.getCurrKey(), grouper});
+            PGrouper grouper = PFactory.createGrouper(language, self, self.getTgtKey());
+            return PFactory.createTuple(language, new Object[]{self.getCurrKey(), grouper});
         }
 
-        private static boolean doGroupByStep(VirtualFrame frame, Node inliningTarget, PGroupBy self, InlinedBranchProfile eqProfile, PyObjectRichCompareBool.EqNode eqNode) {
+        private static boolean doGroupByStep(VirtualFrame frame, Node inliningTarget, PGroupBy self, InlinedBranchProfile eqProfile, PyObjectRichCompareBool eqNode) {
             if (self.getCurrKey() == null) {
                 return true;
             } else if (self.getTgtKey() == null) {
                 return false;
             } else {
                 eqProfile.enter(inliningTarget);
-                if (!eqNode.compare(frame, inliningTarget, self.getTgtKey(), self.getCurrKey())) {
+                if (!eqNode.executeEq(frame, inliningTarget, self.getTgtKey(), self.getCurrKey())) {
                     return false;
                 }
             }
@@ -132,25 +178,21 @@ public final class GroupByBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         @Specialization
-        static Object reduceMarkerNotSet(PGroupBy self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile noKeyFuncProfile,
-                        @Cached InlinedConditionProfile noValuesProfile,
-                        @Cached GetClassNode getClassNode,
-                        @Cached PythonObjectFactory factory) {
+        static Object reduceMarkerNotSet(PGroupBy self) {
+            PythonLanguage language = PythonLanguage.get(null);
             Object keyFunc = self.getKeyFunc();
-            if (noKeyFuncProfile.profile(inliningTarget, keyFunc == null)) {
+            if (keyFunc == null) {
                 keyFunc = PNone.NONE;
             }
-            Object type = getClassNode.execute(inliningTarget, self);
-            PTuple tuple1 = factory.createTuple(new Object[]{self.getIt(), keyFunc});
-            if (noValuesProfile.profile(inliningTarget, !valuesSet(self))) {
-                return factory.createTuple(new Object[]{type, tuple1});
+            Object type = GetClassNode.executeUncached(self);
+            PTuple tuple1 = PFactory.createTuple(language, new Object[]{self.getIt(), keyFunc});
+            if (!valuesSet(self)) {
+                return PFactory.createTuple(language, new Object[]{type, tuple1});
             }
-            PTuple tuple2 = factory.createTuple(new Object[]{self.getCurrValue(), self.getTgtKey(), self.getCurrKey()});
-            return factory.createTuple(new Object[]{type, tuple1, tuple2});
+            PTuple tuple2 = PFactory.createTuple(language, new Object[]{self.getCurrValue(), self.getTgtKey(), self.getCurrKey()});
+            return PFactory.createTuple(language, new Object[]{type, tuple1, tuple2});
         }
 
         private static boolean valuesSet(PGroupBy self) {
@@ -161,24 +203,22 @@ public final class GroupByBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___SETSTATE__, minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    public abstract static class SetStateNode extends PythonBinaryBuiltinNode {
+    public abstract static class SetStateNode extends DeprecatedSetStateBuiltin {
         @Specialization
-        static Object setState(VirtualFrame frame, PGroupBy self, Object state,
-                        @Bind("this") Node inliningTarget,
-                        @Cached TupleBuiltins.LenNode lenNode,
-                        @Cached TupleBuiltins.GetItemNode getItemNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            if (!(state instanceof PTuple) || (int) lenNode.execute(frame, state) != 3) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, IS_NOT_A, "state", "3-tuple");
+        @TruffleBoundary
+        static Object setState(PGroupBy self, Object state,
+                        @Bind Node inliningTarget) {
+            if (!PyTupleCheckNode.executeUncached(state) || PyTupleSizeNode.executeUncached(state) != 3) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, IS_NOT_A, "state", "3-tuple");
             }
 
-            Object currValue = getItemNode.execute(frame, state, 0);
+            Object currValue = PyTupleGetItem.executeUncached(state, 0);
             self.setCurrValue(currValue);
 
-            Object tgtKey = getItemNode.execute(frame, state, 1);
+            Object tgtKey = PyTupleGetItem.executeUncached(state, 1);
             self.setTgtKey(tgtKey);
 
-            Object currKey = getItemNode.execute(frame, state, 2);
+            Object currKey = PyTupleGetItem.executeUncached(state, 2);
             self.setCurrKey(currKey);
 
             return PNone.NONE;

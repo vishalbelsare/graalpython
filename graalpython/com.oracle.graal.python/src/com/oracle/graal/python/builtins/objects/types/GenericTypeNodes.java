@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,50 +41,74 @@
 package com.oracle.graal.python.builtins.objects.types;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_TYPE_VAR;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_TYPING;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___ARGS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___MODULE__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___ORIGIN__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___PARAMETERS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___QUALNAME__;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___TYPING_PREPARE_SUBST__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___TYPING_SUBST__;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PNotImplemented;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.ellipsis.PEllipsis;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyObjectGetItem;
+import com.oracle.graal.python.lib.PyObjectIsTrueNode;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
 import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
 import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
 import com.oracle.graal.python.lib.PyObjectTypeCheck;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
 import com.oracle.graal.python.lib.PyUnicodeCheckNode;
 import com.oracle.graal.python.nodes.BuiltinNames;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.object.IsNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 public abstract class GenericTypeNodes {
-    static void reprItem(TruffleStringBuilder sb, Object obj) {
+
+    public static final String J___TYPING_UNPACKED_TUPLE_ARGS__ = "__typing_unpacked_tuple_args__";
+    public static final TruffleString T___TYPING_UNPACKED_TUPLE_ARGS__ = tsLiteral(J___TYPING_UNPACKED_TUPLE_ARGS__);
+
+    public static final String J___TYPING_IS_UNPACKED_TYPEVARTUPLE__ = "__typing_is_unpacked_typevartuple__";
+    public static final TruffleString T___TYPING_IS_UNPACKED_TYPEVARTUPLE__ = tsLiteral(J___TYPING_IS_UNPACKED_TYPEVARTUPLE__);
+
+    @TruffleBoundary
+    private static Object getItemUncached(SequenceStorage storage, int i) {
+        return SequenceStorageNodes.GetItemScalarNode.executeUncached(storage, i);
+    }
+
+    static void reprItem(TruffleStringBuilderUTF32 sb, Object obj) {
         PyObjectLookupAttr lookup = PyObjectLookupAttr.getUncached();
         PyObjectStrAsTruffleStringNode str = PyObjectStrAsTruffleStringNode.getUncached();
         Object origin = lookup.execute(null, null, obj, T___ORIGIN__);
@@ -101,7 +125,7 @@ public abstract class GenericTypeNodes {
             Object module = lookup.execute(null, null, obj, T___MODULE__);
             if (!(module instanceof PNone)) {
                 // Looks like a class
-                if (PyUnicodeCheckNode.executeUncached(module) && PyObjectRichCompareBool.EqNode.compareUncached(module, BuiltinNames.T_BUILTINS)) {
+                if (PyUnicodeCheckNode.executeUncached(module) && PyObjectRichCompareBool.executeEqUncached(module, BuiltinNames.T_BUILTINS)) {
                     // builtins don't need a module name
                     sb.appendStringUncached(str.execute(null, null, qualname));
                     return;
@@ -116,52 +140,56 @@ public abstract class GenericTypeNodes {
         sb.appendStringUncached(PyObjectReprAsTruffleStringNode.executeUncached(obj));
     }
 
+    static Object[] makeParameters(VirtualFrame frame, BoundaryCallData boundaryCallData, PTuple args) {
+        Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+        try {
+            return makeParametersUncached(args);
+        } finally {
+            BoundaryCallContext.exit(frame, boundaryCallData, saved);
+        }
+    }
+
     // Equivalent of _Py_make_parameters
     @TruffleBoundary
-    static Object[] makeParameters(PTuple args) {
+    static Object[] makeParametersUncached(PTuple args) {
         PyObjectLookupAttr lookup = PyObjectLookupAttr.getUncached();
-        SequenceStorage storage = args.getSequenceStorage();
-        int nargs = storage.length();
+        SequenceStorage argsStorage = args.getSequenceStorage();
+        int nargs = argsStorage.length();
         List<Object> parameters = new ArrayList<>(nargs);
         for (int iarg = 0; iarg < nargs; iarg++) {
-            Object t = storage.getItemNormalized(iarg);
-            if (isTypeVar(t)) {
-                addUnique(parameters, t);
+            Object t = getItemUncached(argsStorage, iarg);
+            // We don't want __parameters__ descriptor of a bare Python class
+            if (TypeNodes.IsTypeNode.executeUncached(t)) {
+                continue;
             }
-            Object subparams = lookup.execute(null, null, t, T___PARAMETERS__);
-            if (subparams instanceof PTuple) {
-                SequenceStorage storage2 = ((PTuple) subparams).getSequenceStorage();
-                for (int j = 0; j < storage2.length(); j++) {
-                    addUnique(parameters, storage2.getItemNormalized(j));
+            Object subst = PyObjectLookupAttr.executeUncached(t, T___TYPING_SUBST__);
+
+            if (subst != PNone.NO_VALUE) {
+                listAdd(parameters, t);
+            } else {
+                Object subparams = lookup.execute(null, null, t, T___PARAMETERS__);
+                if (PyTupleCheckNode.executeUncached(subparams)) {
+                    int subparamsLen = PyTupleSizeNode.executeUncached(subparams);
+                    for (int j = 0; j < subparamsLen; j++) {
+                        listAdd(parameters, PyTupleGetItem.executeUncached(subparams, j));
+                    }
                 }
             }
         }
         return parameters.toArray();
     }
 
-    // Equivalent of is_typevar
+    // Equivalent of tuple_add, but we use list
     @TruffleBoundary
-    static boolean isTypeVar(Object obj) {
-        // isinstance(obj, TypeVar) without importing typing.py.
-        Object type = GetClassNode.executeUncached(obj);
-        TruffleString typeName = TypeNodes.GetNameNode.executeUncached(type);
-        if (T_TYPE_VAR.equalsUncached(typeName, TS_ENCODING)) {
-            Object module = PyObjectLookupAttr.executeUncached(type, T___MODULE__);
-            return PyUnicodeCheckNode.executeUncached(module) && PyObjectRichCompareBool.EqNode.compareUncached(module, T_TYPING);
-        }
-        return false;
-    }
-
-    // Rough equivalent of tuple_add
-    @TruffleBoundary
-    private static void addUnique(List<Object> list, Object obj) {
-        if (indexOf(list, obj) < 0) {
+    private static void listAdd(List<Object> list, Object obj) {
+        if (listIndex(list, obj) < 0) {
             list.add(obj);
         }
     }
 
+    // Equivalent of tuple_index, but we use list
     @TruffleBoundary
-    private static int indexOf(List<Object> list, Object obj) {
+    private static int listIndex(List<Object> list, Object obj) {
         for (int i = 0; i < list.size(); i++) {
             if (list.get(i) == obj) {
                 return i;
@@ -170,77 +198,194 @@ public abstract class GenericTypeNodes {
         return -1;
     }
 
+    @TruffleBoundary
+    private static int tupleIndex(PTuple tuple, Object obj) {
+        SequenceStorage storage = tuple.getSequenceStorage();
+        for (int i = 0; i < storage.length(); i++) {
+            if (getItemUncached(storage, i) == obj) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Equivalent of tuple_extend, but we use list
+    @TruffleBoundary
+    private static void listExtend(List<Object> list, Object tuple) {
+        int len = PyTupleSizeNode.executeUncached(tuple);
+        for (int i = 0; i < len; i++) {
+            list.add(PyTupleGetItem.executeUncached(tuple, i));
+        }
+    }
+
+    @TruffleBoundary
+    private static boolean isUnpackedTypeVarTuple(Object arg) {
+        if (TypeNodes.IsTypeNode.executeUncached(arg)) {
+            return false;
+        }
+        Object result = PyObjectLookupAttr.executeUncached(arg, T___TYPING_IS_UNPACKED_TYPEVARTUPLE__);
+        return PyObjectIsTrueNode.executeUncached(result);
+    }
+
+    @TruffleBoundary
+    private static Object unpackedTupleArgs(Object item) {
+        // Fast path
+        if (item instanceof PGenericAlias alias && alias.isStarred() &&
+                        TypeNodes.IsSameTypeNode.executeUncached(alias.getOrigin(), PythonBuiltinClassType.PTuple)) {
+            return alias.getArgs();
+        }
+        Object result = PyObjectLookupAttr.executeUncached(item, T___TYPING_UNPACKED_TUPLE_ARGS__);
+        if (result instanceof PNone) {
+            return null;
+        }
+        return result;
+    }
+
+    @TruffleBoundary
+    private static PTuple unpackArgs(Object item) {
+        List<Object> newargs = new ArrayList<>();
+        if (PyTupleCheckNode.executeUncached(item)) {
+            int len = PyTupleSizeNode.executeUncached(item);
+            for (int i = 0; i < len; i++) {
+                unpackArgsInner(newargs, PyTupleGetItem.executeUncached(item, i));
+            }
+        } else {
+            unpackArgsInner(newargs, item);
+        }
+        return PFactory.createTuple(PythonLanguage.get(null), newargs.toArray());
+    }
+
+    private static void unpackArgsInner(List<Object> newargs, Object item) {
+        if (!TypeNodes.IsTypeNode.executeUncached(item)) {
+            Object subargs = unpackedTupleArgs(item);
+            if (PyTupleCheckNode.executeUncached(subargs)) {
+                int len = PyTupleSizeNode.executeUncached(subargs);
+                if (!(len > 0 && PyTupleGetItem.executeUncached(subargs, len - 1) == PEllipsis.INSTANCE)) {
+                    for (int i = 0; i < len; i++) {
+                        newargs.add(PyTupleGetItem.executeUncached(subargs, i));
+                    }
+                    return;
+                }
+            }
+        }
+        newargs.add(item);
+    }
+
     // Equivalent of _Py_subs_parameters
     @TruffleBoundary
-    static Object[] subsParameters(Node node, Object self, PTuple args, PTuple parameters, Object item) {
+    static Object[] subsParametersUncached(Node node, Object self, PTuple args, PTuple parameters, Object item) {
+        PythonLanguage language = PythonLanguage.get(null);
         SequenceStorage paramsStorage = parameters.getSequenceStorage();
         int nparams = paramsStorage.length();
         if (nparams == 0) {
-            throw PRaiseNode.raiseUncached(node, TypeError, ErrorMessages.THERE_ARE_NO_TYPE_VARIABLES_LEFT_IN_S, PyObjectReprAsTruffleStringNode.executeUncached(self));
+            throw PRaiseNode.raiseStatic(node, TypeError, ErrorMessages.S_IS_NOT_A_GENERIC_CLASS, PyObjectReprAsTruffleStringNode.executeUncached(self));
         }
-        Object[] argitems = item instanceof PTuple ? ((PTuple) item).getSequenceStorage().getCopyOfInternalArray() : new Object[]{item};
-        if (argitems.length != nparams) {
-            throw PRaiseNode.raiseUncached(node, TypeError, ErrorMessages.TOO_S_ARGUMENTS_FOR_S, argitems.length > nparams ? "many" : "few", PyObjectReprAsTruffleStringNode.executeUncached(self));
+        item = unpackArgs(item);
+        for (int i = 0; i < nparams; i++) {
+            Object param = getItemUncached(paramsStorage, i);
+            Object prepare = PyObjectLookupAttr.executeUncached(param, T___TYPING_PREPARE_SUBST__);
+            if (!(prepare instanceof PNone)) {
+                Object itemarg = PyTupleCheckNode.executeUncached(item) ? item : PFactory.createTuple(language, new Object[]{item});
+                item = CallNode.executeUncached(prepare, self, itemarg);
+            }
+        }
+
+        int nitems;
+        Object[] argitems;
+        if (PyTupleCheckNode.executeUncached(item)) {
+            nitems = PyTupleSizeNode.executeUncached(item);
+            argitems = new Object[nitems];
+            for (int i = 0; i < nitems; i++) {
+                argitems[i] = PyTupleGetItem.executeUncached(item, i);
+            }
+        } else {
+            argitems = new Object[]{item};
+            nitems = 1;
+        }
+        if (nitems != nparams) {
+            throw PRaiseNode.raiseStatic(node, TypeError, ErrorMessages.TOO_S_ARGUMENTS_FOR_S_ACTUAL_D_EXPECTED_D, nitems > nparams ? "many" : "few",
+                            PyObjectReprAsTruffleStringNode.executeUncached(self), nitems, nparams);
         }
         SequenceStorage argsStorage = args.getSequenceStorage();
-        Object[] newargs = new Object[argsStorage.length()];
+        List<Object> newargs = new ArrayList<>(argsStorage.length());
         for (int iarg = 0; iarg < argsStorage.length(); iarg++) {
-            Object arg = argsStorage.getItemNormalized(iarg);
-            if (isTypeVar(arg)) {
-                for (int iparam = 0; iparam < nparams; iparam++) {
-                    if (paramsStorage.getItemNormalized(iparam) == arg) {
-                        arg = argitems[iparam];
-                        break;
-                    }
-                }
-            } else {
-                arg = subsTvars(arg, paramsStorage, argitems);
+            Object arg = getItemUncached(argsStorage, iarg);
+            if (TypeNodes.IsTypeNode.executeUncached(arg)) {
+                newargs.add(arg);
+                continue;
             }
-            newargs[iarg] = arg;
+            boolean unpack = isUnpackedTypeVarTuple(arg);
+            Object original = arg;
+            Object subst = PyObjectLookupAttr.executeUncached(arg, T___TYPING_SUBST__);
+            if (subst != PNone.NO_VALUE) {
+                int iparam = tupleIndex(parameters, arg);
+                assert iparam >= 0;
+                arg = CallNode.executeUncached(subst, argitems[iparam]);
+            } else {
+                arg = subsTvars(arg, parameters, argitems);
+            }
+            if (unpack) {
+                if (!PyTupleCheckNode.executeUncached(arg)) {
+                    throw PRaiseNode.raiseStatic(node, TypeError, ErrorMessages.EXPECTED_TYPING_SUBST_OF_T_OBJECTS_TO_RETURN_TUPLE_NOT_T, original, arg);
+                }
+                listExtend(newargs, arg);
+            } else {
+                newargs.add(arg);
+            }
         }
-        return newargs;
+        return newargs.toArray();
     }
 
-    private static Object subsTvars(Object obj, SequenceStorage parameters, Object[] argitems) {
+    @TruffleBoundary
+    private static Object subsTvars(Object obj, PTuple parameters, Object[] argitems) {
         Object subparams = PyObjectLookupAttr.executeUncached(obj, T___PARAMETERS__);
-        if (subparams instanceof PTuple) {
-            SequenceStorage subparamsStorage = ((PTuple) subparams).getSequenceStorage();
-            int nparams = parameters.length();
-            int nsubargs = subparamsStorage.length();
-            if (nsubargs > 0) {
-                Object[] subargs = new Object[nsubargs];
-                for (int i = 0; i < nsubargs; i++) {
-                    Object arg = subparamsStorage.getItemNormalized(i);
-                    for (int iparam = 0; iparam < nparams; iparam++) {
-                        if (parameters.getItemNormalized(iparam) == arg) {
-                            arg = argitems[iparam];
-                            subargs[i] = arg;
-                            break;
+        if (PyTupleCheckNode.executeUncached(subparams) && PyTupleSizeNode.executeUncached(subparams) > 0) {
+            int subparamsLen = PyTupleSizeNode.executeUncached(subparams);
+            List<Object> subargs = new ArrayList<>(subparamsLen);
+            for (int i = 0; i < subparamsLen; i++) {
+                Object arg = PyTupleGetItem.executeUncached(subparams, i);
+                int foundIndex = tupleIndex(parameters, arg);
+                if (foundIndex >= 0) {
+                    Object param = getItemUncached(parameters.getSequenceStorage(), foundIndex);
+                    arg = argitems[foundIndex];
+                    // TypeVarTuple
+                    if (PyTupleCheckNode.executeUncached(arg)) {
+                        if (GetObjectSlotsNode.executeUncached(param).tp_iter() != null) {
+                            listExtend(subargs, arg);
+                            continue;
                         }
                     }
                 }
-                PTuple subargsTuple = PythonObjectFactory.getUncached().createTuple(subargs);
-                obj = PyObjectGetItem.executeUncached(obj, subargsTuple);
+                subargs.add(arg);
             }
+            PTuple subargsTuple = PFactory.createTuple(PythonLanguage.get(null), subargs.toArray());
+            obj = PyObjectGetItem.executeUncached(obj, subargsTuple);
         }
         return obj;
     }
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 20
+    @GenerateInline(false)       // footprint reduction 36 -> 20
     public abstract static class UnionTypeOrNode extends PNodeWithContext {
-        public abstract Object execute(Object self, Object other);
+        public abstract Object execute(VirtualFrame frame, Object self, Object other);
 
         @Specialization(guards = {"isUnionable(inliningTarget, typeCheck, self)", "isUnionable(inliningTarget, typeCheck, other)"}, limit = "1")
-        static Object union(Object self, Object other,
-                        @Bind("this") Node inliningTarget,
+        static Object union(VirtualFrame frame, Object self, Object other,
+                        @SuppressWarnings("unused") @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @SuppressWarnings("unused") @Cached PyObjectTypeCheck typeCheck,
-                        @Cached PythonObjectFactory factory) {
-            Object[] args = dedupAndFlattenArgs(new Object[]{self, other});
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+            Object[] args;
+            Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                args = dedupAndFlattenArgs(new Object[]{self, other});
+            } finally {
+                BoundaryCallContext.exit(frame, boundaryCallData, saved);
+            }
             if (args.length == 1) {
                 return args[0];
             }
             assert args.length > 1;
-            return factory.createUnionType(args);
+            return PFactory.createUnionType(language, args);
         }
 
         @Fallback
@@ -251,14 +396,14 @@ public abstract class GenericTypeNodes {
 
         protected static boolean isUnionable(Node inliningTarget, PyObjectTypeCheck typeCheck, Object obj) {
             return obj == PNone.NONE || typeCheck.execute(inliningTarget, obj, PythonBuiltinClassType.PythonClass) || typeCheck.execute(inliningTarget, obj, PythonBuiltinClassType.PGenericAlias) ||
-                            typeCheck.execute(inliningTarget, obj, PythonBuiltinClassType.PUnionType);
+                            typeCheck.execute(inliningTarget, obj, PythonBuiltinClassType.PUnionType) || typeCheck.execute(inliningTarget, obj, PythonBuiltinClassType.PTypeAliasType);
         }
     }
 
     @TruffleBoundary
     private static Object[] dedupAndFlattenArgs(Object[] args) {
         args = flattenArgs(args);
-        PyObjectRichCompareBool.EqNode eq = PyObjectRichCompareBool.EqNode.getUncached();
+        PyObjectRichCompareBool eq = PyObjectRichCompareBool.getUncached();
         Object[] newArgs = new Object[args.length];
         int addedItems = 0;
         for (int i = 0; i < args.length; i++) {
@@ -268,7 +413,7 @@ public abstract class GenericTypeNodes {
                 Object jElement = newArgs[j];
                 boolean isGA = iElement instanceof PGenericAlias && jElement instanceof PGenericAlias;
                 // RichCompare to also deduplicate GenericAlias types (slower)
-                isDuplicate = isGA ? eq.compare(null, null, iElement, jElement) : IsNode.getUncached().execute(iElement, jElement);
+                isDuplicate = isGA ? eq.executeEq(null, null, iElement, jElement) : IsNode.getUncached().execute(iElement, jElement);
                 if (isDuplicate) {
                     break;
                 }
@@ -300,7 +445,7 @@ public abstract class GenericTypeNodes {
             if (args[i] instanceof PUnionType) {
                 SequenceStorage storage = ((PUnionType) args[i]).getArgs().getSequenceStorage();
                 for (int j = 0; j < storage.length(); j++) {
-                    flattenedArgs[pos++] = storage.getItemNormalized(j);
+                    flattenedArgs[pos++] = getItemUncached(storage, j);
                 }
             } else {
                 flattenedArgs[pos++] = args[i] == PNone.NONE ? PythonBuiltinClassType.PNone : args[i];

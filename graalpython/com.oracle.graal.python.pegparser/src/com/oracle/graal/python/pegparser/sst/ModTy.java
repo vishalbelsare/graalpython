@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -84,7 +84,7 @@ public abstract class ModTy extends SSTNode {
     }
 
     public static final class Expression extends ModTy {
-        public final ExprTy body;
+        public ExprTy body;
 
         public Expression(ExprTy body, SourceRange sourceRange) {
             super(sourceRange);
@@ -100,7 +100,7 @@ public abstract class ModTy extends SSTNode {
 
     public static final class FunctionType extends ModTy {
         public final ExprTy[] argTypes;   // nullable
-        public final ExprTy returns;
+        public ExprTy returns;
 
         public FunctionType(ExprTy[] argTypes, ExprTy returns, SourceRange sourceRange) {
             super(sourceRange);

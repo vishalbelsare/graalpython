@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,28 +42,32 @@ package com.oracle.graal.python.builtins.modules.cext;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.IndexError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
+import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.INT64_T;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Pointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyListObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectBorrowed;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Void;
 import static com.oracle.graal.python.nodes.ErrorMessages.BAD_ARG_TO_INTERNAL_FUNC_S;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.writePtr;
 
 import java.util.Arrays;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiQuaternaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTernaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.PromoteBorrowedValue;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.PySequenceArrayWrapper;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.GetItemScalarNode;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.ListGeneralizationNode;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.SetItemScalarNode;
@@ -76,43 +80,40 @@ import com.oracle.graal.python.lib.PySliceNew;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.builtins.ListNodes.AppendNode;
-import com.oracle.graal.python.nodes.builtins.ListNodes.GetNativeListStorage;
 import com.oracle.graal.python.nodes.builtins.TupleNodes.ConstructTupleNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.graal.python.runtime.sequence.storage.NativeSequenceStorage;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.runtime.sequence.storage.EmptySequenceStorage;
+import com.oracle.graal.python.runtime.sequence.storage.NativeObjectSequenceStorage;
+import com.oracle.graal.python.runtime.sequence.storage.ObjectSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
-import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 public final class PythonCextListBuiltins {
 
-    ///////////// list /////////////
     @CApiBuiltin(ret = PyObjectTransfer, args = {Py_ssize_t}, call = Direct)
     abstract static class PyList_New extends CApiUnaryBuiltinNode {
         @Specialization(guards = "size < 0")
         static Object newListError(long size,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(SystemError, BAD_ARG_TO_INTERNAL_FUNC_S, size);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, BAD_ARG_TO_INTERNAL_FUNC_S, size);
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "size == 0")
         static Object newEmptyList(long size,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createList(PythonUtils.EMPTY_OBJECT_ARRAY);
+                        @Bind PythonLanguage language) {
+            return PFactory.createList(language);
         }
 
         @Specialization(guards = "size > 0")
         static Object newList(long size,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createList(array(size));
+                        @Bind PythonLanguage language) {
+            return PFactory.createList(language, array(size));
         }
 
         private static Object[] array(long size) {
@@ -127,20 +128,21 @@ public final class PythonCextListBuiltins {
 
         @Specialization
         static Object doPList(PList list, long key,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PromoteBorrowedValue promoteNode,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached EnsurePythonObjectNode ensureNode,
                         @Cached ListGeneralizationNode generalizationNode,
                         @Cached SetItemScalarNode setItemNode,
                         @Cached GetItemScalarNode getItemNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             SequenceStorage sequenceStorage = list.getSequenceStorage();
             // we must do a bounds-check but we must not normalize the index
             if (key < 0 || key >= sequenceStorage.length()) {
-                throw raiseNode.get(inliningTarget).raise(IndexError, ErrorMessages.LIST_INDEX_OUT_OF_RANGE);
+                throw raiseNode.raise(inliningTarget, IndexError, ErrorMessages.LIST_INDEX_OUT_OF_RANGE);
             }
             Object result = getItemNode.execute(inliningTarget, sequenceStorage, (int) key);
-            Object promotedValue = promoteNode.execute(inliningTarget, result);
-            if (promotedValue != null) {
+            Object promotedValue = ensureNode.execute(context, result, false);
+            if (promotedValue != result) {
                 sequenceStorage = generalizationNode.execute(inliningTarget, sequenceStorage, promotedValue);
                 list.setSequenceStorage(sequenceStorage);
                 setItemNode.execute(inliningTarget, sequenceStorage, (int) key, promotedValue);
@@ -152,6 +154,42 @@ public final class PythonCextListBuiltins {
         @Fallback
         Object fallback(Object list, @SuppressWarnings("unused") Object pos) {
             throw raiseFallback(list, PythonBuiltinClassType.PList);
+        }
+    }
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, Py_ssize_t}, call = Direct)
+    abstract static class PyList_GetItemRef extends CApiBinaryBuiltinNode {
+
+        @Specialization
+        static Object doPList(PList list, long key,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached EnsurePythonObjectNode ensureNode,
+                        @Cached ListGeneralizationNode generalizationNode,
+                        @Cached SetItemScalarNode setItemNode,
+                        @Cached GetItemScalarNode getItemNode,
+                        @Cached PRaiseNode raiseNode) {
+            SequenceStorage sequenceStorage = list.getSequenceStorage();
+            // we must do a bounds-check but we must not normalize the index
+            if (key < 0 || key >= sequenceStorage.length()) {
+                throw raiseNode.raise(inliningTarget, IndexError, ErrorMessages.LIST_INDEX_OUT_OF_RANGE);
+            }
+            Object result = getItemNode.execute(inliningTarget, sequenceStorage, (int) key);
+            // See the note in PyDict_GetItemRef
+            Object promotedValue = ensureNode.execute(context, result, false);
+            if (promotedValue != result) {
+                sequenceStorage = generalizationNode.execute(inliningTarget, sequenceStorage, promotedValue);
+                list.setSequenceStorage(sequenceStorage);
+                setItemNode.execute(inliningTarget, sequenceStorage, (int) key, promotedValue);
+                return promotedValue;
+            }
+            return result;
+        }
+
+        @Fallback
+        static Object fallback(@SuppressWarnings("unused") Object list, @SuppressWarnings("unused") Object pos,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.EXPECTED_A_LIST);
         }
     }
 
@@ -193,7 +231,7 @@ public final class PythonCextListBuiltins {
     abstract static class PyList_GetSlice extends CApiTernaryBuiltinNode {
         @Specialization
         Object getSlice(PList list, Object iLow, Object iHigh,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached com.oracle.graal.python.builtins.objects.list.ListBuiltins.GetItemNode getItemNode,
                         @Cached PySliceNew sliceNode) {
             return getItemNode.execute(null, list, sliceNode.execute(inliningTarget, iLow, iHigh, PNone.NONE));
@@ -210,15 +248,31 @@ public final class PythonCextListBuiltins {
 
         @Specialization
         static int getSlice(PList list, Object iLow, Object iHigh, Object s,
-                        @Bind("this") Node inliningTarget,
-                        @Cached com.oracle.graal.python.builtins.objects.list.ListBuiltins.SetItemNode setItemNode,
+                        @Bind Node inliningTarget,
+                        @Cached ListBuiltins.SetSubscriptNode setItemNode,
                         @Cached PySliceNew sliceNode) {
-            setItemNode.execute(null, list, sliceNode.execute(inliningTarget, iLow, iHigh, PNone.NONE), s);
+            setItemNode.executeVoid(null, list, sliceNode.execute(inliningTarget, iLow, iHigh, PNone.NONE), s);
             return 0;
         }
 
         @Fallback
         int fallback(Object list, @SuppressWarnings("unused") Object iLow, @SuppressWarnings("unused") Object iHigh, @SuppressWarnings("unused") Object s) {
+            throw raiseFallback(list, PythonBuiltinClassType.PList);
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject, PyObject}, call = Direct)
+    abstract static class PyList_Extend extends CApiBinaryBuiltinNode {
+
+        @Specialization
+        static int extend(PList list, Object iterable,
+                        @Cached ListExtendNode extendNode) {
+            extendNode.execute(null, list, iterable);
+            return 0;
+        }
+
+        @Fallback
+        int fallback(Object list, @SuppressWarnings("unused") Object iterable) {
             throw raiseFallback(list, PythonBuiltinClassType.PList);
         }
     }
@@ -239,16 +293,20 @@ public final class PythonCextListBuiltins {
         }
     }
 
+    /*
+     * A pure-C Py_SIZE implementation regressed mixed managed/native/list-subclass workload by
+     * about 1.26x.
+     */
     @CApiBuiltin(ret = Py_ssize_t, args = {PyObject}, call = Direct)
     abstract static class PyList_Size extends CApiUnaryBuiltinNode {
 
         @Specialization
-        static int size(PList list) {
+        static long size(PList list) {
             return list.getSequenceStorage().length();
         }
 
         @Fallback
-        int fallback(Object list) {
+        long fallback(Object list) {
             throw raiseFallback(list, PythonBuiltinClassType.PList);
         }
     }
@@ -285,77 +343,76 @@ public final class PythonCextListBuiltins {
         }
     }
 
-    @CApiBuiltin(ret = Int, args = {PyObject, Py_ssize_t, PyObjectTransfer}, call = Direct)
-    abstract static class PyList_SetItem extends CApiTernaryBuiltinNode {
-        @Specialization
-        int doManaged(PList list, Object position, Object element,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createForList()") SequenceStorageNodes.SetItemNode setItemNode,
-                        @Cached InlinedConditionProfile generalizedProfile) {
-            SequenceStorage newStorage = setItemNode.execute(null, list.getSequenceStorage(), position, element);
-            if (generalizedProfile.profile(inliningTarget, list.getSequenceStorage() != newStorage)) {
-                list.setSequenceStorage(newStorage);
-            }
-            return 0;
-        }
-
-        @Fallback
-        int fallback(Object list, @SuppressWarnings("unused") Object i, @SuppressWarnings("unused") Object item) {
-            throw raiseFallback(list, PythonBuiltinClassType.PList);
-        }
-    }
-
-    @CApiBuiltin(ret = Void, args = {PyObject, Py_ssize_t, PyObject}, call = Direct)
-    abstract static class _PyList_SET_ITEM extends CApiTernaryBuiltinNode {
-        @Specialization
-        static int doManaged(PList list, long index, Object element,
-                        @Bind("this") Node inliningTarget,
-                        @Cached ListGeneralizationNode generalizationNode,
-                        @Cached SequenceStorageNodes.InitializeItemScalarNode setItemNode,
-                        @Cached InlinedConditionProfile generalizedProfile,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            SequenceStorage sequenceStorage = list.getSequenceStorage();
-            checkBounds(inliningTarget, sequenceStorage, index, raiseNode);
-            SequenceStorage newStorage = generalizationNode.execute(inliningTarget, sequenceStorage, element);
-            setItemNode.execute(inliningTarget, newStorage, (int) index, element);
-            if (generalizedProfile.profile(inliningTarget, list.getSequenceStorage() != newStorage)) {
-                list.setSequenceStorage(newStorage);
-            }
-            return 0;
-        }
-
-        @Specialization
-        static int doNative(PythonAbstractNativeObject list, long index, Object element,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetNativeListStorage asNativeStorage,
-                        @Cached SequenceStorageNodes.InitializeNativeItemScalarNode setItemNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            NativeSequenceStorage sequenceStorage = asNativeStorage.execute(list);
-            checkBounds(inliningTarget, sequenceStorage, index, raiseNode);
-            setItemNode.execute(sequenceStorage, (int) index, element);
-            return 0;
-        }
-
-        @Fallback
-        @SuppressWarnings("unused")
-        Object fallback(Object list, Object index, Object element) {
-            throw raiseFallback(list, PythonBuiltinClassType.PList);
-        }
-
-        private static void checkBounds(Node inliningTarget, SequenceStorage sequenceStorage, long index, PRaiseNode.Lazy raiseNode) {
-            // we must do a bounds-check but we must not normalize the index
-            if (index < 0 || index >= sequenceStorage.length()) {
-                throw raiseNode.get(inliningTarget).raise(IndexError, ErrorMessages.INDEX_OUT_OF_BOUNDS);
-            }
-        }
-    }
-
     @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
     abstract static class PyList_Reverse extends CApiUnaryBuiltinNode {
         @Specialization
         static int reverse(PList self,
                         @Cached ListBuiltins.ListReverseNode reverseNode) {
             reverseNode.execute(null, self);
+            return 0;
+        }
+
+        @Fallback
+        static int error(@SuppressWarnings("unused") Object self,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, ErrorMessages.BAD_ARG_TO_INTERNAL_FUNC);
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class PyList_Clear extends CApiUnaryBuiltinNode {
+
+        @Specialization
+        static int clear(PList self) {
+            self.setSequenceStorage(EmptySequenceStorage.INSTANCE);
+            return 0;
+        }
+
+        @Fallback
+        static int error(@SuppressWarnings("unused") Object self,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, ErrorMessages.BAD_ARG_TO_INTERNAL_FUNC);
+        }
+    }
+
+    @CApiBuiltin(ret = INT64_T, args = {PyObject, Pointer}, call = Ignored)
+    abstract static class GraalPyPrivate_List_TruncateNativeStorage extends CApiBinaryBuiltinNode {
+
+        @Specialization
+        static long doGeneric(PList self, long outItems) {
+            SequenceStorage sequenceStorage = self.getSequenceStorage();
+            if (sequenceStorage instanceof NativeObjectSequenceStorage nativeStorage) {
+                writePtr(outItems, nativeStorage.getPtr());
+                int length = nativeStorage.length();
+                nativeStorage.setNewLength(0);
+                return length;
+            }
+            return 0;
+        }
+    }
+
+    @CApiBuiltin(ret = INT64_T, args = {PyObject, Pointer}, call = Ignored)
+    abstract static class GraalPyPrivate_List_TryGetItems extends CApiBinaryBuiltinNode {
+
+        @Specialization
+        static long doGeneric(PList self, long outItems,
+                        @Bind Node inliningTarget,
+                        @Cached PySequenceArrayWrapper.ToNativeStorageNode toNativeStorageNode) {
+            SequenceStorage sequenceStorage = self.getSequenceStorage();
+            if (sequenceStorage instanceof ObjectSequenceStorage objectStorage) {
+                sequenceStorage = toNativeStorageNode.execute(inliningTarget, objectStorage, false);
+                self.setSequenceStorage(sequenceStorage);
+            }
+            if (sequenceStorage instanceof NativeObjectSequenceStorage nativeStorage) {
+                writePtr(outItems, nativeStorage.getPtr());
+                return nativeStorage.length();
+            }
+            return 0;
+        }
+
+        @SuppressWarnings("unused")
+        @Specialization
+        static long doGeneric(PNone none, Object ignore) {
             return 0;
         }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,8 @@ package com.oracle.graal.python.builtins.objects.type;
 
 import static com.oracle.graal.python.builtins.objects.object.PythonObject.HAS_NO_VALUE_PROPERTIES;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___SLOTNAMES__;
+import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
+import static com.oracle.truffle.api.CompilerDirectives.transferToInterpreterAndInvalidate;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -49,12 +51,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromDynamicObjectNode;
+import com.oracle.graal.python.builtins.objects.object.PythonObject;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromPythonObjectNode;
 import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
 import com.oracle.graal.python.runtime.sequence.storage.MroSequenceStorage;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
+import com.oracle.truffle.api.object.DynamicObject;
+import com.oracle.truffle.api.object.DynamicObject.GetNode;
+import com.oracle.truffle.api.object.DynamicObject.GetShapeFlagsNode;
 import com.oracle.truffle.api.object.Property;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -90,16 +95,17 @@ public final class MroShape {
     public static MroShape create(MroSequenceStorage mro, PythonLanguage lang) {
         CompilerAsserts.neverPartOfCompilation();
         MroShape mroShape = lang.getMroShapeRoot();
+        GetShapeFlagsNode getShapeFlagsUncached = GetShapeFlagsNode.getUncached();
         for (int i = mro.length() - 1; i >= 0; i--) {
-            PythonAbstractClass element = mro.getItemNormalized(i);
+            PythonAbstractClass element = mro.getPythonClassItemNormalized(i);
             if (PythonManagedClass.isInstance(element)) {
                 PythonManagedClass managedClass = PythonManagedClass.cast(element);
-                if (GetDictIfExistsNode.getUncached().execute(managedClass) != null) {
+                if (GetDictIfExistsNode.getDictUncached(managedClass) != null) {
                     // On top of not having a shape, the dictionary may also contain items with side
                     // effecting __eq__ and/or __hash__
                     return null;
                 }
-                if ((DynamicObjectLibrary.getUncached().getShapeFlags(managedClass) & HAS_NO_VALUE_PROPERTIES) != 0) {
+                if ((getShapeFlagsUncached.execute(managedClass) & HAS_NO_VALUE_PROPERTIES) != 0) {
                     return null;
                 }
                 assert hasNoNoValueProperties(managedClass);
@@ -132,12 +138,12 @@ public final class MroShape {
     public static final class MroShapeLookupResult extends Node {
         private static final int NOT_FOUND_INDEX = -1;
         private final int mroIndex;
-        @Child ReadAttributeFromDynamicObjectNode readNode;
+        @Child ReadAttributeFromPythonObjectNode readNode;
 
         public MroShapeLookupResult(int mroIndex) {
             this.mroIndex = mroIndex;
             if (mroIndex != NOT_FOUND_INDEX) {
-                readNode = ReadAttributeFromDynamicObjectNode.create();
+                readNode = ReadAttributeFromPythonObjectNode.create();
             }
         }
 
@@ -145,11 +151,17 @@ public final class MroShape {
             return new MroShapeLookupResult(NOT_FOUND_INDEX);
         }
 
-        public Object getFromMro(MroSequenceStorage mro, Object key) {
+        public Object getFromMro(MroSequenceStorage mro, TruffleString key) {
             if (mroIndex == NOT_FOUND_INDEX) {
                 return PNone.NO_VALUE;
             } else {
-                Object result = readNode.execute(mro.getItemNormalized(mroIndex), key);
+                PythonAbstractClass item = mro.getPythonClassItemNormalized(mroIndex);
+                if (!(item instanceof PythonObject)) {
+                    // MroShape should only contain PythonManagedClass
+                    transferToInterpreterAndInvalidate();
+                    throw shouldNotReachHere("Unexpected object in getFromMro: " + item.getClass());
+                }
+                Object result = readNode.execute((PythonObject) item, key);
                 // We must not get NO_VALUE because that would mean the MROShape contains a class
                 // with NO_VALUE properties and cannot be used to lookup properties only by shapes
                 assert result != PNone.NO_VALUE : mro.getClassName() + "." + key;
@@ -159,9 +171,8 @@ public final class MroShape {
     }
 
     private static boolean hasNoNoValueProperties(PythonManagedClass klass) {
-        DynamicObjectLibrary lib = DynamicObjectLibrary.getFactory().getUncached(klass);
         for (Object key : klass.getShape().getKeyList()) {
-            if (key instanceof TruffleString && lib.getOrDefault(klass, key, null) == PNone.NO_VALUE) {
+            if (key instanceof TruffleString && GetNode.getUncached().execute(klass, key, null) == PNone.NO_VALUE) {
                 // The MROShape machinery makes the assumption that shapes are enough to determine
                 // MRO lookup results, in the presence of properties with NO_VALUE shape is not
                 // enough, such shapes should be marked with the HAS_NO_VALUE_PROPERTIES flag
@@ -188,7 +199,7 @@ public final class MroShape {
         }
         MroShape mroShape = klass.getMroShape();
         for (int i = 0; i < mro.length(); i++) {
-            if (!(mro.getItemNormalized(i) instanceof PythonManagedClass)) {
+            if (!(mro.getPythonClassItemNormalized(i) instanceof PythonManagedClass)) {
                 // If there is a non-managed class, we give up on maintaining an MRO shape
                 assert mroShape == null : mro.getClassName();
                 return true;
@@ -200,7 +211,7 @@ public final class MroShape {
         }
         MroShape currMroShape = mroShape;
         for (int i = 0; i < mro.length(); i++) {
-            PythonManagedClass kls = (PythonManagedClass) mro.getItemNormalized(i);
+            PythonManagedClass kls = (PythonManagedClass) mro.getPythonClassItemNormalized(i);
             if (kls.getShape() != currMroShape.shape) {
                 String message = String.format("mro:%s,index:%d,curr klass:%s\nactual shape:\n%s,\nexpected shape:\n%s",
                                 mro.getClassName(), i, kls, kls.getShape(), currMroShape.shape);
@@ -210,7 +221,7 @@ public final class MroShape {
                         klsShapeProps.add(property.getKey());
                     }
                 }
-                klsShapeProps.removeIf(x -> DynamicObjectLibrary.getUncached().getOrDefault(kls, x, null) == PNone.NO_VALUE);
+                klsShapeProps.removeIf(x -> DynamicObject.GetNode.getUncached().execute(kls, x, null) == PNone.NO_VALUE);
                 Set<Object> currMroShapeProps = new HashSet<>();
                 for (Property property : currMroShape.shape.getPropertyList()) {
                     if (!property.isHidden()) {
@@ -223,12 +234,12 @@ public final class MroShape {
                 // We ignore difference for special attributes that should not influence the MRO
                 // lookup results
                 diff.remove(T___SLOTNAMES__);
-                if (diff.size() > 0) {
+                if (!diff.isEmpty()) {
                     HashSet<String> sDiff = new HashSet<>(diff.size());
                     for (Object o : diff) {
                         sDiff.add(o.toString());
                     }
-                    assert diff.isEmpty() : message + ",diff:" + String.join(",", sDiff);
+                    assert false : message + ",diff:" + String.join(",", sDiff);
                 }
             }
             currMroShape = currMroShape.parent;

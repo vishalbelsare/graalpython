@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,15 +50,18 @@ import static com.oracle.graal.python.nodes.ErrorMessages.COMPRESSOR_HAS_BEEN_FL
 import static com.oracle.graal.python.nodes.ErrorMessages.INTEGRITY_CHECKS_ONLY_SUPPORTED_BY;
 import static com.oracle.graal.python.nodes.ErrorMessages.MUST_SPECIFY_FILTERS;
 import static com.oracle.graal.python.nodes.ErrorMessages.REPEATED_CALL_TO_FLUSH;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueError;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.annotations.ClinicConverterFactory;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -68,17 +71,19 @@ import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentCastNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
 import com.oracle.truffle.api.dsl.Bind;
@@ -91,24 +96,39 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PLZMACompressor)
 public final class LZMACompressorBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = LZMACompressorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return LZMACompressorBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self", "format", "check", "preset", "filters"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "LZMACompressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    abstract static class LZMACompressorNode extends PythonBuiltinNode {
+
+        @Specialization
+        LZMAObject doNew(Object cls, @SuppressWarnings("unused") Object arg,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            // data filled in subsequent __init__ call - see LZMACompressorBuiltins.InitNode
+            PythonContext context = getContext();
+            return PFactory.createLZMACompressor(cls, getInstanceShape.execute(cls), context.getNativeLZMASupport().isAvailable());
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "LZMACompressor", minNumOfPositionalArgs = 1, parameterNames = {"$self", "format", "check", "preset", "filters"})
     @ArgumentClinic(name = "format", conversion = ClinicConversion.Int, defaultValue = "LZMAModuleBuiltins.FORMAT_XZ", useDefaultForNone = true)
     @ArgumentClinic(name = "check", conversion = ClinicConversion.Int, defaultValue = "-1", useDefaultForNone = true)
     @ArgumentClinic(name = "preset", conversionClass = ExpectUINT32Node.class, defaultValue = "PNone.NO_VALUE")
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     public abstract static class InitNode extends PythonClinicBuiltinNode {
 
         @Override
@@ -134,26 +154,26 @@ public final class LZMACompressorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "badIntegrity(format, check)")
         @SuppressWarnings("unused")
-        static PNone integrityError(LZMACompressor self, long format, long check, Object preset, Object filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, INTEGRITY_CHECKS_ONLY_SUPPORTED_BY);
+        static PNone integrityError(LZMACompressor self, int format, int check, Object preset, Object filters,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, INTEGRITY_CHECKS_ONLY_SUPPORTED_BY);
         }
 
         @Specialization(guards = {"!badIntegrity(format, check)", "badPresetFilters(preset, filters)"})
         @SuppressWarnings("unused")
-        static PNone presetError(LZMACompressor self, long format, long check, Object preset, Object filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, CANNOT_SPECIFY_PREST_AND_FILTER_CHAIN);
+        static PNone presetError(LZMACompressor self, int format, int check, Object preset, Object filters,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, CANNOT_SPECIFY_PREST_AND_FILTER_CHAIN);
         }
 
         @Specialization(guards = {"!badIntegrity(format, check)", "!badPresetFilters(preset, filters)", "badRawFilter(format, filters)"})
         @SuppressWarnings("unused")
-        static PNone rawError(LZMACompressor self, long format, long check, Object preset, PNone filters,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, MUST_SPECIFY_FILTERS);
+        static PNone rawError(LZMACompressor self, int format, int check, Object preset, PNone filters,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, MUST_SPECIFY_FILTERS);
         }
 
-        protected static boolean badIntegrity(long format, long check) {
+        protected static boolean badIntegrity(int format, int check) {
             return format != FORMAT_XZ && check != -1 && check != CHECK_NONE;
         }
 
@@ -165,31 +185,30 @@ public final class LZMACompressorBuiltins extends PythonBuiltins {
             return format == FORMAT_RAW && PGuards.isPNone(filters);
         }
 
-        protected static boolean isValid(long format, long check, Object preset, Object filters) {
+        protected static boolean isValid(int format, int check, Object preset, Object filters) {
             return !badIntegrity(format, check) && !badPresetFilters(preset, filters) && !badRawFilter(format, filters);
         }
     }
 
     @Builtin(name = "compress", minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class CompressNode extends PythonBinaryBuiltinNode {
 
         @Specialization(guards = {"!self.isFlushed()"})
         static PBytes doBytes(VirtualFrame frame, LZMACompressor self, Object data,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached GetArrayAndLengthHelperNode getArrayAndLengthHelperNode,
-                        @Cached LZMANodes.CompressNode compress,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached LZMANodes.CompressNode compress) {
             ArrayAndLength aal = getArrayAndLengthHelperNode.execute(frame, inliningTarget, data);
-            return factory.createBytes(compress.compress(inliningTarget, self, PythonContext.get(inliningTarget), aal.array, aal.length));
+            return PFactory.createBytes(language, compress.compress(inliningTarget, self, PythonContext.get(inliningTarget), aal.array, aal.length));
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "self.isFlushed()")
         static PNone error(LZMACompressor self, Object data,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, COMPRESSOR_HAS_BEEN_FLUSHED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, COMPRESSOR_HAS_BEEN_FLUSHED);
         }
 
         @ValueType
@@ -220,27 +239,26 @@ public final class LZMACompressorBuiltins extends PythonBuiltins {
 
     @Builtin(name = "flush", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    @TypeSystemReference(PythonArithmeticTypes.class)
     abstract static class FlushNode extends PythonUnaryBuiltinNode {
 
         @Specialization(guards = {"!self.isFlushed()"})
         static PBytes doit(LZMACompressor self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached LZMANodes.CompressNode compress,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached LZMANodes.CompressNode compress) {
             self.setFlushed();
-            return factory.createBytes(compress.flush(inliningTarget, self, PythonContext.get(inliningTarget)));
+            return PFactory.createBytes(language, compress.flush(inliningTarget, self, PythonContext.get(inliningTarget)));
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "self.isFlushed()")
         static PNone error(LZMACompressor self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, REPEATED_CALL_TO_FLUSH);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, REPEATED_CALL_TO_FLUSH);
         }
     }
 
-    public abstract static class ExpectUINT32Node extends ArgumentCastNode.ArgumentCastNodeWithRaise {
+    public abstract static class ExpectUINT32Node extends ArgumentCastNode {
         private final Object defaultValue;
 
         protected ExpectUINT32Node(Object defaultValue) {
@@ -271,5 +289,4 @@ public final class LZMACompressorBuiltins extends PythonBuiltins {
             return LZMACompressorBuiltinsFactory.ExpectUINT32NodeGen.create(defaultValue);
         }
     }
-
 }

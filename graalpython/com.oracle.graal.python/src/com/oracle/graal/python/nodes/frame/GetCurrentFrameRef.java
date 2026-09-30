@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,14 @@
  */
 package com.oracle.graal.python.nodes.frame;
 
-import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.frame.PFrame.Reference;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.runtime.CallerFlags;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
@@ -69,6 +70,11 @@ public abstract class GetCurrentFrameRef extends Node {
 
     public abstract Reference execute(Frame frame, Node inliningTarget);
 
+    @TruffleBoundary
+    public static Reference executeUncached() {
+        return GetCurrentFrameRefNodeGen.getUncached().execute(null, null);
+    }
+
     @Specialization(guards = "frame != null")
     static Reference doWithFrame(Frame frame) {
         return PArguments.getCurrentFrameInfo(frame);
@@ -78,18 +84,19 @@ public abstract class GetCurrentFrameRef extends Node {
     Reference doWithoutFrame(@SuppressWarnings("unused") Frame frame,
                     @Cached(value = "getFlag()", uncached = "getFlagUncached()", dimensions = 1) ConditionProfile[] flag) {
 
-        PFrame.Reference ref = PythonContext.get(this).peekTopFrameInfo(PythonLanguage.get(this));
+        PythonContext context = PythonContext.get(this);
+        PFrame.Reference ref = context.peekTopFrameInfo(context.getLanguage(this));
         if (flag[0] == null) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             // executed the first time, don't pollute the profile, we'll mark the caller to
             // pass the info on the next call
             flag[0] = ConditionProfile.create();
             if (ref == null) {
-                ref = PArguments.getCurrentFrameInfo(ReadCallerFrameNode.getCurrentFrame(this, FrameInstance.FrameAccess.READ_ONLY));
+                ref = PArguments.getCurrentFrameInfo(ReadFrameNode.getCurrentFrame(this, FrameInstance.FrameAccess.READ_ONLY, CallerFlags.NEEDS_FRAME_REFERENCE));
             }
         }
         if (flag[0].profile(ref == null)) {
-            ref = PArguments.getCurrentFrameInfo(ReadCallerFrameNode.getCurrentFrame(this, FrameInstance.FrameAccess.READ_ONLY));
+            ref = PArguments.getCurrentFrameInfo(ReadFrameNode.getCurrentFrame(this, FrameInstance.FrameAccess.READ_ONLY, CallerFlags.NEEDS_FRAME_REFERENCE));
         }
 
         return ref;
@@ -99,9 +106,10 @@ public abstract class GetCurrentFrameRef extends Node {
     Reference doGeneric(Frame frame) {
         PFrame.Reference ref;
         if (frame == null) {
-            ref = PythonContext.get(this).peekTopFrameInfo(PythonLanguage.get(this));
+            PythonContext context = PythonContext.get(this);
+            ref = context.peekTopFrameInfo(context.getLanguage(this));
             if (ref == null) {
-                return PArguments.getCurrentFrameInfo(ReadCallerFrameNode.getCurrentFrame(this, FrameInstance.FrameAccess.READ_ONLY));
+                return PArguments.getCurrentFrameInfo(ReadFrameNode.getCurrentFrame(this, FrameInstance.FrameAccess.READ_ONLY, CallerFlags.NEEDS_FRAME_REFERENCE));
             }
             return ref;
         }

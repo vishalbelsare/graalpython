@@ -1,0 +1,54 @@
+diff --git a/setup.py b/setup.py
+index 5fba2c9..6f0daa1 100755
+--- a/setup.py
++++ b/setup.py
+@@ -1451,0 +1452,49 @@
++if sys.implementation.name == "graalpy":
++    import os
++    import re
++    import subprocess
++    import shutil
++    import sysconfig
++    from pathlib import Path
++
++    _pymupdf_get_requires_for_build_wheel = get_requires_for_build_wheel
++    # Newer swig dropped support for some macros in the PyMuPDF sources
++    def get_requires_for_build_wheel(config_settings=None):
++        requirements = _pymupdf_get_requires_for_build_wheel(config_settings)
++        return [
++            "swig==4.4.1" if requirement == "swig" else requirement
++            for requirement in requirements
++        ]
++
++    def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
++        wheel_directory = Path(wheel_directory).absolute()
++        sdir = Path(__file__).absolute().parent
++        cpythonname = os.environ.get("CPYTHON_EXE", "python3.12")
++        cpython = shutil.which(cpythonname) or cpythonname
++        if not os.path.exists(cpython):
++            raise RuntimeError(f"{cpythonname} must be available on the PATH for cross-compilation")
++        env = os.environ.copy()
++        env["PIPCL_PYTHON_CONFIG"] = str(Path(sys.executable).parent / "graalpy-config")
++        env["PYMUPDF_SETUP_PY_LIMITED_API"] = "1"
++        subprocess.run(
++            [cpython, "setup.py", "bdist_wheel"],
++            env=env,
++            cwd=sdir,
++            check=True,
++        )
++        wheels = list((sdir / 'dist').glob('*.whl'))
++        assert len(wheels) == 1, f"Expected 1 wheel, found {len(wheels)}"
++        wheel = wheels[0]
++        cpabi = "cp3"
++        cpabi += subprocess.check_output([cpython, "-c", "import sys;print(sys.implementation.version.minor)"], text=True).strip()
++        cpabi += "-abi3"
++        assert cpabi in wheel.name, f"Expected wheel to be for {cpabi}, got {wheel.name}"
++        graalpy_ext_suffix = sysconfig.get_config_var("EXT_SUFFIX")
++        m = re.match(r"\.graalpy(\d+[^\-]*)-(\d+)", sysconfig.get_config_var("EXT_SUFFIX"))
++        gpver = m[1]
++        cpver = m[2]
++        graalpy_wheel_tag = f"graalpy{cpver}-graalpy{gpver}_{cpver}_native"
++        name = wheel.name.replace(cpabi, graalpy_wheel_tag)
++        shutil.copyfile(wheel, wheel_directory / name)
++        print('Produced', wheel.name, 'compatible to', name)
++        return str(name)

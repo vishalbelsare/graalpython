@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,31 +41,22 @@
 package com.oracle.graal.python.builtins.modules;
 
 import static com.oracle.graal.python.nodes.BuiltinNames.J__CONTEXTVARS;
-import static com.oracle.graal.python.nodes.PGuards.isNoValue;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.objects.contextvars.PContextVar;
-import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.builtins.objects.contextvars.PContextVarsContext;
+import com.oracle.graal.python.lib.PyContextCopyCurrent;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
-import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(defineModule = J__CONTEXTVARS)
 public final class ContextvarsModuleBuiltins extends PythonBuiltins {
@@ -79,46 +70,10 @@ public final class ContextvarsModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetDefaultEncodingNode extends PythonBuiltinNode {
         @Specialization
-        protected Object copyCtx(
-                        @Cached PythonObjectFactory factory) {
-            PythonContext.PythonThreadState threadState = getContext().getThreadState(getLanguage());
-            return factory.copyContextVarsContext(threadState.getContextVarsContext());
-        }
-    }
-
-    @Builtin(name = "ContextVar", minNumOfPositionalArgs = 2, parameterNames = {"cls", "name", "default"}, constructsClass = PythonBuiltinClassType.ContextVar)
-    @GenerateNodeFactory
-    public abstract static class ContextVarNode extends PythonTernaryBuiltinNode {
-
-        @Specialization
-        protected static Object constructDef(@SuppressWarnings("unused") Object cls, TruffleString name, Object def,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile noValueProfile,
-                        @Cached PythonObjectFactory factory) {
-            if (noValueProfile.profile(inliningTarget, isNoValue(def))) {
-                def = PContextVar.NO_DEFAULT;
-            }
-            return factory.createContextVar(name, def);
-        }
-    }
-
-    @Builtin(name = "Context", minNumOfPositionalArgs = 1, constructsClass = PythonBuiltinClassType.ContextVarsContext)
-    @GenerateNodeFactory
-    public abstract static class ContextNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        static Object construct(@SuppressWarnings("unused") Object cls,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createContextVarsContext();
-        }
-    }
-
-    @Builtin(name = "Token", minNumOfPositionalArgs = 1, constructsClass = PythonBuiltinClassType.ContextVarsToken)
-    @GenerateNodeFactory
-    public abstract static class TokenNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        Object construct(@SuppressWarnings("unused") Object cls,
-                        @Cached PRaiseNode raise) {
-            throw raise.raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.TOKEN_ONLY_BY_CONTEXTVAR);
+        protected static PContextVarsContext copyCtx(
+                        @Bind Node inliningTarget,
+                        @Cached PyContextCopyCurrent copyCurrent) {
+            return copyCurrent.execute(inliningTarget);
         }
     }
 }

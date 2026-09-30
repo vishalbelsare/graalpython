@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,6 +46,7 @@ import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -53,16 +54,19 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.graalvm.nativeimage.ImageInfo;
+import org.graalvm.polyglot.SandboxPolicy;
 
 import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.nodes.PRootNode;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
 import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.nodes.call.GenericInvokeNode;
-import com.oracle.graal.python.nodes.frame.ReadCallerFrameNode;
+import com.oracle.graal.python.nodes.frame.ReadFrameNode;
 import com.oracle.graal.python.runtime.ExecutionContext.CalleeContext;
 import com.oracle.graal.python.runtime.exception.ExceptionUtils;
 import com.oracle.graal.python.runtime.exception.PException;
@@ -71,12 +75,16 @@ import com.oracle.graal.python.util.Supplier;
 import com.oracle.graal.python.util.SuppressFBWarnings;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.ThreadLocalAction;
+import com.oracle.truffle.api.ThreadLocalAction.Access;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.debug.Debugger;
+import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 
 /**
@@ -88,7 +96,7 @@ public class AsyncHandler {
      * An action to be run triggered by an asynchronous event.
      */
     public interface AsyncAction {
-        void execute(PythonContext context);
+        void execute(PythonContext context, Access access);
     }
 
     public abstract static class AsyncPythonAction implements AsyncAction {
@@ -125,7 +133,7 @@ public class AsyncHandler {
         }
 
         @Override
-        public final void execute(PythonContext context) {
+        public final void execute(PythonContext context, Access access) {
             Debugger debugger = null;
             PythonContext.PythonThreadState threadState = null;
             PythonLanguage language = context.getLanguage();
@@ -140,7 +148,7 @@ public class AsyncHandler {
                     // Avoid pointless stack walks in random places
                     PArguments.setException(args, PException.NO_EXCEPTION);
 
-                    if (debugger == null) {
+                    if (debugger == null && !context.getEnv().getSandboxPolicy().isStricterThan(SandboxPolicy.TRUSTED)) {
                         debugger = Debugger.find(context.getEnv());
                     }
                     if (threadState == null) {
@@ -154,13 +162,74 @@ public class AsyncHandler {
                     if (!alreadyProfiling) {
                         threadState.profilingStart();
                     }
-                    debugger.disableStepping();
+                    if (debugger != null) {
+                        debugger.disableStepping();
+                    }
+                    Node prev = null;
+                    Node location = access.getLocation();
+                    EncapsulatingNodeReference encapsulatingNodeRef = EncapsulatingNodeReference.getCurrent();
+                    boolean resetEncapsulatingNode = false;
+                    if (location.isAdoptable()) {
+                        // If we are woken-up in middle of Python frame code, we will have to do a
+                        // stack walk if caller frame is needed, but we still need the "call"
+                        // location for the SimpleIndirectInvokeNode below, which takes it
+                        // implicitly from the EncapsulatingNodeReference
+                        resetEncapsulatingNode = true;
+                        if (location instanceof RootNode root && PBytecodeDSLRootNode.cast(root) != null) {
+                            // PBytecodeDSLRootNode is not usable as a location. To resolve the BCI
+                            // stored in the frame, we need the currently executing BytecodeNode,
+                            // using the root's BytecodeNode is not correct. We use the
+                            // dummy node to pass our assertions during stack walking that "call
+                            // node" is never PBytecodeDSLRootNode
+                            prev = encapsulatingNodeRef.set(language.unavailableSafepointLocation);
+                        } else {
+                            prev = encapsulatingNodeRef.set(location);
+                        }
+                    } else {
+                        // If the safepoint location is not adoptable, then we are behind
+                        // TruffleBoundary or in uncached interpreter. If we are woken up in GraalPy
+                        // boundary code, it should have done BoundaryCallContext.enter/exit or
+                        // EncapsulatingNodeReference.get().set(location)
+                        Node node = encapsulatingNodeRef.get();
+                        if (node == null || !node.isAdoptable()) {
+                            // Missing BoundaryCallContext.enter/exit or
+                            // EncapsulatingNodeReference.get().set(location),
+                            // but also possibly 3rd party code that polls safepoint behind
+                            // TruffleBoundary with uncached/null location. We cannot distinguish
+                            // that, so we use the dummy node to pass our assertions during stack
+                            // walking that "call node" is never null.
+                            encapsulatingNodeRef.set(language.unavailableSafepointLocation);
+                            prev = node;
+                            resetEncapsulatingNode = true;
+                        }
+                    }
+                    PFrame.Reference injectedCallerInfo = null;
+                    AsyncHandler asyncHandler = context.getAsyncHandler();
+                    if (CallerFlags.needsFrameReference(asyncHandler.rootNode.getCallerFlags()) && context.peekTopFrameInfo(language) == null) {
+                        Frame callerFrame = ReadFrameNode.getCurrentFrame(encapsulatingNodeRef.get(), FrameInstance.FrameAccess.READ_ONLY,
+                                        CallerFlags.NEEDS_FRAME_REFERENCE);
+                        injectedCallerInfo = callerFrame != null ? PArguments.getCurrentFrameInfo(callerFrame) : PFrame.Reference.EMPTY;
+                        // SimpleIndirectInvokeNode passes caller information through the thread
+                        // state when invoked without a VirtualFrame. Async actions do not have a
+                        // normal call site that could prepare it, so supply the interrupted frame
+                        // after CallRootNode has requested it.
+                        threadState.setTopFrameInfo(injectedCallerInfo);
+                    }
                     try {
-                        GenericInvokeNode.getUncached().execute(context.getAsyncHandler().callTarget, args);
+                        CallDispatchers.SimpleIndirectInvokeNode.executeUncached(asyncHandler.getCallTarget(), args);
                     } catch (PException e) {
                         handleException(e);
                     } finally {
-                        debugger.restoreStepping();
+                        if (injectedCallerInfo != null) {
+                            PFrame.Reference restoredCallerInfo = threadState.popTopFrameInfo();
+                            assert restoredCallerInfo == injectedCallerInfo;
+                        }
+                        if (resetEncapsulatingNode) {
+                            encapsulatingNodeRef.set(prev);
+                        }
+                        if (debugger != null) {
+                            debugger.restoreStepping();
+                        }
                         if (!alreadyTracing) {
                             threadState.tracingStop();
                         }
@@ -218,7 +287,7 @@ public class AsyncHandler {
                                             GilNode gil = GilNode.getUncached();
                                             boolean mustRelease = gil.acquire();
                                             try {
-                                                action.execute(ctx);
+                                                action.execute(ctx, access);
                                             } finally {
                                                 gil.release(mustRelease);
                                             }
@@ -245,7 +314,7 @@ public class AsyncHandler {
         static final int ASYNC_ARG_COUNT = 2;
 
         @Child private CallNode callNode = CallNode.create();
-        @Child private ReadCallerFrameNode readCallerFrameNode = ReadCallerFrameNode.create();
+        @Child private ReadFrameNode readFrameNode = ReadFrameNode.create();
         @Child private CalleeContext calleeContext = CalleeContext.create();
 
         protected CallRootNode(TruffleLanguage<?> language) {
@@ -254,14 +323,14 @@ public class AsyncHandler {
 
         @Override
         public Object execute(VirtualFrame frame) {
-            calleeContext.enter(frame);
+            calleeContext.enter(frame, this);
             Object[] frameArguments = frame.getArguments();
             Object callable = PArguments.getArgument(frameArguments, ASYNC_CALLABLE_INDEX);
             int frameIndex = (int) PArguments.getArgument(frameArguments, ASYNC_FRAME_INDEX_INDEX);
             Object[] arguments = Arrays.copyOfRange(frameArguments, PArguments.USER_ARGUMENTS_OFFSET + ASYNC_ARG_COUNT, frameArguments.length);
 
             if (frameIndex >= 0) {
-                arguments[frameIndex] = readCallerFrameNode.executeWith(frame, 0);
+                arguments[frameIndex] = readFrameNode.getCurrentPythonFrame(frame);
             }
             try {
                 return callNode.execute(frame, callable, arguments);
@@ -291,11 +360,11 @@ public class AsyncHandler {
         }
     }
 
-    private final RootCallTarget callTarget;
+    private final CallRootNode rootNode;
 
     AsyncHandler(PythonContext context) {
         this.context = new WeakReference<>(context);
-        this.callTarget = context.getLanguage().createCachedCallTarget(CallRootNode::new, CallRootNode.class);
+        this.rootNode = context.getLanguage().createCachedRootNode(CallRootNode::new, CallRootNode.class);
         if (PythonOptions.AUTOMATIC_ASYNC_ACTIONS) {
             this.executorService = Executors.newScheduledThreadPool(6, runnable -> {
                 Thread t = Executors.defaultThreadFactory().newThread(runnable);
@@ -316,10 +385,11 @@ public class AsyncHandler {
      * regular intervals to run on a separate thread, or if it will be polled. The caller needs to
      * ensure that the AsyncAction passed into this method does not block in the latter case.
      */
-    @SuppressFBWarnings(value = "NP_NULL_ON_SOME_PATH") // context.get() is never null here
+    @SuppressFBWarnings(value = "NP_NULL_ON_SOME_PATH") // incorrect warning
     void registerAction(Supplier<AsyncAction> actionSupplier) {
         CompilerAsserts.neverPartOfCompilation();
-        if (ImageInfo.inImageBuildtimeCode() || context.get().getOption(PythonOptions.NoAsyncActions)) {
+        var context = Objects.requireNonNull(this.context.get());
+        if (context.getEnv().isPreInitialization() || context.getOption(PythonOptions.NoAsyncActions)) {
             return;
         }
         if (PythonOptions.AUTOMATIC_ASYNC_ACTIONS) {
@@ -327,6 +397,10 @@ public class AsyncHandler {
         } else {
             registeredActions.add(new AsyncRunnable(actionSupplier));
         }
+    }
+
+    private com.oracle.truffle.api.RootCallTarget getCallTarget() {
+        return rootNode.getCallTarget();
     }
 
     void poll() {
@@ -363,7 +437,7 @@ public class AsyncHandler {
                          * Some other thread will run and eventually get another gil release
                          * request.
                          */
-                        ctx.getEnv().submitThreadLocal(new Thread[]{gilOwner}, new ThreadLocalAction(false, false) {
+                        ctx.getEnv().submitThreadLocal(new Thread[]{gilOwner}, new ThreadLocalAction(true, false) {
                             @Override
                             protected void perform(ThreadLocalAction.Access access) {
                                 // it may happen that we request a GIL release and no thread is
@@ -383,12 +457,12 @@ public class AsyncHandler {
                                     // we only release the gil in ordinary Python code nodes
                                     GilNode gil = GilNode.getUncached();
                                     if (gil.tryRelease()) {
-                                        gil.acquire(access.getLocation());
+                                        gil.acquire(PythonContext.get(gil), access.getLocation());
                                     }
                                 }
                             }
                         });
-                    } else if (gilOwner != lastGilOwner) {
+                    } else if (gilOwner != lastGilOwner && gilOwner.isAlive()) {
                         /*
                          * If the gil changed owner since the last time we observed it, clear the
                          * flag to make sure we don't get stuck if the last owner exits before
@@ -396,7 +470,15 @@ public class AsyncHandler {
                          */
                         gilReleaseRequested = false;
                     }
-                    lastGilOwner = gilOwner;
+                    if (gilOwner.isAlive()) {
+                        lastGilOwner = gilOwner;
+                    } else {
+                        /*
+                         * we should only store the thread if the thread is still alive, otherwise,
+                         * we will be referring to an object that should have been collected.
+                         */
+                        lastGilOwner = null;
+                    }
                 }
             }
         }
@@ -448,13 +530,20 @@ public class AsyncHandler {
          */
         public abstract static class FinalizableReference extends PhantomReference<Object> {
             private final Object reference;
-            private boolean released;
+            private final AtomicBoolean released = new AtomicBoolean(false);
 
             @SuppressWarnings("this-escape")
             public FinalizableReference(Object referent, Object reference, SharedFinalizer sharedFinalizer) {
                 super(referent, sharedFinalizer.queue);
                 assert reference != null;
                 this.reference = reference;
+                addLiveReference(sharedFinalizer, this);
+            }
+
+            @SuppressWarnings("this-escape")
+            protected FinalizableReference(Object referent, SharedFinalizer sharedFinalizer) {
+                super(referent, sharedFinalizer.queue);
+                this.reference = null;
                 addLiveReference(sharedFinalizer, this);
             }
 
@@ -476,15 +565,17 @@ public class AsyncHandler {
             }
 
             public final boolean isReleased() {
-                return released;
+                return released.get();
             }
 
             /**
-             * Mark the FinalizableReference as freed in case it has been freed elsewhare. This will
+             * Mark the FinalizableReference as freed in case it has been freed elsewhere. This will
              * avoid double-freeing the reference.
              */
-            public final void markReleased() {
-                this.released = true;
+            public final boolean markReleased() {
+                boolean markedReleased = released.compareAndSet(false, true);
+                assert markedReleased || released.get();
+                return markedReleased;
             }
 
             /**
@@ -505,7 +596,7 @@ public class AsyncHandler {
             }
 
             @Override
-            public void execute(PythonContext context) {
+            public void execute(PythonContext context, Access access) {
                 LOGGER.severe(String.format("Error during async action for %s caused by %s", referece.getClass().getSimpleName(), exception.getMessage()));
             }
         }
@@ -517,10 +608,10 @@ public class AsyncHandler {
                 this.array = array;
             }
 
-            public void execute(PythonContext context) {
+            public void execute(PythonContext context, Access access) {
                 for (AsyncAction action : array) {
                     try {
-                        action.execute(context);
+                        action.execute(context, access);
                     } catch (RuntimeException e) {
                         ExceptionUtils.printPythonLikeStackTrace(e);
                     }

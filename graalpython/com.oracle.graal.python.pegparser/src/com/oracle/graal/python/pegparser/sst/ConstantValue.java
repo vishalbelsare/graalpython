@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,8 @@
 package com.oracle.graal.python.pegparser.sst;
 
 import java.math.BigInteger;
+
+import com.oracle.graal.python.pegparser.tokenizer.CodePoints;
 
 /**
  * This is the representation of the {@code constant} type used in asdl. In CPython, this is
@@ -105,9 +107,9 @@ public final class ConstantValue {
         return (Long) value;
     }
 
-    public <T> T getRaw(Class<T> type) {
-        assert kind == Kind.RAW && type.isInstance(value);
-        return type.cast(value);
+    public CodePoints getCodePoints() {
+        assert kind == Kind.CODEPOINTS;
+        return (CodePoints) value;
     }
 
     public ConstantValue[] getTupleElements() {
@@ -140,56 +142,6 @@ public final class ConstantValue {
         return new ConstantValue(v, Kind.DOUBLE);
     }
 
-    public ConstantValue addComplex(ConstantValue right) {
-        assert right.kind == Kind.COMPLEX;
-        double ld = toDouble();
-        double[] rd = right.getComplex();
-        return ofComplex(ld + rd[0], rd[1]);
-    }
-
-    public ConstantValue subComplex(ConstantValue right) {
-        assert right.kind == Kind.COMPLEX;
-        double ld = toDouble();
-        double[] rd = right.getComplex();
-        return ofComplex(ld - rd[0], -rd[1]);
-    }
-
-    private double toDouble() {
-        assert kind == Kind.BIGINTEGER || kind == Kind.DOUBLE || kind == Kind.LONG : kind;
-        switch (kind) {
-            case BIGINTEGER:
-                return getBigInteger().doubleValue();
-            case DOUBLE:
-                return getDouble();
-            case LONG:
-                return getLong();
-            default:
-                throw new IllegalStateException("should not reach here");
-        }
-    }
-
-    public ConstantValue negate() {
-        assert kind == Kind.BIGINTEGER || kind == Kind.DOUBLE || kind == Kind.LONG || kind == Kind.COMPLEX : kind;
-        switch (kind) {
-            case BIGINTEGER:
-                return ofBigInteger(getBigInteger().negate());
-            case DOUBLE:
-                return ofDouble(-getDouble());
-            case LONG:
-                long v = getLong();
-                if (v != Long.MIN_VALUE) {
-                    return ofLong(-v);
-                } else {
-                    return ofBigInteger(BigInteger.valueOf(v).negate());
-                }
-            case COMPLEX:
-                double[] complex = getComplex();
-                return ofComplex(-complex[0], -complex[1]);
-            default:
-                throw new IllegalStateException("should not reach here");
-        }
-    }
-
     public static ConstantValue ofLong(long v) {
         if (v >= CACHED_MIN && v <= CACHED_MAX) {
             return CACHED_LONGS[(int) (v - CACHED_MIN)];
@@ -197,9 +149,8 @@ public final class ConstantValue {
         return new ConstantValue(v, Kind.LONG);
     }
 
-    public static ConstantValue ofRaw(Object o) {
-        assert Kind.RAW.checkValueType(o);
-        return new ConstantValue(o, Kind.RAW);
+    public static ConstantValue ofCodePoints(CodePoints cp) {
+        return new ConstantValue(cp, Kind.CODEPOINTS);
     }
 
     public static ConstantValue ofTuple(ConstantValue[] values) {
@@ -253,11 +204,10 @@ public final class ConstantValue {
                 return value instanceof BigInteger;
             }
         },
-        RAW() {
+        CODEPOINTS() {
             @Override
             boolean checkValueType(Object value) {
-                // this check covers both j.l.String and TruffleString
-                return value != null && value.getClass().getName().endsWith("String");
+                return value instanceof CodePoints;
             }
         },
         BYTES() {

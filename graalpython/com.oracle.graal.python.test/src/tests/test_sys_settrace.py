@@ -1,4 +1,4 @@
-# Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -41,8 +41,13 @@ import unittest
 import difflib
 import sys
 import signal
-
+from tests import util
 import builtins
+
+
+GRAALPY_POSIX_BACKEND_IS_JAVA = (
+    hasattr(builtins, '__graalpython__') and builtins.__graalpython__.posix_module_backend() == 'java'
+)
 
 
 def basic():
@@ -136,6 +141,32 @@ generator_example.events = [((), [(0, 'generator_example', 'call', None),
                                   (4, 'generator_example', 'line', None),
                                   (4, 'generator_example', 'return', False)])]
 
+def gen_same_line(): # line -4
+    yield 1; x = 2; yield x
+
+
+def generator_same_line_example():
+    x = gen_same_line()
+    a = next(x)
+    b = next(x)
+    c = next(x, None)
+    return a, b, c
+
+generator_same_line_example.events = [((), [(0, 'generator_same_line_example', 'call', None),
+                                            (1, 'generator_same_line_example', 'line', None),
+                                            (2, 'generator_same_line_example', 'line', None),
+                                            (-4, 'gen_same_line', 'call', None),
+                                            (-3, 'gen_same_line', 'line', None),
+                                            (-3, 'gen_same_line', 'return', 1),
+                                            (3, 'generator_same_line_example', 'line', None),
+                                            (-3, 'gen_same_line', 'call', None),
+                                            (-3, 'gen_same_line', 'return', 2),
+                                            (4, 'generator_same_line_example', 'line', None),
+                                            (-3, 'gen_same_line', 'call', None),
+                                            (-3, 'gen_same_line', 'return', None),
+                                            (5, 'generator_same_line_example', 'line', None),
+                                            (5, 'generator_same_line_example', 'return', (1, 2, None))])]
+
 def f_trace_delete():
     del sys._getframe().f_trace
     return 1
@@ -175,6 +206,7 @@ class TraceTests(unittest.TestCase):
     # test_03_oneline_loop = make_test_method(oneline_loop, 'test_03_oneline_loop')
     test_04_two_functions = make_test_method(two_functions, 'test_04_two_functions')
     test_05_generator_example = make_test_method(generator_example, 'test_05_generator_example')
+    test_05_generator_same_line_example = make_test_method(generator_same_line_example, 'test_05_generator_same_line_example')
     def test_06_f_trace_preserved(self):
         def erroring_trace(*_):
             raise ValueError
@@ -209,6 +241,7 @@ class TraceTests(unittest.TestCase):
 
     @unittest.skipIf(not hasattr(signal, 'SIGUSR1'), "User defined signal not present")
     @unittest.skipIf(not hasattr(builtins, '__graalpython__'), "async actions do get traced in CPython")
+    @unittest.skipIf(GRAALPY_POSIX_BACKEND_IS_JAVA, "signal.raise_signal is not supported by the Java POSIX backend")
     def test_07_async_actions_not_traced(self):
         def handler(*_): handler.called = 1
 
@@ -224,3 +257,1287 @@ class TraceTests(unittest.TestCase):
             self.assertEqual(name, 'helper')
 
     test_08_frame_f_trace_deletable = make_test_method(f_trace_delete, 'test_08_frame_f_trace_deletable')
+
+class TracingEventsUnitTest(unittest.TestCase):
+    def trace(self, frame, event, arg):
+        code = frame.f_code
+        name = code.co_name
+        self.events.append((frame.f_lineno - self.first_line, name, event))
+        return self.trace
+
+    def assert_events(self, actual_events, expected_events):
+        if expected_events != actual_events:
+            self.fail('\n'+'\n'.join(difflib.ndiff([str(x) for x in actual_events], [str(x) for x in expected_events])))
+
+    def trace_function(self, func):
+        self.first_line = func.__code__.co_firstlineno
+        self.events = []
+        sys.settrace(self.trace)
+        func()
+        sys.settrace(None)
+
+    def trace_function_with_offset(self, func, offset_func):
+        self.first_line = func.__code__.co_firstlineno
+        self.events = []
+        sys.settrace(self.trace)
+        func()
+        sys.settrace(None)
+        return offset_func.__code__.co_firstlineno - self.first_line
+
+class TraceTestsStmtWith(TracingEventsUnitTest):
+    def test_01_break_in_with(self):
+        class C:
+            def __enter__(self):
+                return self
+            def __exit__(*args):
+                pass
+
+        def func_break():
+            for i in (1,2):
+                with C():
+                    break
+            pass
+
+        self.trace_function(func_break)
+
+        events = [
+            (0, 'func_break', 'call'),
+            (1, 'func_break', 'line'),
+            (2, 'func_break', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (3, 'func_break', 'line'),
+            (2, 'func_break', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (4, 'func_break', 'line'),
+            (4, 'func_break', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_02_if_false_in_with_multiple_nested(self):
+        class C:
+            def __enter__(self):
+                return self
+            def __exit__(*args):
+                pass
+
+        def func():
+            with C():
+                with C():
+                    with C():
+                        if False:
+                            pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (2, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (3, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (4, 'func', 'line'),
+            (3, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (2, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (1, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_03_break_in_with_nested(self):
+        class C:
+            def __enter__(self):
+                return self
+            def __exit__(*args):
+                pass
+
+        def func():
+            with C():
+                for i in (1, 2):
+                    with C():
+                        with C():
+                            break
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (4, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (5, 'func', 'line'),
+            (4, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (3, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (1, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_04_except_in_with(self):
+        class C:
+            def __enter__(self):
+                return self
+            def __exit__(*args):
+                pass
+
+        def func():
+            try:
+                with C():
+                    raise Exception()
+            except Exception:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (2, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (5, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_05_except_in_with_nested(self):
+        class C:
+            def __enter__(self):
+                return self
+            def __exit__(*args):
+                pass
+
+        def func():
+            try:
+                with C():
+                    with C():
+                        with C():
+                            with C():
+                                raise Exception()
+            except Exception:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (3, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (4, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (5, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (6, 'func', 'line'),
+            (6, 'func', 'exception'),
+            (5, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (4, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (3, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (2, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (7, 'func', 'line'),
+            (8, 'func', 'line'),
+            (8, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+class AsyncTracingEventsUnitTest(TracingEventsUnitTest):
+    @staticmethod
+    def run_awaitable(awaitable):
+        iterator = awaitable.__await__()
+        try:
+            while True:
+                next(iterator)
+        except StopIteration as e:
+            return e.value
+
+    def async_trace(self, frame, event, arg):
+        code = frame.f_code
+        name = code.co_name
+        if name in self.names:
+            self.events.append((frame.f_lineno - self.first_line, name, event))
+        return self.async_trace
+
+    async def async_wrapper(self, afunc, names):
+        self.names = names
+        sys.settrace(self.async_trace)
+        try:
+            await afunc()
+        finally:
+            sys.settrace(None)
+            self.names = None
+
+    def trace_async_function(self, afunc, names):
+        self.first_line = afunc.__code__.co_firstlineno
+        self.events = []
+        self.run_awaitable(self.async_wrapper(afunc, names))
+
+    @unittest.skipIf(
+        sys.implementation.name == "graalpy",
+        "GR-65570: GraalPy does not report await exception trace events yet.",
+    )
+    def test_01_await(self):
+        async def helper(): # line -3
+            return 42
+
+        async def afunc():
+            value = await helper()
+            return value
+
+        self.trace_async_function(afunc, {"afunc", "helper"})
+
+        events = [
+            (0, 'afunc', 'call'),
+            (1, 'afunc', 'line'),
+            (-3, 'helper', 'call'),
+            (-2, 'helper', 'line'),
+            (-2, 'helper', 'return'),
+            (1, 'afunc', 'exception'),
+            (2, 'afunc', 'line'),
+            (2, 'afunc', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    @unittest.skipIf(
+        sys.implementation.name == "graalpy",
+        "GR-65570: GraalPy does not report async with exception trace events yet.",
+    )
+    def test_02_async_with(self):
+        class A:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+
+        async def afunc():
+            async with A():
+                pass
+
+        self.trace_async_function(afunc, {"afunc", "__aenter__", "__aexit__"})
+
+        events = [
+            (0, 'afunc', 'call'),
+            (1, 'afunc', 'line'),
+            (-5, '__aenter__', 'call'),
+            (-4, '__aenter__', 'line'),
+            (-4, '__aenter__', 'return'),
+            (1, 'afunc', 'exception'),
+            (2, 'afunc', 'line'),
+            (1, 'afunc', 'line'),
+            (-3, '__aexit__', 'call'),
+            (-2, '__aexit__', 'line'),
+            (-2, '__aexit__', 'return'),
+            (1, 'afunc', 'exception'),
+            (1, 'afunc', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    @unittest.skipIf(
+        sys.implementation.name == "graalpy",
+        "GR-65570: GraalPy does not match CPython async for trace events yet.",
+    )
+    def test_03_async_for(self):
+        class AsyncIterator:
+            def __init__(self, items):
+                self.items = iter(items)
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                try:
+                    return next(self.items)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        async def afunc():
+            total = 0
+            async for item in AsyncIterator([1, 2]):
+                total += item
+            return total
+
+        self.trace_async_function(afunc, {"afunc", "__aiter__", "__anext__"})
+
+        events = [
+            (0, 'afunc', 'call'),
+            (1, 'afunc', 'line'),
+            (2, 'afunc', 'line'),
+            (-8, '__aiter__', 'call'),
+            (-7, '__aiter__', 'line'),
+            (-7, '__aiter__', 'return'),
+            (-6, '__anext__', 'call'),
+            (-5, '__anext__', 'line'),
+            (-4, '__anext__', 'line'),
+            (-4, '__anext__', 'return'),
+            (2, 'afunc', 'exception'),
+            (3, 'afunc', 'line'),
+            (2, 'afunc', 'line'),
+            (-6, '__anext__', 'call'),
+            (-5, '__anext__', 'line'),
+            (-4, '__anext__', 'line'),
+            (-4, '__anext__', 'return'),
+            (2, 'afunc', 'exception'),
+            (3, 'afunc', 'line'),
+            (2, 'afunc', 'line'),
+            (-6, '__anext__', 'call'),
+            (-5, '__anext__', 'line'),
+            (-4, '__anext__', 'line'),
+            (-4, '__anext__', 'exception'),
+            (-3, '__anext__', 'line'),
+            (-2, '__anext__', 'line'),
+            (-2, '__anext__', 'exception'),
+            (-2, '__anext__', 'return'),
+            (2, 'afunc', 'exception'),
+            (4, 'afunc', 'line'),
+            (4, 'afunc', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+class MultilineCallsTraceTest(TracingEventsUnitTest):
+    class A:
+        def m_basic(self, a1, a2, a3):
+            return a1 + a2 + a3
+
+        def m_varargs(self, a1, a2, *args):
+            return a1 + a2 + len(args)
+
+    a = A()
+
+    def test_01_multiline_call_method_basic(self):
+        def func():
+            return self.a.m_basic(
+                1,
+                2,
+                3,
+            )
+
+        method_first_line = self.trace_function_with_offset(func, self.a.m_basic)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (1, 'func', 'line'),
+            (method_first_line, 'm_basic', 'call'),
+            (method_first_line + 1, 'm_basic', 'line'),
+            (method_first_line + 1, 'm_basic', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_02_multiline_call_method_vargs(self):
+        def func():
+            return self.a.m_varargs(
+                1,
+                2,
+                3,
+                4,
+                5,
+            )
+
+        method_first_line = self.trace_function_with_offset(func, self.a.m_varargs)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (6, 'func', 'line'),
+            (1, 'func', 'line'),
+            (method_first_line, 'm_varargs', 'call'),
+            (method_first_line + 1, 'm_varargs', 'line'),
+            (method_first_line + 1, 'm_varargs', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_03_multiline_call_function_basic(self):
+        def f_basic(a1, a2, a3):
+            return a1 + a2 + a3
+
+        def func():
+            return f_basic(
+                1,
+                2,
+                3,
+            )
+
+        func_first_line = self.trace_function_with_offset(func, f_basic)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (1, 'func', 'line'),
+            (func_first_line, 'f_basic', 'call'),
+            (func_first_line + 1, 'f_basic', 'line'),
+            (func_first_line + 1, 'f_basic', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_04_multiline_call_function_vargs(self):
+        def f_varargs(a1, a2, *args):
+            return a1 + a2 + len(args)
+
+        def func():
+            return f_varargs(
+                1,
+                2,
+                3,
+                4,
+                5
+            )
+
+        func_first_line = self.trace_function_with_offset(func, f_varargs)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (6, 'func', 'line'),
+            (1, 'func', 'line'),
+            (func_first_line, 'f_varargs', 'call'),
+            (func_first_line + 1, 'f_varargs', 'line'),
+            (func_first_line + 1, 'f_varargs', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_05_multiline_call_function_fallback_to_vargs(self):
+        def f_varargs_fallback(a1, a2, a3, a4, a5, a6):
+            return a1 + a2 + a3 + a4 + a5 + a6
+
+        def func():
+            return f_varargs_fallback(
+                1,
+                2,
+                3,
+                4,
+                5,
+                6
+            )
+
+        func_first_line = self.trace_function_with_offset(func, f_varargs_fallback)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (1, 'func', 'line'),
+            (func_first_line, 'f_varargs_fallback', 'call'),
+            (func_first_line + 1, 'f_varargs_fallback', 'line'),
+            (func_first_line + 1, 'f_varargs_fallback', 'return'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_06_multiline_binop(self):
+        v1 = 1
+        v2 = 2
+        v3 = 3
+        v4 = 4
+        v5 = 5
+        v6 = 6
+
+        def func():
+            return (
+                    v1
+                    +
+                    v2
+                    +
+                    v3
+                    +
+                    v4
+                    +
+                    v5
+                    +
+                    v6
+            )
+
+        self.first_line = func.__code__.co_firstlineno
+        self.events = []
+        sys.settrace(self.trace)
+        func()
+        sys.settrace(None)
+
+        events = [
+            (0, 'func', 'call'),
+            (2, 'func', 'line'),
+            (4, 'func', 'line'),
+            (2, 'func', 'line'),
+            (6, 'func', 'line'),
+            (2, 'func', 'line'),
+            (8, 'func', 'line'),
+            (2, 'func', 'line'),
+            (10, 'func', 'line'),
+            (2, 'func', 'line'),
+            (12, 'func', 'line'),
+            (2, 'func', 'line'),
+            (1, 'func', 'line'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_07_multiline_boolop(self):
+        b1 = False
+        b2 = False
+        b3 = False
+        b4 = False
+        b5 = False
+        b6 = True
+
+        def func():
+            return (
+                    b1
+                    or
+                    b2
+                    or
+                    b3
+                    or
+                    b4
+                    or
+                    b5
+                    or
+                    b6
+            )
+
+        self.first_line = func.__code__.co_firstlineno
+        self.events = []
+        sys.settrace(self.trace)
+        func()
+        sys.settrace(None)
+
+        events = [
+            (0, 'func', 'call'),
+            (2, 'func', 'line'),
+            (4, 'func', 'line'),
+            (2, 'func', 'line'),
+            (6, 'func', 'line'),
+            (2, 'func', 'line'),
+            (8, 'func', 'line'),
+            (2, 'func', 'line'),
+            (10, 'func', 'line'),
+            (2, 'func', 'line'),
+            (12, 'func', 'line'),
+            (1, 'func', 'line'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_08_multiline_boolop_short(self):
+        b1 = False
+        b2 = False
+        b3 = False
+        b4 = True
+        b5 = False
+        b6 = True
+
+        def func():
+            return (
+                    b1
+                    or
+                    b2
+                    or
+                    b3
+                    or
+                    b4
+                    or
+                    b5
+                    or
+                    b6
+            )
+
+        self.first_line = func.__code__.co_firstlineno
+        self.events = []
+        sys.settrace(self.trace)
+        func()
+        sys.settrace(None)
+
+        events = [
+            (0, 'func', 'call'),
+            (2, 'func', 'line'),
+            (4, 'func', 'line'),
+            (2, 'func', 'line'),
+            (6, 'func', 'line'),
+            (2, 'func', 'line'),
+            (8, 'func', 'line'),
+            (2, 'func', 'line'),
+            (1, 'func', 'line'),
+            (1, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+class TraceTestsStmtTry(TracingEventsUnitTest):
+    def test_01_reraise(self):
+        def func():
+            try:
+                try:
+                    raise ValueError(13)
+                except ValueError:
+                    raise
+            except Exception:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (7, 'func', 'return'),
+        ]
+
+        self.assert_events(self.events, events)
+
+class ExceptStarTraceTest(TracingEventsUnitTest):
+    def test_01_except_star_with_name(self):
+        def func():
+            try:
+                try:
+                    raise ExceptionGroup("eg", [ValueError(1)])
+                except* ValueError as ve:
+                    raise
+                    x = "Something"
+                    y = "Something"
+            except ExceptionGroup:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (8, 'func', 'line'),
+            (9, 'func', 'line'),
+            (9, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_02_except_star_multi_with_name(self):
+        def func():
+            try:
+                try:
+                    raise ExceptionGroup("eg", [ValueError(1), TypeError(2)])
+                except* ValueError as ve:
+                    pass
+                except* TypeError as te:
+                    raise
+                    x = "Something"
+                    y = "Something"
+                except* IndexError as ie:
+                    pass
+            except ExceptionGroup:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (10, 'func', 'line'),
+            (12, 'func', 'line'),
+            (13, 'func', 'line'),
+            (13, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_03_except_star_with_finally(self):
+        def func():
+            try:
+                try:
+                    try:
+                        raise ExceptionGroup("eg", [ValueError(1), TypeError(2)])
+                    finally:
+                        y = "Something"
+                except* ValueError:
+                    b = 23
+            except ExceptionGroup:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (4, 'func', 'exception'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (8, 'func', 'line'),
+            (9, 'func', 'line'),
+            (10, 'func', 'line'),
+            (10, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    @unittest.skip("TODO: Fix return in finally.")
+    def test_04_test_try_except_star_with_wrong_type(self):
+        def func():
+            try:
+                try:
+                    raise ExceptionGroup("eg", [ValueError(1)])
+                except IndexError:
+                    4
+                finally:
+                    return 6
+            except ExceptionGroup:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (4, 'func', 'line'),
+            (7, 'func', 'line'),
+            (7, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_05_if_false_in_try_except_star(self):
+        def func():
+            try:
+                if False:
+                    pass
+            except* ValueError:
+                X
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (2, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    @unittest.skipIf(sys.implementation.name == "cpython", "TODO: seems broken on CPython")
+    def test_06_try_in_try_with_exception(self):
+        def func():
+            try:
+                try:
+                    try:
+                        raise ExceptionGroup("eg", [TypeError(1)])
+                    except* ValueError as ex:
+                        5
+                except* TypeError:
+                    7
+            except ExceptionGroup:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (4, 'func', 'exception'),
+            (5, 'func', 'line'),
+            (7, 'func', 'line'),
+            (8, 'func', 'line'),
+            (8, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    @unittest.skip("TODO: Isn't even tagged from CPython tests.")
+    def test_07_tracing_exception_raised_in_with(self):
+        class NullCtx:
+            def __enter__(self):
+                return self
+            def __exit__(self, *excinfo):
+                pass
+
+        def func():
+            try:
+                with NullCtx():
+                    raise ExceptionGroup("eg", [TypeError(1)])
+            except* TypeError:
+                pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (-5, '__enter__', 'call'),
+            (-4, '__enter__', 'line'),
+            (-4, '__enter__', 'return'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (2, 'func', 'line'),
+            (-3, '__exit__', 'call'),
+            (-2, '__exit__', 'line'),
+            (-2, '__exit__', 'return'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (5, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_08_try_except_star_no_exception(self):
+        def func():
+            try:
+                2
+            except* Exception:
+                4
+            else:
+                6
+                if False:
+                    8
+                else:
+                    10
+                if func.__name__ == 'Fred':
+                    12
+            finally:
+                14
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (10, 'func', 'line'),
+            (11, 'func', 'line'),
+            (14, 'func', 'line'),
+            (14, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_09_try_except_star_named_no_exception(self):
+        def func():
+            try:
+                2
+            except* Exception as e:
+                4
+            else:
+                6
+            finally:
+                8
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (6, 'func', 'line'),
+            (8, 'func', 'line'),
+            (8, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_10_try_except_star_exception_caught(self):
+        def func():
+            try:
+                raise ValueError(2)
+            except* ValueError:
+                4
+            else:
+                6
+            finally:
+                8
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (2, 'func', 'exception'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (8, 'func', 'line'),
+            (8, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_11_try_except_star_named_exception_caught(self):
+        def func():
+            try:
+                raise ValueError(2)
+            except* ValueError as e:
+                4
+            else:
+                6
+            finally:
+                8
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (2, 'func', 'exception'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (8, 'func', 'line'),
+            (8, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_12_try_except_star_exception_not_caught(self):
+        def func():
+            try:
+                try:
+                    raise ValueError(3)
+                except* TypeError:
+                    5
+            except ValueError:
+                7
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (4, 'func', 'line'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (7, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_13_try_except_star_named_exception_not_caught(self):
+        def func():
+            try:
+                try:
+                    raise ValueError(3)
+                except* TypeError as e:
+                    5
+            except ValueError:
+                7
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (4, 'func', 'line'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (7, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_14_try_except_star_nested(self):
+        def func():
+            try:
+                try:
+                    raise ExceptionGroup(
+                        'eg',
+                        [ValueError(5), TypeError('bad type')])
+                except* TypeError as e:
+                    7
+                except* OSError:
+                    9
+                except* ValueError:
+                    raise
+            except* ValueError:
+                try:
+                    raise TypeError(14)
+                except* OSError:
+                    16
+                except* TypeError as e:
+                    18
+            return 0
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (4, 'func', 'line'),
+            (5, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'exception'),
+            (6, 'func', 'line'),
+            (7, 'func', 'line'),
+            (8, 'func', 'line'),
+            (10, 'func', 'line'),
+            (11, 'func', 'line'),
+            (12, 'func', 'line'),
+            (13, 'func', 'line'),
+            (14, 'func', 'line'),
+            (14, 'func', 'exception'),
+            (15, 'func', 'line'),
+            (17, 'func', 'line'),
+            (18, 'func', 'line'),
+            (19, 'func', 'line'),
+            (19, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+class SingleLineMultipleStmts(TracingEventsUnitTest):
+    def test_01_if_elif_else(self):
+        def func():
+            x = 5
+            if x < 4: pass
+            elif x > 4: pass
+            else: pass
+            return
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (5, 'func', 'line'),
+            (5, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+    def test_02_if_elif_else_implicit_return(self):
+        def func():
+            x = 5
+            if x < 4: pass
+            elif x > 4: pass
+            else: pass
+
+        self.trace_function(func)
+
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (2, 'func', 'line'),
+            (3, 'func', 'line'),
+            (3, 'func', 'return')
+        ]
+
+        self.assert_events(self.events, events)
+
+
+class AnnotationsEvents(TracingEventsUnitTest):
+    def test_multiple_fun_annotations(self):
+        class AnnotationTracer:
+            def my_annotation(self, func=None, *, tag=None):
+                def decorator(f):
+                    return f
+                return decorator
+            def your_annotation(self, func=None, *, tag=None):
+                def decorator(f):
+                    return f
+                return decorator
+        annotation_tracer = AnnotationTracer()
+
+        def func():
+            @annotation_tracer.my_annotation(tag="outer")
+            @annotation_tracer.your_annotation(tag="inner")
+            def target(x, y):
+                pass
+
+        def klass():
+            @annotation_tracer.your_annotation(tag="outer")
+            @annotation_tracer.my_annotation(tag="inner")
+            class TargetCls:
+                pass
+
+        self.trace_function(func)
+        events = [
+            (0, 'func', 'call'),
+            (1, 'func', 'line'),
+            (-10, 'my_annotation', 'call'),
+            (-9, 'my_annotation', 'line'),
+            (-7, 'my_annotation', 'line'),
+            (-7, 'my_annotation', 'return'),
+            (2, 'func', 'line'),
+            (-6, 'your_annotation', 'call'),
+            (-5, 'your_annotation', 'line'),
+            (-3, 'your_annotation', 'line'),
+            (-3, 'your_annotation', 'return'),
+            (3, 'func', 'line'),
+            (2, 'func', 'line'),
+            (-5, 'decorator', 'call'),
+            (-4, 'decorator', 'line'),
+            (-4, 'decorator', 'return'),
+            (1, 'func', 'line'),
+            (-9, 'decorator', 'call'),
+            (-8, 'decorator', 'line'),
+            (-8, 'decorator', 'return'),
+            (3, 'func', 'line'),
+            (3, 'func', 'return'),
+        ]
+        self.assert_events(self.events, events)
+
+        self.trace_function(klass)
+        events = [
+            (0, 'klass', 'call'),
+            (1, 'klass', 'line'),
+            (-12, 'your_annotation', 'call'),
+            (-11, 'your_annotation', 'line'),
+            (-9, 'your_annotation', 'line'),
+            (-9, 'your_annotation', 'return'),
+            (2, 'klass', 'line'),
+            (-16, 'my_annotation', 'call'),
+            (-15, 'my_annotation', 'line'),
+            (-13, 'my_annotation', 'line'),
+            (-13, 'my_annotation', 'return'),
+            (3, 'klass', 'line'),
+            (1, 'TargetCls', 'call'),
+            (1, 'TargetCls', 'line'),
+            (4, 'TargetCls', 'line'),
+            (4, 'TargetCls', 'return'),
+            (2, 'klass', 'line'),
+            (-15, 'decorator', 'call'),
+            (-14, 'decorator', 'line'),
+            (-14, 'decorator', 'return'),
+            (1, 'klass', 'line'),
+            (-11, 'decorator', 'call'),
+            (-10, 'decorator', 'line'),
+            (-10, 'decorator', 'return'),
+            (3, 'klass', 'line'),
+            (3, 'klass', 'return'),
+        ]
+        self.assert_events(self.events, events)

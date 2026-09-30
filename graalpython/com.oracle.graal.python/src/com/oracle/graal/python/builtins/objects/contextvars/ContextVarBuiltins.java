@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,32 +49,69 @@ import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM
 import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.ArgumentClinic;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.contextvars.ContextVarBuiltinsClinicProviders.ContextVarNodeClinicProviderGen;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
+import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.ContextVar)
 public final class ContextVarBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = ContextVarBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ContextVarBuiltinsFactory.getFactories();
+    }
+
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "ContextVar", minNumOfPositionalArgs = 2, parameterNames = {"cls", "name", "default"})
+    @ArgumentClinic(name = "name", conversion = ArgumentClinic.ClinicConversion.TString)
+    @GenerateNodeFactory
+    public abstract static class ContextVarNode extends PythonTernaryClinicBuiltinNode {
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return ContextVarNodeClinicProviderGen.INSTANCE;
+        }
+
+        @Specialization
+        protected static Object constructDef(@SuppressWarnings("unused") Object cls, TruffleString name, Object def,
+                        @Bind Node inliningTarget,
+                        @Cached InlinedConditionProfile noValueProfile,
+                        @Bind PythonLanguage language) {
+            if (noValueProfile.profile(inliningTarget, isNoValue(def))) {
+                def = PContextVar.NO_DEFAULT;
+            }
+            return PFactory.createContextVar(language, name, def);
+        }
     }
 
     @Builtin(name = "get", minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2)
@@ -82,16 +119,17 @@ public final class ContextVarBuiltins extends PythonBuiltins {
     public abstract static class GetNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object get(PContextVar self, Object def,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedConditionProfile defIsNoValueProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Object defValue = defIsNoValueProfile.profile(inliningTarget, isNoValue(def)) ? PContextVar.NO_DEFAULT : def;
-            PythonContext.PythonThreadState threadState = PythonContext.get(inliningTarget).getThreadState(PythonLanguage.get(inliningTarget));
-            Object value = self.get(threadState, defValue);
+            PythonContext context = PythonContext.get(inliningTarget);
+            PythonContext.PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
+            Object value = self.get(inliningTarget, threadState, defValue);
             if (value != null) {
                 return value;
             }
-            throw raiseNode.get(inliningTarget).raise(LookupError);
+            throw raiseNode.raise(inliningTarget, LookupError);
         }
     }
 
@@ -99,12 +137,20 @@ public final class ContextVarBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class SetNode extends PythonBinaryBuiltinNode {
         @Specialization
-        Object set(PContextVar self, Object value,
-                        @Cached PythonObjectFactory factory) {
-            PythonContext.PythonThreadState threadState = getContext().getThreadState(getLanguage());
-            Object oldValue = self.getValue(threadState);
-            self.setValue(threadState, value);
-            return factory.createContextVarsToken(self, oldValue);
+        static Object set(VirtualFrame frame, PContextVar self, Object value,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
+            PythonContext.PythonThreadState threadState = context.getThreadState(language);
+            Object oldValue = self.getValue(inliningTarget, threadState);
+            Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                self.setValue(inliningTarget, threadState, value);
+            } finally {
+                BoundaryCallContext.exit(frame, boundaryCallData, saved);
+            }
+            return PFactory.createContextVarsToken(language, self, oldValue);
         }
     }
 
@@ -112,29 +158,36 @@ public final class ContextVarBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class ResetNode extends PythonBinaryBuiltinNode {
         @Specialization
-        Object reset(PContextVar self, PContextVarsToken token,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PRaiseNode.Lazy raise) {
+        static Object reset(VirtualFrame frame, PContextVar self, PContextVarsToken token,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext pythonContext,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Shared @Cached PRaiseNode raise) {
             if (self == token.getVar()) {
                 token.use(inliningTarget, raise);
-                PythonContext.PythonThreadState threadState = getContext().getThreadState(getLanguage());
-                if (token.getOldValue() == null) {
-                    PContextVarsContext context = threadState.getContextVarsContext();
-                    context.contextVarValues = context.contextVarValues.without(self, self.getHash());
-                } else {
-                    self.setValue(threadState, token.getOldValue());
+                PythonContext.PythonThreadState threadState = pythonContext.getThreadState(pythonContext.getLanguage(inliningTarget));
+                Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+                try {
+                    if (token.getOldValue() == null) {
+                        PContextVarsContext context = threadState.getContextVarsContext(inliningTarget);
+                        context.contextVarValues = context.contextVarValues.without(self, self.getHash());
+                    } else {
+                        self.setValue(inliningTarget, threadState, token.getOldValue());
+                    }
+                } finally {
+                    BoundaryCallContext.exit(frame, boundaryCallData, saved);
                 }
             } else {
-                throw raise.get(inliningTarget).raise(ValueError, ErrorMessages.TOKEN_FOR_DIFFERENT_CONTEXTVAR, token);
+                throw raise.raise(inliningTarget, ValueError, ErrorMessages.TOKEN_FOR_DIFFERENT_CONTEXTVAR, token);
             }
             return PNone.NONE;
         }
 
         @Specialization(guards = "!isToken(token)")
         Object doError(@SuppressWarnings("unused") PContextVar self, Object token,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PRaiseNode.Lazy raise) {
-            throw raise.get(inliningTarget).raise(TypeError, ErrorMessages.INSTANCE_OF_TOKEN_EXPECTED, token);
+                        @Bind Node inliningTarget,
+                        @Shared @Cached PRaiseNode raise) {
+            throw raise.raise(inliningTarget, TypeError, ErrorMessages.INSTANCE_OF_TOKEN_EXPECTED, token);
         }
 
         static boolean isToken(Object obj) {
@@ -147,8 +200,8 @@ public final class ContextVarBuiltins extends PythonBuiltins {
     public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object classGetItem(Object cls, Object key,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createGenericAlias(cls, key);
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

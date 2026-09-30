@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,159 +40,18 @@
  */
 package com.oracle.graal.python.builtins.modules;
 
-import static com.oracle.graal.python.nodes.BuiltinNames.J_DEFAULTDICT;
-import static com.oracle.graal.python.nodes.BuiltinNames.J_DEQUE;
-import static com.oracle.graal.python.nodes.BuiltinNames.J_DEQUE_ITER;
-import static com.oracle.graal.python.nodes.BuiltinNames.J_DEQUE_REV_ITER;
-import static com.oracle.graal.python.nodes.BuiltinNames.J_TUPLE_GETTER;
-
+import java.util.Collections;
 import java.util.List;
 
-import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.deque.DequeIterBuiltins.DequeIterNextNode;
-import com.oracle.graal.python.builtins.objects.deque.PDeque;
-import com.oracle.graal.python.builtins.objects.deque.PDequeIter;
-import com.oracle.graal.python.builtins.objects.dict.PDefaultDict;
-import com.oracle.graal.python.builtins.objects.function.PKeyword;
-import com.oracle.graal.python.lib.PyNumberIndexNode;
-import com.oracle.graal.python.nodes.BuiltinNames;
-import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(defineModule = "_collections")
 public final class CollectionsModuleBuiltins extends PythonBuiltins {
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
-        return CollectionsModuleBuiltinsFactory.getFactories();
-    }
-
-    // _collections.deque
-    @Builtin(name = J_DEQUE, minNumOfPositionalArgs = 1, constructsClass = PythonBuiltinClassType.PDeque, takesVarArgs = true, takesVarKeywordArgs = true)
-    @GenerateNodeFactory
-    abstract static class DequeNode extends PythonVarargsBuiltinNode {
-
-        @Override
-        public Object varArgExecute(VirtualFrame frame, Object self, Object[] arguments, PKeyword[] keywords) throws VarargsBuiltinDirectInvocationNotSupported {
-            if (arguments.length >= 1) {
-                return doGeneric(arguments[0], null, null);
-            }
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw VarargsBuiltinDirectInvocationNotSupported.INSTANCE;
-        }
-
-        @Specialization
-        @SuppressWarnings("unused")
-        PDeque doGeneric(Object cls, Object[] args, PKeyword[] kwargs) {
-            return factory().createDeque(cls);
-        }
-    }
-
-    // _collections._deque_iterator
-    @Builtin(name = J_DEQUE_ITER, constructsClass = PythonBuiltinClassType.PDequeIter, //
-                    minNumOfPositionalArgs = 2, parameterNames = {"$self", "iterable", "index"})
-    @GenerateNodeFactory
-    abstract static class DequeIterNode extends PythonTernaryBuiltinNode {
-
-        @Specialization
-        static PDequeIter doGeneric(VirtualFrame frame, @SuppressWarnings("unused") Object cls, Object deque, Object indexObj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile dequeProfile,
-                        @Cached InlinedConditionProfile indexNoneProfile,
-                        @Cached PyNumberIndexNode toIndexNode,
-                        @Cached CastToJavaIntExactNode castToJavaIntExactNode,
-                        @Cached DequeIterNextNode getNextNode,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            if (!dequeProfile.profile(inliningTarget, deque instanceof PDeque)) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.EXPECTED_OBJ_TYPE_S_GOT_P, BuiltinNames.T_DEQUE, deque);
-            }
-            PDequeIter dequeIter = factory.createDequeIter((PDeque) deque);
-            if (indexNoneProfile.profile(inliningTarget, indexObj != PNone.NO_VALUE)) {
-                int index = castToJavaIntExactNode.execute(inliningTarget, toIndexNode.execute(frame, inliningTarget, indexObj));
-                for (int i = 0; i < index; i++) {
-                    getNextNode.execute(dequeIter);
-                }
-            }
-            return dequeIter;
-        }
-    }
-
-    // _collections._deque_reverse_iterator
-    @Builtin(name = J_DEQUE_REV_ITER, constructsClass = PythonBuiltinClassType.PDequeRevIter, //
-                    minNumOfPositionalArgs = 2, parameterNames = {"$self", "iterable", "index"})
-    @GenerateNodeFactory
-    abstract static class DequeRevIterNode extends PythonTernaryBuiltinNode {
-        @Specialization
-        static PDequeIter doGeneric(VirtualFrame frame, @SuppressWarnings("unused") Object cls, Object deque, Object indexObj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile dequeProfile,
-                        @Cached InlinedConditionProfile indexNoneProfile,
-                        @Cached PyNumberIndexNode toIndexNode,
-                        @Cached CastToJavaIntExactNode castToJavaIntExactNode,
-                        @Cached DequeIterNextNode getNextNode,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            if (!dequeProfile.profile(inliningTarget, deque instanceof PDeque)) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.EXPECTED_OBJ_TYPE_S_GOT_P, BuiltinNames.T_DEQUE, deque);
-            }
-            PDequeIter dequeIter = factory.createDequeRevIter((PDeque) deque);
-            if (indexNoneProfile.profile(inliningTarget, indexObj != PNone.NO_VALUE)) {
-                int index = castToJavaIntExactNode.execute(inliningTarget, toIndexNode.execute(frame, inliningTarget, indexObj));
-                for (int i = 0; i < index; i++) {
-                    getNextNode.execute(dequeIter);
-                }
-            }
-            return dequeIter;
-        }
-    }
-
-    // _collections.defaultdict
-    @Builtin(name = J_DEFAULTDICT, minNumOfPositionalArgs = 1, constructsClass = PythonBuiltinClassType.PDefaultDict, takesVarArgs = true, takesVarKeywordArgs = true)
-    @GenerateNodeFactory
-    abstract static class DefaultDictNode extends PythonVarargsBuiltinNode {
-        @Specialization
-        @SuppressWarnings("unused")
-        PDefaultDict doGeneric(Object cls, Object[] args, PKeyword[] kwargs,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createDefaultDict(cls);
-        }
-    }
-
-    // _collections._tuplegetter
-    @Builtin(name = J_TUPLE_GETTER, parameterNames = {"cls", "index", "doc"}, constructsClass = PythonBuiltinClassType.PTupleGetter)
-    @ArgumentClinic(name = "index", conversion = ArgumentClinic.ClinicConversion.Index)
-    @GenerateNodeFactory
-    abstract static class TupleGetterNode extends PythonTernaryClinicBuiltinNode {
-        @Override
-        protected ArgumentClinicProvider getArgumentClinic() {
-            return CollectionsModuleBuiltinsClinicProviders.TupleGetterNodeClinicProviderGen.INSTANCE;
-        }
-
-        @Specialization
-        Object construct(Object cls, int index, Object doc,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createTupleGetter(cls, index, doc);
-        }
+        return Collections.emptyList();
     }
 }

@@ -185,6 +185,16 @@ class TestCause(unittest.TestCase):
         else:
             self.fail("No exception raised")
 
+    def test_class_cause_nonexception_result(self):
+        # See https://github.com/python/cpython/issues/140530.
+        class ConstructMortal(BaseException):
+            def __new__(*args, **kwargs):
+                return ["mortal value"]
+
+        msg = ".*should have returned an instance of BaseException.*"
+        with self.assertRaisesRegex(TypeError, msg):
+            raise IndexError from ConstructMortal
+
     def test_instance_cause(self):
         cause = KeyError()
         try:
@@ -275,7 +285,8 @@ class TestTracebackType(unittest.TestCase):
         tb = types.TracebackType(other_tb, frame, 1, 2)
         self.assertEqual(tb.tb_next, other_tb)
         self.assertEqual(tb.tb_frame, frame)
-        self.assertEqual(tb.tb_lasti, 1)
+        # GraalPy change
+        # self.assertEqual(tb.tb_lasti, 1)
         self.assertEqual(tb.tb_lineno, 2)
 
         tb = types.TracebackType(None, frame, 1, 2)

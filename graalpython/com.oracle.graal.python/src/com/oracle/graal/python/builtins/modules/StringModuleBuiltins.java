@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,11 +44,12 @@ import static com.oracle.graal.python.nodes.BuiltinNames.J_FORMATTER_FIELD_NAME_
 import static com.oracle.graal.python.nodes.BuiltinNames.J_FORMATTER_PARSER;
 import static com.oracle.graal.python.nodes.BuiltinNames.J__STRING;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.iterator.PSequenceIterator;
@@ -57,9 +58,9 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.runtime.ExecutionContext;
-import com.oracle.graal.python.runtime.IndirectCallData;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
@@ -85,28 +86,27 @@ public final class StringModuleBuiltins extends PythonBuiltins {
 
         @Specialization
         PSequenceIterator formatterParser(VirtualFrame frame, TruffleString self,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
             TemplateFormatter formatter = new TemplateFormatter(self);
-            List<Object[]> parserList;
-            PythonLanguage language = PythonLanguage.get(this);
+            ArrayList<Object[]> parserList;
             PythonContext context = PythonContext.get(this);
-            Object state = ExecutionContext.IndirectCallContext.enter(frame, language, context, indirectCallData);
+            PythonLanguage language = context.getLanguage(this);
+            Object state = ExecutionContext.BoundaryCallContext.enter(frame, language, context, boundaryCallData);
             try {
                 parserList = formatter.formatterParser(this);
             } finally {
-                ExecutionContext.IndirectCallContext.exit(frame, language, context, state);
+                ExecutionContext.BoundaryCallContext.exit(frame, language, context, state);
             }
-            return parserListToIterator(parserList, factory);
+            return parserListToIterator(parserList, language);
         }
     }
 
-    private static PSequenceIterator parserListToIterator(List<Object[]> parserList, PythonObjectFactory factory) {
+    private static PSequenceIterator parserListToIterator(ArrayList<Object[]> parserList, PythonLanguage language) {
         Object[] tuples = new Object[parserList.size()];
         for (int i = 0; i < tuples.length; i++) {
-            tuples[i] = factory.createTuple(parserList.get(i));
+            tuples[i] = PFactory.createTuple(language, parserList.get(i));
         }
-        return factory.createSequenceIterator(factory.createList(tuples));
+        return PFactory.createSequenceIterator(language, PFactory.createList(language, tuples));
     }
 
     @Builtin(name = J_FORMATTER_FIELD_NAME_SPLIT, minNumOfPositionalArgs = 1, parameterNames = {"self"})
@@ -120,19 +120,18 @@ public final class StringModuleBuiltins extends PythonBuiltins {
 
         @Specialization
         Object formatterParser(VirtualFrame frame, TruffleString self,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
             TemplateFormatter formatter = new TemplateFormatter(self);
             TemplateFormatter.FieldNameSplitResult result;
-            PythonLanguage language = PythonLanguage.get(this);
             PythonContext context = PythonContext.get(this);
-            Object state = ExecutionContext.IndirectCallContext.enter(frame, language, context, indirectCallData);
+            PythonLanguage language = context.getLanguage(this);
+            Object state = ExecutionContext.BoundaryCallContext.enter(frame, language, context, boundaryCallData);
             try {
                 result = formatter.formatterFieldNameSplit(this);
             } finally {
-                ExecutionContext.IndirectCallContext.exit(frame, language, context, state);
+                ExecutionContext.BoundaryCallContext.exit(frame, language, context, state);
             }
-            return factory.createTuple(new Object[]{result.first, parserListToIterator(result.parserList, factory)});
+            return PFactory.createTuple(language, new Object[]{result.first, parserListToIterator(result.parserList, language)});
         }
     }
 }

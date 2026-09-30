@@ -1,23 +1,30 @@
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_builtin_function
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_class
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_instance
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_method
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_module
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_object
-*graalpython.lib-python.3.test.test_reprlib.LongReprTest.test_type
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_builtin_function
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_cell
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_container
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_descriptors
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_frozenset
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_instance
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_lambda
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_nesting
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_numbers
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_range
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_set_literal
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_string
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_tuple
-*graalpython.lib-python.3.test.test_reprlib.ReprTests.test_unsortable
-*graalpython.lib-python.3.test.test_reprlib.TestRecursiveRepr.test_assigned_attributes
-*graalpython.lib-python.3.test.test_reprlib.TestRecursiveRepr.test_recursive_repr
+test.test_reprlib.LongReprTest.test_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.LongReprTest.test_instance @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.LongReprTest.test_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.LongReprTest.test_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.LongReprTest.test_type @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_builtin_function @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_cell @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_container @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_custom_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_custom_repr_class_with_spaces @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_descriptors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_frozenset @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_init_kwargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_instance @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_invalid_indent @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_nesting @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_numbers @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_range @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_set_literal @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_shadowed_builtin @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_shadowed_stdlib_array @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_string @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_tuple @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_unsortable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.ReprTests.test_valid_indent @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.TestRecursiveRepr.test__type_params__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.TestRecursiveRepr.test__wrapped__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.TestRecursiveRepr.test_assigned_attributes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_reprlib.TestRecursiveRepr.test_recursive_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

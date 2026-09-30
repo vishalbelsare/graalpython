@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -56,6 +56,17 @@
 
 // Integer.MAX_INT
 #define GRAALPYTHON_MAX_SIZE (INT_MAX)
+
+#define DEF_BUF_SIZE (16*1024)
+#define DEF_MAX_INITIAL_BUF_SIZE (16 * 1024 * 1024)
+
+/* The following parameters are copied from zutil.h, version 0.95 */
+#define DEFLATED   8
+#if MAX_MEM_LEVEL >= 8
+#  define DEF_MEM_LEVEL 8
+#else
+#  define DEF_MEM_LEVEL  MAX_MEM_LEVEL
+#endif
 
 #ifndef NDEBUG
     #include <stdio.h>
@@ -144,6 +155,7 @@ typedef struct
     int eof;
     int is_initialised;
     off_heap_buffer *zdict;
+    size_t avail_in_real;
 } compobject;
 
 #define NOT_INITIALIZED 0
@@ -157,6 +169,9 @@ typedef struct
     off_heap_buffer *output;
     size_t output_size;
 
+    off_heap_buffer *input_buffer;
+    size_t input_buffer_size;
+
     compobject *comp;
 
     int error_function;
@@ -165,50 +180,42 @@ typedef struct
 #endif
 } zlib_stream;
 
-#define NO_ERROR            0   // nfi_var
+#define NO_ERROR            0
 
-#define DEFLATE_INIT_ERROR  101 // nfi_var
-#define DEFLATE_END_ERROR   102 // nfi_var
-#define DEFLATE_DICT_ERROR  103 // nfi_var
-#define DEFLATE_OBJ_ERROR   104 // nfi_var
-#define DEFLATE_FLUSH_ERROR 105 // nfi_var
-#define DEFLATE_COPY_ERROR  106 // nfi_var
-#define DEFLATE_ERROR       107 // nfi_var
+#define DEFLATE_INIT_ERROR  101
+#define DEFLATE_END_ERROR   102
+#define DEFLATE_DICT_ERROR  103
+#define DEFLATE_OBJ_ERROR   104
+#define DEFLATE_FLUSH_ERROR 105
+#define DEFLATE_COPY_ERROR  106
+#define DEFLATE_ERROR       107
 
-#define INFLATE_INIT_ERROR  201 // nfi_var
-#define INFLATE_END_ERROR   202 // nfi_var
-#define INFLATE_DICT_ERROR  203 // nfi_var
-#define INFLATE_OBJ_ERROR   204 // nfi_var
-#define INFLATE_FLUSH_ERROR 205 // nfi_var
-#define INFLATE_COPY_ERROR  206 // nfi_var
-#define INFLATE_ERROR       207 // nfi_var
+#define INFLATE_INIT_ERROR  201
+#define INFLATE_END_ERROR   202
+#define INFLATE_DICT_ERROR  203
+#define INFLATE_OBJ_ERROR   204
+#define INFLATE_FLUSH_ERROR 205
+#define INFLATE_COPY_ERROR  206
+#define INFLATE_ERROR       207
 
-#define INCOMPLETE_ERROR    99  // nfi_var
-#define MEMORY_ERROR        999 // nfi_var
+#define INCOMPLETE_ERROR    99
+#define MEMORY_ERROR        999
 
 // options to get buffer from the native side
-#define OUTPUT_OPTION           0 // nfi_var
-#define UNUSED_DATA_OPTION      1 // nfi_var
-#define UNCONSUMED_TAIL_OPTION  2 // nfi_var
-#define ZDICT_OPTION            3 // nfi_var
-
-// nfi_function: name('zlibVersion') static(true)
+#define OUTPUT_OPTION           0
+#define UNUSED_DATA_OPTION      1
+#define UNCONSUMED_TAIL_OPTION  2
+#define ZDICT_OPTION            3
 const char *zlib_get_version() {
     return ZLIB_VERSION;
 }
-
-// nfi_function: name('zlibRuntimeVersion') static(true)
 const char *zlib_get_runtime_version() {
     return zlibVersion();
 }
-
-// nfi_function: name('crc32')
 uLong zlib_crc32(uLong crc, const Byte *buf, uInt len)
 {
     return crc32(crc, buf, len);
 }
-
-// nfi_function: name('adler32')
 uLong zlib_adler32(uLong crc, const Byte *buf, uInt len)
 {
     return adler32(crc, buf, len);
@@ -287,8 +294,6 @@ static off_heap_buffer* zlib_get_ref(off_heap_buffer* o) {
     }
     return o;
 }
-
-// nfi_function: name('createStream') map('zlib_stream*', 'POINTER')
 zlib_stream *zlib_create_zlib_stream() {
     zlib_stream *zst = (zlib_stream *) malloc(sizeof(zlib_stream));
     zst->zst_type = NOT_INITIALIZED;
@@ -296,6 +301,9 @@ zlib_stream *zlib_create_zlib_stream() {
     zst->output = zlib_allocate_buffer(1);
     zst->output->size = 0;
     zst->output_size = 0;
+    zst->input_buffer = zlib_allocate_buffer(1);
+    zst->input_buffer->size = 0;
+    zst->input_buffer_size = 0;
     zst->zst.opaque = Z_NULL;
     zst->zst.zalloc = zlib_allocate;
     zst->zst.zfree = zlib_deallocate;
@@ -326,8 +334,6 @@ void zlib_release_compobject(compobject *comp) {
 
     free(comp);
 }
-
-// nfi_function: name('getTimeElapsed') map('zlib_stream*', 'POINTER')  static(true)
 double zlib_get_timeElapsed(zlib_stream* zst) {
 #ifdef BENCHMARK
     double t = zst->timeElapsed;
@@ -338,8 +344,6 @@ double zlib_get_timeElapsed(zlib_stream* zst) {
     return -1.0;
 #endif
 }
-
-// nfi_function: name('deallocateStream') map('zlib_stream*', 'POINTER')
 void zlib_free_stream(zlib_stream* zst) {
     if (!zst) {
         return;
@@ -352,45 +356,34 @@ void zlib_free_stream(zlib_stream* zst) {
         }
     }
     zlib_release_buffer(zst->output);
+    if (zst->input_buffer) {
+        zlib_release_buffer(zst->input_buffer);
+    }
     zlib_release_compobject(zst->comp);
     LOG_INFO("free zlib_stream(%p)\n", zst);
     free(zst);
 }
-
-// nfi_function: name('gcReleaseHelper') map('zlib_stream*', 'POINTER') release(true)
 void zlib_gc_helper(zlib_stream* zst) {
     zlib_free_stream(zst);
 }
-
-// nfi_function: name('getErrorFunction') map('zlib_stream*', 'POINTER')
 int zlib_get_error_type(zlib_stream *zst) {
     return zst->error_function;
 }
-
-// nfi_function: name('getStreamErrorMsg') map('zlib_stream*', 'POINTER')
 const char *zlib_get_stream_msg(zlib_stream *zst) {
     return zst->zst.msg;
 }
-
-// nfi_function: name('hasStreamErrorMsg') map('zlib_stream*', 'POINTER')
 int zlib_has_stream_msg(zlib_stream *zst) {
     if (zst->zst.msg == Z_NULL) {
         return 0;
     }
     return 1;
 }
-
-// nfi_function: name('getEOF') map('zlib_stream*', 'POINTER')
 int zlib_get_eof(zlib_stream *zst) {
     return zst->comp->eof;
 }
-
-// nfi_function: name('getIsInitialised') map('zlib_stream*', 'POINTER')
 int zlib_get_is_initialised(zlib_stream *zst) {
     return zst->comp->is_initialised;
 }
-
-// nfi_function: name('getBufferSize') map('zlib_stream*', 'POINTER')
 uInt zlib_get_buffer_size(zlib_stream *zst, int option) {
     LOG_INFO("zlib_get_buffer_size(%p)\n", zst);
     size_t size = 0;
@@ -417,9 +410,6 @@ uInt zlib_get_buffer_size(zlib_stream *zst, int option) {
     }
     return size;
 }
-
-
-// nfi_function: name('getBuffer') map('zlib_stream*', 'POINTER')
 void zlib_get_off_heap_buffer(zlib_stream *zst, int option, Byte *dest) {
     LOG_INFO("zlib_get_off_heap_buffer(%p)\n", zst);
     off_heap_buffer *buffer = NULL;
@@ -453,8 +443,6 @@ void zlib_get_off_heap_buffer(zlib_stream *zst, int option, Byte *dest) {
     assert(buffer->buf != NULL);
     memcpy(dest, buffer->buf, size);
 }
-
-// nfi_function: name('createCompObject') map('zlib_stream*', 'POINTER')
 zlib_stream *zlib_create_compobject() {
     zlib_stream *zst = zlib_create_zlib_stream();
     compobject *comp = (compobject *) malloc(sizeof(compobject));
@@ -467,6 +455,7 @@ zlib_stream *zlib_create_compobject() {
     comp->unused_data = zlib_allocate_buffer(1);
     comp->unused_data->size = 0;
     comp->zdict = NULL;
+    comp->avail_in_real = 0;
     assert(zst->comp == NULL);
     zst->comp = comp;
     return zst;
@@ -495,16 +484,28 @@ static void error_occurred(zlib_stream *zst, int errFunction) {
     clear_output(zst);
 }
 
-static int resize_off_heap_buffer(zlib_stream *zst, size_t length) {
+static int resize_off_heap_buffer(zlib_stream *zst, size_t length, int is_output) {
     LOG_INFO("resize_off_heap_buffer(%p)\n", zst);
-    off_heap_buffer *current = zst->output;
+    off_heap_buffer *current;
+    size_t len;
+    if (is_output == 1) {
+        current = zst->output;
+        len = zst->output->size;
+    } else {
+        current = zst->input_buffer;
+        len = zst->input_buffer->size;
+    }
     off_heap_buffer *resized = zlib_allocate_buffer(length);
     if (!resized) {
         return -1;
     }
-    memcpy(resized->buf, current->buf, zst->output->size);
+    memcpy(resized->buf, current->buf, len);
     zlib_release_buffer(current);
-    zst->output = resized;
+    if (is_output == 1) {
+        zst->output = resized;
+    } else {
+        zst->input_buffer = resized;
+    }
     return 0;
 }
 
@@ -539,7 +540,7 @@ static ssize_t arrange_output_buffer_with_maximum(zlib_stream *zst, ssize_t leng
             } else {
                 new_length = max_length;
             }
-            if (resize_off_heap_buffer(zst, new_length) < 0) {
+            if (resize_off_heap_buffer(zst, new_length, 1) < 0) {
                 return -1;
             }
             length = new_length;
@@ -556,16 +557,14 @@ static ssize_t arrange_output_buffer(zlib_stream *zst, ssize_t length)
 {
     return arrange_output_buffer_with_maximum(zst, length, GRAALPYTHON_MAX_SIZE);
 }
-
-// nfi_function: name('deflateOffHeap') map('zlib_stream*', 'POINTER')
-int zlib_deflate_off_heap(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_size, int level) {
+int zlib_deflate_off_heap(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_size, int level, int wbits) {
     LOG_INFO("zlib_deflate_off_heap(%p)\n", zst);
     int err, flush;
     ssize_t ibuflen = in_len, obuflen = buf_size;
 
     zst->zst.next_in = in;
     
-    err = deflateInit(&zst->zst, level);
+    err = deflateInit2(&zst->zst, level, DEFLATED, wbits, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY);
     if (err != Z_OK) {
         zst->error_function = DEFLATE_INIT_ERROR;
         return err;
@@ -621,8 +620,6 @@ int zlib_deflate_off_heap(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t bu
 /************************************************
  *                  Decompress                  *
  ************************************************/
-
-// nfi_function: name('inflateOffHeap') map('zlib_stream*', 'POINTER')
 int zlib_inflate_off_heap(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_size, int wbits) {
     LOG_INFO("zlib_inflate_off_heap(%p)\n", zst);
     int err, flush;
@@ -697,8 +694,6 @@ int zlib_inflate_off_heap(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t bu
 /************************************************
  *               Compress Object                *
  ************************************************/
-
-// nfi_function: name('compressObjInitWithDict') map('zlib_stream*', 'POINTER')
 int zlib_Compress_init(zlib_stream *zst, 
                         int level, int method, 
                         int wbits, int memLevel, 
@@ -722,16 +717,12 @@ int zlib_Compress_init(zlib_stream *zst,
     }
     return Z_OK;
 }
-
-// nfi_function: name('compressObjInit') map('zlib_stream*', 'POINTER')
 int zlib_Compress_init_no_dict(zlib_stream *zst, 
                         int level, int method, 
                         int wbits, int memLevel, 
                         int strategy) {
     return zlib_Compress_init(zst, level, method, wbits, memLevel, strategy, NULL, 0);
 }
-
-// nfi_function: name('compressObj') map('zlib_stream*', 'POINTER')
 int zlib_Compress_obj(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_size) {
     LOG_INFO("zlib_Compress_obj(%p, in_len: %zd, buf_size: %zd)\n", zst, in_len, buf_size);
     clear_output(zst);
@@ -773,8 +764,6 @@ int zlib_Compress_obj(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_si
     }
     return Z_OK;
 }
-
-// nfi_function: name('compressObjFlush') map('zlib_stream*', 'POINTER')
 int zlib_Compress_flush(zlib_stream *zst, Byte *in, ssize_t buf_size, int mode) {
     LOG_INFO("zlib_Compress_flush(%p, buf_size: %zd)\n", zst, buf_size);
     clear_output(zst);
@@ -834,9 +823,6 @@ int zlib_Compress_flush(zlib_stream *zst, Byte *in, ssize_t buf_size, int mode) 
     }
     return Z_OK;
 }
-
-
-// nfi_function: name('compressObjCopy') map('zlib_stream*', 'POINTER')
 int zlib_Compress_copy(zlib_stream *zst, zlib_stream *new_copy) {
     LOG_INFO("zlib_Compress_copy(%p)\n", zst);
     int err = deflateCopy(&new_copy->zst, &zst->zst);
@@ -859,8 +845,6 @@ int zlib_Compress_copy(zlib_stream *zst, zlib_stream *new_copy) {
 /************************************************
  *              Decompress Object               *
  ************************************************/
-
-// nfi_function: name('decompressObjInitWithDict') map('zlib_stream*', 'POINTER')
 int zlib_Decompress_init(zlib_stream *zst, int wbits, Byte *dict, size_t dict_len) {
     LOG_INFO("zlib_Decompress_init(%p)\n", zst);
     
@@ -884,8 +868,6 @@ int zlib_Decompress_init(zlib_stream *zst, int wbits, Byte *dict, size_t dict_le
     }
     return Z_OK;
 }
-
-// nfi_function: name('decompressObjInit') map('zlib_stream*', 'POINTER')
 int zlib_Decompress_init_no_dict(zlib_stream *zst, int wbits) {
     return zlib_Decompress_init(zst, wbits, NULL, 0);
 }
@@ -935,8 +917,6 @@ static int save_unconsumed_input(zlib_stream *zst, Byte *in, size_t in_len, int 
 
     return Z_OK;
 }
-
-// nfi_function: name('decompressObj') map('zlib_stream*', 'POINTER')
 int zlib_Decompress_obj(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_size, ssize_t max_length) {
     LOG_INFO("zlib_Decompress_obj(%p, in_len: %zd, buf_size: %zd, max_length: %zd)\n", zst, in_len, buf_size, max_length);
     clear_output(zst);
@@ -1033,8 +1013,6 @@ int zlib_Decompress_obj(zlib_stream *zst, Byte *in, ssize_t in_len, ssize_t buf_
     }
     return Z_OK;
 }
-
-// nfi_function: name('decompressObjFlush') map('zlib_stream*', 'POINTER')
 int zlib_Decompress_flush(zlib_stream *zst, ssize_t length) {
     LOG_INFO("zlib_Decompress_flush(%p, length: %zd)\n", zst, length);
     clear_output(zst);
@@ -1114,8 +1092,6 @@ int zlib_Decompress_flush(zlib_stream *zst, ssize_t length) {
     }
     return Z_OK;
 }
-
-// nfi_function: name('decompressObjCopy') map('zlib_stream*', 'POINTER')
 int zlib_Decompress_copy(zlib_stream *zst, zlib_stream *new_copy) {
     LOG_INFO("zlib_Decompress_copy(%p)\n", zst);
     int err = inflateCopy(&new_copy->zst, &zst->zst);
@@ -1132,4 +1108,210 @@ int zlib_Decompress_copy(zlib_stream *zst, zlib_stream *new_copy) {
     new_copy->comp->is_initialised = 1;
 
     return Z_OK;
+}
+
+static void
+arrange_input_buffer(z_stream *zst, size_t *remains)
+{
+    zst->avail_in = (uInt)(((size_t)*remains) > UINT_MAX ? UINT_MAX : ((size_t)*remains));
+    *remains -= zst->avail_in;
+}
+
+/* Decompress data of length zst->comp->avail_in_real in self->state.next_in. The
+   output buffer is allocated dynamically and returned. If the max_length is
+   of sufficiently low size, max_length is allocated immediately. At most
+   max_length bytes are returned, so some of the input may not be consumed.
+   self->state.next_in and zst->comp->avail_in_real are updated to reflect the
+   consumed input. */
+
+static int
+decompress_buf(zlib_stream *zst, ssize_t max_length)
+{
+    LOG_INFO("decompress_buf(%p, max_length: %zd)\n", zst, max_length);
+    clear_output(zst);
+    /* data_size is strictly positive, but because we repeatedly have to
+       compare against max_length and PyBytes_GET_SIZE we declare it as
+       signed */
+    ssize_t hard_limit;
+    ssize_t obuflen;
+
+    int err = Z_OK;
+
+    /* When sys.maxsize is passed as default use DEF_BUF_SIZE as start buffer.
+       In this particular case the data may not necessarily be very big, so
+       it is better to grow dynamically.*/
+    if ((max_length < 0) || max_length >= GRAALPYTHON_MAX_SIZE) {
+        hard_limit = GRAALPYTHON_MAX_SIZE;
+        obuflen = DEF_BUF_SIZE;
+    } else {
+        /* Assume that decompressor is used in file decompression with a fixed
+           block size of max_length. In that case we will reach max_length almost
+           always (except at the end of the file). So it makes sense to allocate
+           max_length. */
+        hard_limit = max_length;
+        obuflen = max_length;
+        if (obuflen > DEF_MAX_INITIAL_BUF_SIZE){
+            // Safeguard against memory overflow.
+            obuflen = DEF_MAX_INITIAL_BUF_SIZE;
+        }
+    }
+
+    do {
+        arrange_input_buffer(&(zst->zst), &(zst->comp->avail_in_real));
+
+        do {
+            obuflen = arrange_output_buffer_with_maximum(zst,
+                                                        obuflen,
+                                                        hard_limit);
+            if (obuflen == -1){
+                error_occurred(zst, MEMORY_ERROR);
+                // PyErr_SetString(PyExc_MemoryError,
+                //                 "Insufficient memory for buffer allocation");
+                return -1;
+            }
+            else if (obuflen == -2) {
+                break;
+            }
+            // Py_BEGIN_ALLOW_THREADS
+            err = inflate(&zst->zst, Z_SYNC_FLUSH);
+            // Py_END_ALLOW_THREADS
+            switch (err) {
+            case Z_OK:            /* fall through */
+            case Z_BUF_ERROR:     /* fall through */
+            case Z_STREAM_END:
+                break;
+            default:
+                if (err == Z_NEED_DICT) {
+                    error_occurred(zst, INFLATE_DICT_ERROR);
+                    return -1;
+                }
+                else {
+                    break;
+                }
+            }
+        } while (zst->zst.avail_out == 0);
+    } while(err != Z_STREAM_END && zst->comp->avail_in_real != 0);
+
+    if (err == Z_STREAM_END) {
+        zst->comp->eof = 1;
+        zst->comp->is_initialised = 0;
+        /* Unlike the Decompress object we call inflateEnd here as there are no
+           backwards compatibility issues */
+        err = inflateEnd(&zst->zst);
+        if (err != Z_OK) {
+            error_occurred(zst, INFLATE_END_ERROR);
+            return err;
+        }
+    } else if (err != Z_OK && err != Z_BUF_ERROR) {
+        error_occurred(zst, INFLATE_ERROR);
+        return err;
+    }
+
+    zst->comp->avail_in_real += zst->zst.avail_in;
+
+    if (zst->output->size) {
+        zst->output_size = zst->zst.next_out - zst->output->buf;
+    }
+
+    return Z_OK;
+}
+int zlib_decompress(zlib_stream *zst, Byte *data,
+            size_t len, ssize_t max_length)
+{
+    LOG_INFO("zlib_decompress(%p, data: %p, len: %zd, max_length: %zd)\n", zst, data, len, max_length);
+    int needs_input = 0;
+    int input_buffer_in_use = 0;
+
+    /* Prepend unconsumed input if necessary */
+    if (zst->zst.next_in != NULL) {
+
+        /* Number of bytes we can append to input buffer */
+        size_t avail_now = (zst->input_buffer->buf + zst->input_buffer_size) - (zst->zst.next_in + zst->comp->avail_in_real);
+
+        /* Number of bytes we can append if we move existing
+            contents to beginning of buffer (overwriting
+            consumed input) */
+            size_t avail_total = zst->input_buffer_size - zst->comp->avail_in_real;
+
+        if (avail_total < len) {
+            size_t offset = zst->zst.next_in - zst->input_buffer->buf;
+            size_t new_size = zst->input_buffer_size + len - avail_now;
+
+            /* Assign to temporary variable first, so we don't
+                lose address of allocated buffer if realloc fails */
+            int tmp = resize_off_heap_buffer(zst, new_size, /* input_buffer */ 0);
+            if (tmp < 0) {
+                error_occurred(zst, MEMORY_ERROR);
+                return -1;
+            }
+            zst->input_buffer_size = new_size;
+
+            zst->zst.next_in = zst->input_buffer->buf + offset;
+        }
+        else if (avail_now < len) {
+            memmove(zst->input_buffer->buf, zst->zst.next_in,
+                    zst->comp->avail_in_real);
+                    zst->zst.next_in = zst->input_buffer->buf;
+        }
+        memcpy((void*)(zst->zst.next_in + zst->comp->avail_in_real), data, len);
+        zst->comp->avail_in_real += len;
+        input_buffer_in_use = 1;
+    }
+    else {
+        zst->zst.next_in = data;
+        zst->comp->avail_in_real = len;
+        input_buffer_in_use = 0;
+    }
+
+    int result = decompress_buf(zst, max_length);
+    if(result != Z_OK) {
+        zst->zst.next_in = NULL;
+        return -1;
+    }
+
+    if (zst->comp->eof) {
+        needs_input = 0;
+
+        if (zst->comp->avail_in_real > 0) {
+            zlib_release_buffer(zst->comp->unused_data);
+            zst->comp->unused_data = zlib_allocate_buffer(zst->comp->avail_in_real);
+            memcpy(zst->comp->unused_data->buf, (char *)zst->zst.next_in, zst->comp->avail_in_real);
+        }
+    }
+    else if (zst->comp->avail_in_real == 0) {
+        zst->zst.next_in = NULL;
+        needs_input = 1;
+    }
+    else {
+        needs_input = 0;
+
+        /* If we did not use the input buffer, we now have
+            to copy the tail from the caller's buffer into the
+            input buffer */
+        if (!input_buffer_in_use) {
+
+            /* Discard buffer if it's too small
+                (resizing it may needlessly copy the current contents) */
+            if (zst->input_buffer != NULL &&
+                zst->input_buffer_size < zst->comp->avail_in_real) {
+                zlib_release_buffer(zst->input_buffer);
+                zst->input_buffer = NULL;
+            }
+
+            /* Allocate if necessary */
+            if (zst->input_buffer == NULL) {
+                zst->input_buffer = zlib_allocate_buffer(zst->comp->avail_in_real);
+                if (zst->input_buffer == NULL) {
+                    error_occurred(zst, MEMORY_ERROR);
+                    return -1;
+                }
+                zst->input_buffer_size = zst->comp->avail_in_real;
+            }
+
+            /* Copy tail */
+            memcpy(zst->input_buffer->buf, zst->zst.next_in, zst->comp->avail_in_real);
+            zst->zst.next_in = zst->input_buffer->buf;
+        }
+    }
+    return needs_input;
 }

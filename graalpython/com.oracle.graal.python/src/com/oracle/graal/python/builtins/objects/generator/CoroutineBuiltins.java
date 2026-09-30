@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,27 +40,38 @@
  */
 package com.oracle.graal.python.builtins.objects.generator;
 
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
+
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
+import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PCoroutine)
 public final class CoroutineBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = CoroutineBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return CoroutineBuiltinsFactory.getFactories();
@@ -70,11 +81,8 @@ public final class CoroutineBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetCode extends PythonUnaryBuiltinNode {
         @Specialization
-        static Object getCode(PGenerator self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile hasCodeProfile,
-                        @Cached PythonObjectFactory.Lazy factory) {
-            return self.getOrCreateCode(inliningTarget, hasCodeProfile, factory);
+        static Object getCode(PGenerator self) {
+            return self.getGeneratorFunction().getCode();
         }
     }
 
@@ -107,13 +115,42 @@ public final class CoroutineBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "__await__", minNumOfPositionalArgs = 1)
+    @Builtin(name = "cr_suspended", minNumOfPositionalArgs = 1, isGetter = true)
+    @GenerateNodeFactory
+    abstract static class GetSuspendedNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static boolean suspended(PGenerator self) {
+            return self.isStarted() && !self.isRunning() && !self.isFinished();
+        }
+    }
+
+    @Slot(value = SlotKind.am_await, isComplex = true)
     @GenerateNodeFactory
     abstract static class AwaitNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object await(PGenerator self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createCoroutineWrapper(self);
+                        @Bind PythonLanguage language) {
+            return PFactory.createCoroutineWrapper(language, self);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
+    @GenerateNodeFactory
+    abstract static class ReprNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static TruffleString repr(PGenerator self,
+                        @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
+            return simpleTruffleStringFormatNode.format("<coroutine object %s at 0x%d>", self.getQualname(), PythonAbstractObject.objectHashCode(self));
+        }
+    }
+
+    @Builtin(name = J___CLASS_GETITEM__, minNumOfPositionalArgs = 2, isClassmethod = true)
+    @GenerateNodeFactory
+    public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
+        @Specialization
+        static Object classGetItem(Object cls, Object key,
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

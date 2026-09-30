@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,9 +40,6 @@
  */
 package com.oracle.graal.python.builtins.objects.common;
 
-import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodesFactory.GetClonedHashingStorageNodeGen;
 import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodesFactory.SetItemNodeGen;
@@ -52,19 +49,16 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageSetItem;
-import com.oracle.graal.python.builtins.objects.dict.PDict;
+import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.PutNode;
+import com.oracle.graal.python.builtins.objects.dict.DictNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDictView;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.builtins.objects.set.PBaseSet;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
-import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.SpecialMethodNames;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
-import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.PythonOptions;
-import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -81,8 +75,6 @@ import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
-import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleStringIterator;
 
 public abstract class HashingCollectionNodes {
 
@@ -91,18 +83,20 @@ public abstract class HashingCollectionNodes {
     @GenerateCached
     @ImportStatic(PGuards.class)
     public abstract static class SetItemNode extends PNodeWithContext {
-        public abstract void execute(Frame frame, Node inliningTarget, PHashingCollection c, Object key, Object value);
+        public abstract void execute(Frame frame, Node inliningTarget, Object c, Object key, Object value);
 
-        public final void executeCached(Frame frame, PHashingCollection c, Object key, Object value) {
+        public final void executeCached(Frame frame, Object c, Object key, Object value) {
             execute(frame, this, c, key, value);
         }
 
         @Specialization
-        static void doSetItem(Frame frame, Node inliningTarget, PHashingCollection c, Object key, Object value,
+        static void doSetItem(Frame frame, Node inliningTarget, Object c, Object key, Object value,
+                        @Cached DictNodes.GetDictStorageNode getStorageNode,
+                        @Cached DictNodes.UpdateDictStorageNode updateStorageNode,
                         @Cached HashingStorageSetItem setItem) {
-            HashingStorage storage = c.getDictStorage();
-            storage = setItem.execute(frame, inliningTarget, storage, key, value);
-            c.setDictStorage(storage);
+            var storage = getStorageNode.execute(inliningTarget, c);
+            var newStorage = setItem.execute(frame, inliningTarget, storage, key, value);
+            updateStorageNode.execute(inliningTarget, c, storage, newStorage);
         }
 
         @NeverDefault
@@ -124,27 +118,39 @@ public abstract class HashingCollectionNodes {
 
         @Specialization
         static HashingStorage doEconomicStorage(VirtualFrame frame, Node inliningTarget, EconomicMapStorage map, Object value,
-                        @Cached ObjectHashMap.PutNode putNode,
-                        @Cached InlinedLoopConditionProfile loopProfile) {
+                        @Exclusive @Cached ObjectHashMap.PutNode putNode,
+                        @Exclusive @Cached InlinedLoopConditionProfile loopProfile) {
             // We want to avoid calling __hash__() during map.put
             map.setValueForAllKeys(frame, inliningTarget, value, putNode, loopProfile);
             return map;
         }
 
+        // @Exclusive for truffle-interpreted-performance
         @Specialization(guards = "!isEconomicMapStorage(map)")
         @InliningCutoff
         static HashingStorage doGeneric(VirtualFrame frame, Node inliningTarget, HashingStorage map, Object value,
                         @Cached HashingStorageSetItem setItem,
                         @Cached HashingStorageGetIterator getIterator,
                         @Cached HashingStorageIteratorNext itNext,
-                        @Cached HashingStorageIteratorKey itKey) {
+                        @Cached HashingStorageIteratorKey itKey,
+                        @Exclusive @Cached PutNode putNode,
+                        @Exclusive @Cached InlinedLoopConditionProfile loopProfile) {
             HashingStorageIterator it = getIterator.execute(inliningTarget, map);
-            HashingStorage storage = map;
             while (itNext.execute(inliningTarget, map, it)) {
-                Object key = itKey.execute(inliningTarget, storage, it);
-                storage = setItem.execute(frame, inliningTarget, storage, key, value);
+                Object key = itKey.execute(inliningTarget, map, it);
+                HashingStorage newStorage = setItem.execute(frame, inliningTarget, map, key, value);
+                if (newStorage != map) {
+                    // when the storage changes, the iterator state is not a reliable cursor
+                    // anymore and we need to restart.
+                    if (newStorage instanceof EconomicMapStorage mapStorage) {
+                        mapStorage.setValueForAllKeys(frame, inliningTarget, value, putNode, loopProfile);
+                        return mapStorage;
+                    } else {
+                        throw CompilerDirectives.shouldNotReachHere("We only generalize to EconomicMapStorage");
+                    }
+                }
             }
-            return storage;
+            return map;
         }
 
         protected static boolean isEconomicMapStorage(Object o) {
@@ -153,74 +159,75 @@ public abstract class HashingCollectionNodes {
     }
 
     /**
-     * Gets clone of the keys of the storage with all values either set to given value or with no
-     * guarantees about the values if {@link PNone#NO_VALUE} is passed as {@code value}.
+     * Gets clone of the keys of the storage with all values set to given value or (when used to
+     * create a set or frozenset) to NO_VALUE.
      */
-    @ImportStatic({PGuards.class, PythonOptions.class})
     @GenerateInline(inlineByDefault = true)
     public abstract static class GetClonedHashingStorageNode extends PNodeWithContext {
-        public abstract HashingStorage execute(VirtualFrame frame, Node inliningTarget, Object iterator, Object value);
+        protected abstract HashingStorage execute(VirtualFrame frame, Node inliningTarget, Object iterator, Object value);
 
-        public final HashingStorage doNoValue(VirtualFrame frame, Node inliningTarget, Object iterator) {
+        /**
+         * Gets clone of the keys of the storage with all values either set to given value or, if
+         * that is PNone.NO_VALUE, all values set to PNone.NONE. Use this method to clone into a
+         * dict or other object where the values may be accessible from Python to avoid a)
+         * PNone.NO_VALUE leaking to Python.
+         */
+        public final HashingStorage getForDictionaries(VirtualFrame frame, Node inliningTarget, Object iterator, Object value) {
+            return execute(frame, inliningTarget, iterator, value == PNone.NO_VALUE ? PNone.NONE : value);
+        }
+
+        /**
+         * Gets a clone of the keys of the storage with all values set to NO_VALUE. This must be
+         * used *only* to create new storages for use in sets and frozensets where the values cannot
+         * be accessed from user code.
+         */
+        public final HashingStorage getForSets(VirtualFrame frame, Node inliningTarget, Object iterator) {
             return execute(frame, inliningTarget, iterator, PNone.NO_VALUE);
         }
 
-        public final HashingStorage doNoValueCached(VirtualFrame frame, Object iterator) {
+        /**
+         * IMPORTANT: Only for sets and frozensets.
+         *
+         * @see #getForSets(VirtualFrame, Node, Object)
+         */
+        public final HashingStorage getForSetsCached(VirtualFrame frame, Object iterator) {
             return execute(frame, null, iterator, PNone.NO_VALUE);
         }
 
-        @Specialization(guards = "isNoValue(value)")
-        static HashingStorage doHashingCollectionNoValue(Node inliningTarget, PHashingCollection other, @SuppressWarnings("unused") Object value,
-                        @Shared("copyNode") @Cached HashingStorageCopy copyNode) {
+        // This for cloning sets (we come here from doNoValue or doNoValueCached). If we clone from
+        // some other PHashingCollection, we would hold on to keys in the sets, and if we were to
+        // clone for some other PHashingCollection (not PBaseSet), we might leak NO_VALUE into user
+        // code.
+        @Specialization(guards = "isNoValue(givenValue)")
+        static HashingStorage doSet(Node inliningTarget, PBaseSet other, @SuppressWarnings("unused") Object givenValue,
+                        @Cached HashingStorageCopy copyNode) {
             return copyNode.execute(inliningTarget, other.getDictStorage());
         }
 
-        @Specialization(guards = "isNoValue(value)")
-        static HashingStorage doPDictKeyViewNoValue(Node inliningTarget, PDictView.PDictKeysView other, Object value,
-                        @Shared("copyNode") @Cached HashingStorageCopy copyNode) {
-            return doHashingCollectionNoValue(inliningTarget, other.getWrappedDict(), value, copyNode);
-        }
-
-        @Specialization(guards = "!isNoValue(value)")
-        static HashingStorage doHashingCollection(VirtualFrame frame, PHashingCollection other, Object value,
+        @Specialization(guards = "canCloneStorage(other, givenValue)", replaces = "doSet")
+        static HashingStorage doHashingCollection(VirtualFrame frame, PHashingCollection other, Object givenValue,
                         @Shared @Cached(inline = false) GetClonedHashingCollectionNode hashingCollectionNode) {
-            return hashingCollectionNode.execute(frame, other, value);
+            Object value = givenValue == PNone.NO_VALUE ? PNone.NONE : givenValue;
+            return hashingCollectionNode.execute(frame, other.getDictStorage(), value);
         }
 
-        @Specialization(guards = "!isNoValue(value)")
-        static HashingStorage doPDictView(VirtualFrame frame, PDictView.PDictKeysView other, Object value,
+        protected static boolean canCloneStorage(PHashingCollection other, Object givenValue) {
+            // Set constructors ignore set subclass iterators; dict.fromkeys must honor them.
+            return PGuards.isBuiltinHashingCollection(other) || (givenValue == PNone.NO_VALUE && other instanceof PBaseSet);
+        }
+
+        @Specialization
+        static HashingStorage doPDictView(VirtualFrame frame, PDictView.PDictKeysView other, Object givenValue,
                         @Shared @Cached(inline = false) GetClonedHashingCollectionNode hashingCollectionNode) {
-            return hashingCollectionNode.execute(frame, other.getWrappedDict(), value);
+            Object value = givenValue == PNone.NO_VALUE ? PNone.NONE : givenValue;
+            return hashingCollectionNode.execute(frame, other.getWrappedStorage(), value);
         }
 
-        @Specialization(guards = "isString(strObj)")
-        @InliningCutoff
-        static HashingStorage doString(Node inliningTarget, Object strObj, Object value,
-                        @Cached CastToTruffleStringNode castToStringNode,
-                        @Exclusive @Cached HashingStorageSetItem setStorageItem,
-                        @Cached(inline = false) TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Cached(inline = false) TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
-                        @Cached(inline = false) TruffleStringIterator.NextNode nextNode,
-                        @Cached(inline = false) TruffleString.FromCodePointNode fromCodePointNode) {
-            TruffleString str = castToStringNode.execute(inliningTarget, strObj);
-            HashingStorage storage = PDict.createNewStorage(codePointLengthNode.execute(str, TS_ENCODING));
-            Object val = value == PNone.NO_VALUE ? PNone.NONE : value;
-            TruffleStringIterator it = createCodePointIteratorNode.execute(str, TS_ENCODING);
-            while (it.hasNext()) {
-                // TODO: GR-37219: use SubstringNode with lazy=true?
-                int codePoint = nextNode.execute(it);
-                TruffleString key = fromCodePointNode.execute(codePoint, TS_ENCODING, true);
-                storage = setStorageItem.execute(inliningTarget, storage, key, val);
-            }
-            return storage;
-        }
-
-        @Specialization(guards = {"!isPHashingCollection(other)", "!isDictKeysView(other)", "!isString(other)"})
+        @Fallback
         @InliningCutoff
         static HashingStorage doIterable(VirtualFrame frame, Node inliningTarget, Object other, Object value,
                         @Cached PyObjectGetIter getIter,
-                        @Cached(inline = false) GetNextNode nextNode,
-                        @Cached IsBuiltinObjectProfile errorProfile,
+                        @Cached PyIterNextNode nextNode,
                         @Exclusive @Cached HashingStorageSetItem setStorageItem) {
             HashingStorage curStorage = EmptyStorage.INSTANCE;
             Object iterator = getIter.execute(frame, inliningTarget, other);
@@ -228,20 +235,12 @@ public abstract class HashingCollectionNodes {
             while (true) {
                 Object key;
                 try {
-                    key = nextNode.execute(frame, iterator);
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, errorProfile);
+                    key = nextNode.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
                     return curStorage;
                 }
                 curStorage = setStorageItem.execute(frame, inliningTarget, curStorage, key, val);
             }
-        }
-
-        @Fallback
-        @InliningCutoff
-        static HashingStorage fail(Object other, @SuppressWarnings("unused") Object value,
-                        @Cached(inline = false) PRaiseNode raise) {
-            throw raise.raise(TypeError, ErrorMessages.OBJ_NOT_ITERABLE, other);
         }
 
         @NeverDefault
@@ -251,15 +250,15 @@ public abstract class HashingCollectionNodes {
 
         @GenerateInline(false) // Intentionally lazy
         abstract static class GetClonedHashingCollectionNode extends Node {
-            abstract HashingStorage execute(VirtualFrame frame, PHashingCollection other, Object value);
+            abstract HashingStorage execute(VirtualFrame frame, HashingStorage other, Object value);
 
             @Specialization
-            static HashingStorage doHashingCollection(VirtualFrame frame, PHashingCollection other, Object value,
-                            @Bind("this") Node inliningTarget,
+            static HashingStorage doHashingCollection(VirtualFrame frame, HashingStorage other, Object value,
+                            @Bind Node inliningTarget,
                             @Cached SetValueHashingStorageNode setValue,
                             @Cached HashingStorageCopy copyNode) {
                 assert !PGuards.isNoValue(value);
-                HashingStorage storage = copyNode.execute(inliningTarget, other.getDictStorage());
+                HashingStorage storage = copyNode.execute(inliningTarget, other);
                 storage = setValue.execute(frame, inliningTarget, storage, value);
                 return storage;
             }
@@ -269,10 +268,11 @@ public abstract class HashingCollectionNodes {
     /**
      * Returns {@link HashingStorage} with the same keys as the given iterator. There is no
      * guarantee about the values!
+     *
+     * @see com.oracle.graal.python.builtins.objects.dict.DictNodes.GetDictStorageNode
      */
     @GenerateInline(inlineByDefault = true)
-    @ImportStatic({SpecialMethodNames.class, PGuards.class})
-    public abstract static class GetHashingStorageNode extends PNodeWithContext {
+    public abstract static class GetSetStorageNode extends PNodeWithContext {
 
         public abstract HashingStorage execute(VirtualFrame frame, Node inliningTarget, Object iterator);
 
@@ -287,14 +287,49 @@ public abstract class HashingCollectionNodes {
 
         @Specialization
         static HashingStorage doPDictView(PDictView.PDictKeysView other) {
-            return other.getWrappedDict().getDictStorage();
+            return other.getWrappedStorage();
         }
 
         @Specialization(guards = {"!isPHashingCollection(other)", "!isDictKeysView(other)"})
         @InliningCutoff
         static HashingStorage doGeneric(VirtualFrame frame, Node inliningTarget, Object other,
                         @Cached GetClonedHashingStorageNode getHashingStorageNode) {
-            return getHashingStorageNode.doNoValue(frame, inliningTarget, other);
+            return getHashingStorageNode.getForSets(frame, inliningTarget, other);
         }
     }
+
+    /**
+     * CPython's set symmetric_difference_update uses stored hashes for exact sets and dicts, but
+     * first materializes other iterables, including dict views, as a temporary set.
+     */
+    @GenerateInline(inlineByDefault = true)
+    public abstract static class GetSetStorageForXorNode extends PNodeWithContext {
+
+        public abstract HashingStorage execute(VirtualFrame frame, Node inliningTarget, Object iterator);
+
+        @Specialization
+        static HashingStorage doHashingCollection(PHashingCollection other) {
+            return other.getDictStorage();
+        }
+
+        @Specialization(guards = "!isPHashingCollection(other)")
+        @InliningCutoff
+        static HashingStorage doGeneric(VirtualFrame frame, Node inliningTarget, Object other,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached PyIterNextNode nextNode,
+                        @Exclusive @Cached HashingStorageSetItem setStorageItem) {
+            HashingStorage curStorage = EmptyStorage.INSTANCE;
+            Object iterator = getIter.execute(frame, inliningTarget, other);
+            while (true) {
+                Object key;
+                try {
+                    key = nextNode.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
+                    return curStorage;
+                }
+                curStorage = setStorageItem.execute(frame, inliningTarget, curStorage, key, PNone.NONE);
+            }
+        }
+    }
+
 }

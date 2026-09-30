@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,38 +46,38 @@ import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibyteIncrem
 import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibyteIncrementalDecoderBuiltins.DecodeNode.decoderFeedBuffer;
 import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecModuleBuiltins.MBERR_TOOFEW;
 import static com.oracle.graal.python.nodes.ErrorMessages.CODEC_IS_UNEXPECTED_TYPE;
-import static com.oracle.graal.python.nodes.ErrorMessages.STREAM_FUNCTION_RETURNED_A_NON_BYTES_OBJECT_S;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
+import static com.oracle.graal.python.nodes.ErrorMessages.STREAM_FUNCTION_RETURNED_A_NON_BYTES_OBJECT_P;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
 
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.str.StringBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyBytesCheckNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.StringLiterals;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -92,35 +92,36 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = MultibyteStreamReader)
 public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = MultibyteStreamReaderBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
-        return MultibyteStreamWriterBuiltinsFactory.getFactories();
+        return MultibyteStreamReaderBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 2, parameterNames = {"$cls", "stream", "errors"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 2, parameterNames = {"$cls", "stream", "errors"})
     @GenerateNodeFactory
     protected abstract static class NewNode extends PythonTernaryBuiltinNode {
 
-        private static final TruffleString CODEC = tsLiteral("codec");
-
         @Specialization
         static Object mbstreamreaderNew(VirtualFrame frame, Object type, Object stream, Object err,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode castToStringNode,
                         @Cached PyObjectGetAttr getAttr,
                         @Cached TruffleString.EqualNode isEqual,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) { // "O|s:StreamReader"
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) { // "O|s:StreamReader"
 
             TruffleString errors = null;
             if (err != PNone.NO_VALUE) {
                 errors = castToStringNode.execute(inliningTarget, err);
             }
 
-            MultibyteStreamReaderObject self = factory.createMultibyteStreamReaderObject(type);
-            Object codec = getAttr.execute(frame, inliningTarget, type, CODEC);
+            MultibyteStreamReaderObject self = PFactory.createMultibyteStreamReaderObject(type, getInstanceShape.execute(type));
+            Object codec = getAttr.execute(frame, inliningTarget, type, StringLiterals.T_CODEC);
             if (!(codec instanceof MultibyteCodecObject)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, CODEC_IS_UNEXPECTED_TYPE);
+                throw raiseNode.raise(inliningTarget, TypeError, CODEC_IS_UNEXPECTED_TYPE);
             }
 
             self.codec = ((MultibyteCodecObject) codec).codec;
@@ -132,7 +133,8 @@ public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self"})
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "MultibyteStreamReader", minNumOfPositionalArgs = 1, parameterNames = {"$self"})
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonUnaryBuiltinNode {
 
@@ -150,14 +152,12 @@ public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
         // mbstreamreader_iread
         @Specialization
         static TruffleString iread(VirtualFrame frame, MultibyteStreamReaderObject self, TruffleString method, long sizehint,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod,
-                        @Cached GetClassNode getClassNode,
                         @Cached PyBytesCheckNode bytesCheckNode,
                         @Cached BytesNodes.ToBytesNode toBytesNode,
-                        @Cached TypeNodes.GetNameNode getNameNode,
                         @Cached MultibyteCodecUtil.DecodeErrorNode decodeErrorNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
 
             if (sizehint == 0) {
                 return T_EMPTY_STRING;
@@ -172,9 +172,8 @@ public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
                 }
 
                 if (!(cres instanceof PBytes)) {
-                    Object crestType = getClassNode.execute(inliningTarget, cres);
-                    if (!bytesCheckNode.execute(inliningTarget, crestType)) {
-                        throw raiseNode.get(inliningTarget).raise(TypeError, STREAM_FUNCTION_RETURNED_A_NON_BYTES_OBJECT_S, getNameNode.execute(inliningTarget, cres));
+                    if (!bytesCheckNode.execute(inliningTarget, cres)) {
+                        throw raiseNode.raise(inliningTarget, TypeError, STREAM_FUNCTION_RETURNED_A_NON_BYTES_OBJECT_P, cres);
                     }
                 }
 
@@ -232,40 +231,36 @@ public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
     @Builtin(name = "read", minNumOfPositionalArgs = 1, parameterNames = {"$self", "sizeobj"}, doc = "read($self, sizeobj=None, /)\n--\n\n")
     @ArgumentClinic(name = "sizeobj", conversion = ArgumentClinic.ClinicConversion.Long, defaultValue = "-1", useDefaultForNone = true)
     @GenerateNodeFactory
-    abstract static class ReadNode extends PythonTernaryClinicBuiltinNode {
+    abstract static class ReadNode extends PythonBinaryClinicBuiltinNode {
 
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
             return MultibyteStreamReaderBuiltinsClinicProviders.ReadNodeClinicProviderGen.INSTANCE;
         }
 
-        private static final TruffleString READ = tsLiteral("read");
-
         // _multibytecodec_MultibyteStreamReader_read_impl
         @Specialization
-        Object read(VirtualFrame frame, MultibyteStreamReaderObject self, long size,
+        static Object read(VirtualFrame frame, MultibyteStreamReaderObject self, long size,
                         @Cached IReadNode iReadNode) {
-            return iReadNode.execute(frame, self, READ, size);
+            return iReadNode.execute(frame, self, StringLiterals.T_READ, size);
         }
     }
 
     @Builtin(name = "readline", minNumOfPositionalArgs = 1, parameterNames = {"$self", "sizeobj"}, doc = "readline($self, sizeobj=None, /)\n--\n\n")
     @ArgumentClinic(name = "sizeobj", conversion = ArgumentClinic.ClinicConversion.Long, defaultValue = "-1", useDefaultForNone = true)
     @GenerateNodeFactory
-    abstract static class ReadlineNode extends PythonTernaryClinicBuiltinNode {
+    abstract static class ReadlineNode extends PythonBinaryClinicBuiltinNode {
 
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
             return MultibyteStreamReaderBuiltinsClinicProviders.ReadlineNodeClinicProviderGen.INSTANCE;
         }
 
-        private static final TruffleString READLINE = tsLiteral("readline");
-
         // _multibytecodec_MultibyteStreamReader_readline_impl
         @Specialization
-        Object readline(VirtualFrame frame, MultibyteStreamReaderObject self, long size,
+        static Object readline(VirtualFrame frame, MultibyteStreamReaderObject self, long size,
                         @Cached IReadNode iReadNode) {
-            return iReadNode.execute(frame, self, READLINE, size);
+            return iReadNode.execute(frame, self, StringLiterals.T_READLINE, size);
         }
     }
 
@@ -279,14 +274,12 @@ public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
             return MultibyteStreamReaderBuiltinsClinicProviders.ReadlinesNodeClinicProviderGen.INSTANCE;
         }
 
-        private static final TruffleString READ = tsLiteral("read");
-
         // _multibytecodec_MultibyteStreamReader_readlines_impl
         @Specialization
-        Object readlines(VirtualFrame frame, MultibyteStreamReaderObject self, long sizehint,
+        static Object readlines(VirtualFrame frame, MultibyteStreamReaderObject self, long sizehint,
                         @Cached StringBuiltins.SplitLinesNode splitLinesNode,
                         @Cached IReadNode iReadNode) {
-            TruffleString r = iReadNode.execute(frame, self, READ, sizehint);
+            TruffleString r = iReadNode.execute(frame, self, StringLiterals.T_READ, sizehint);
             return splitLinesNode.execute(frame, r, true);
         }
     }
@@ -310,7 +303,7 @@ public final class MultibyteStreamReaderBuiltins extends PythonBuiltins {
     abstract static class StreamMemberNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        Object stream(MultibyteStreamReaderObject self) {
+        static Object stream(MultibyteStreamReaderObject self) {
             return self.stream;
         }
     }

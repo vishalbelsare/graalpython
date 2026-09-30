@@ -1,4 +1,4 @@
-/* Copyright (c) 2022, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2022, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2022 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -26,15 +26,34 @@ typedef struct {
     Py_ssize_t allocated;
 } PyListObject;
 
-PyAPI_FUNC(PyObject *) _PyList_Extend(PyListObject *, PyObject *);
-PyAPI_FUNC(void) _PyList_DebugMallocStats(FILE *out);
-
-/* Macro, trading safety for speed */
-
 /* Cast argument to PyListObject* type. */
-#define _PyList_CAST(op) (assert(PyList_Check(op)), (PyListObject *)(op))
+#define _PyList_CAST(op) \
+    (assert(PyList_Check(op)), _Py_CAST(PyListObject*, (op)))
 
-#define PyList_GET_ITEM(op, i) (PyList_GetItem((PyObject *)(op), (i)))
-PyAPI_FUNC(void) _PyList_SET_ITEM(PyObject *, Py_ssize_t, PyObject *);
-#define PyList_SET_ITEM(op, i, v) (_PyList_SET_ITEM((PyObject *)(op), (i), (v)))
-#define PyList_GET_SIZE(op)    Py_SIZE(_PyList_CAST(op))
+// Macros and static inline functions, trading safety for speed
+
+static inline Py_ssize_t PyList_GET_SIZE(PyObject *op) {
+    PyListObject *list = _PyList_CAST(op);
+#ifdef Py_GIL_DISABLED
+    return _Py_atomic_load_ssize_relaxed(&(_PyVarObject_CAST(list)->ob_size));
+#else
+    return Py_SIZE(list);
+#endif
+}
+#define PyList_GET_SIZE(op) PyList_GET_SIZE(_PyObject_CAST(op))
+
+#define PyList_GET_ITEM(op, index) (PyList_GetItem((PyObject*)(op), (index)))
+
+// GraalPy public API to replace direct access to ob_item
+PyAPI_FUNC(PyObject **) GraalPyList_ITEMS(PyObject *op);
+PyAPI_FUNC(void) GraalPyList_SET_ITEM(PyObject* a, Py_ssize_t b, PyObject* c);
+
+static inline void
+PyList_SET_ITEM(PyObject *op, Py_ssize_t index, PyObject *value) {
+    GraalPyList_SET_ITEM(op, index, value);
+}
+#define PyList_SET_ITEM(op, index, value) \
+    PyList_SET_ITEM(_PyObject_CAST(op), (index), _PyObject_CAST(value))
+
+PyAPI_FUNC(int) PyList_Extend(PyObject *self, PyObject *iterable);
+PyAPI_FUNC(int) PyList_Clear(PyObject *self);

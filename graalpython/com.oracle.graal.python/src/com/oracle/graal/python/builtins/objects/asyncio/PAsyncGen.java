@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,23 +42,19 @@ package com.oracle.graal.python.builtins.objects.asyncio;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.generator.PGenerator;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
-import com.oracle.truffle.api.RootCallTarget;
-import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
+import com.oracle.truffle.api.bytecode.ContinuationRootNode;
+import com.oracle.truffle.api.frame.MaterializedFrame;
 
 public final class PAsyncGen extends PGenerator {
     private boolean closed = false;
     private boolean hookCalled = false;
     private boolean runningAsync = false;
 
-    public static PAsyncGen create(PythonLanguage lang, TruffleString name, TruffleString qualname, PBytecodeRootNode rootNode, RootCallTarget[] callTargets, Object[] arguments) {
-        rootNode.createGeneratorFrame(arguments);
-        return new PAsyncGen(lang, name, qualname, rootNode, callTargets, arguments);
-    }
-
-    private PAsyncGen(PythonLanguage lang, TruffleString name, TruffleString qualname, PBytecodeRootNode rootNode, RootCallTarget[] callTargets, Object[] arguments) {
-        super(lang, name, qualname, rootNode, callTargets, arguments, PythonBuiltinClassType.PAsyncGenerator, false);
+    public PAsyncGen(PythonLanguage language, PFunction function, PBytecodeDSLRootNode rootNode, ContinuationRootNode continuationRootNode, MaterializedFrame continuationFrame) {
+        super(language, function, continuationFrame, PythonBuiltinClassType.PAsyncGenerator, rootNode, continuationRootNode);
     }
 
     public boolean isClosed() {

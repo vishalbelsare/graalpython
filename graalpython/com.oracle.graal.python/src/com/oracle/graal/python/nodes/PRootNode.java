@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,17 +41,18 @@
 package com.oracle.graal.python.nodes;
 
 import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.objects.frame.FrameBuiltinsFactory;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.nodes.function.BuiltinFunctionRootNode;
+import com.oracle.graal.python.runtime.CallerFlags;
+import com.oracle.graal.python.runtime.IndirectCallData;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.graal.python.util.PythonUtils.NodeCounterWithLimit;
-import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.nodes.Node;
@@ -61,19 +62,12 @@ import com.oracle.truffle.api.profiles.ConditionProfile;
 public abstract class PRootNode extends RootNode {
     private final ConditionProfile frameEscaped = ConditionProfile.create();
 
-    @CompilationFinal private Assumption dontNeedCallerFrame = createCallerFrameAssumption();
+    @CompilationFinal private transient IndirectCallData.CallerFlagsAssumptionSet callerFlagsAssumptionSet = new IndirectCallData.CallerFlagsAssumptionSet();
 
-    /**
-     * Flag indicating if some child node of this root node (or a callee) eventually needs the
-     * exception state. Hence, the caller of this root node should provide the exception state in
-     * the arguments.
-     */
-    @CompilationFinal private Assumption dontNeedExceptionState = createExceptionStateAssumption();
-
-    private int nodeCount = -1;
+    private transient int nodeCount = -1;
 
     // contains the code of this root node in marshaled/serialized form
-    private byte[] code;
+    private transient byte[] code;
 
     protected PRootNode(TruffleLanguage<?> language) {
         super(language);
@@ -109,26 +103,26 @@ public abstract class PRootNode extends RootNode {
         return frameEscaped;
     }
 
-    public boolean needsCallerFrame() {
-        return !dontNeedCallerFrame.isValid();
+    /** Returns {@link CallerFlags} representing what the caller needs to pass to call this root */
+    public int getCallerFlags() {
+        return callerFlagsAssumptionSet.getCallerFlags();
     }
 
-    public void setNeedsCallerFrame() {
-        CompilerAsserts.neverPartOfCompilation("this is usually called from behind a TruffleBoundary");
-        dontNeedCallerFrame.invalidate();
-    }
-
-    public boolean needsExceptionState() {
-        return !dontNeedExceptionState.isValid();
-    }
-
-    public void setNeedsExceptionState() {
-        CompilerAsserts.neverPartOfCompilation("this is usually called from behind a TruffleBoundary");
-        dontNeedExceptionState.invalidate();
+    public void updateCallerFlags(int flags) {
+        if (this instanceof BuiltinFunctionRootNode functionRootNode && !(functionRootNode.getFactory() instanceof FrameBuiltinsFactory.GetLocalsNodeFactory)) {
+            /*
+             * Our callee-side tracking of the caller flags is too broad and causes "poisoning" of common builtins that
+             * are calling many other things, like object.__getattribute__ or type.__new__. For materialized frames this
+             * is really bad for performance, so we just don't add this flag to builtin roots at all. They should
+             * normally get AST-inlined anyway after their caller transitions to cached.
+             */
+            flags &= ~CallerFlags.NEEDS_MATERIALIZED_LOCALS;
+        }
+        callerFlagsAssumptionSet.updateCallerFlags(flags);
     }
 
     @Override
-    public boolean isCaptureFramesForTrace() {
+    public boolean isCaptureFramesForTrace(boolean compiledFrame) {
         return true;
     }
 
@@ -141,8 +135,7 @@ public abstract class PRootNode extends RootNode {
     public Node copy() {
         PRootNode pRootNode = (PRootNode) super.copy();
         // create new assumptions such that splits do not share them
-        pRootNode.dontNeedCallerFrame = createCallerFrameAssumption();
-        pRootNode.dontNeedExceptionState = createExceptionStateAssumption();
+        pRootNode.callerFlagsAssumptionSet = new IndirectCallData.CallerFlagsAssumptionSet();
         return pRootNode;
     }
 
@@ -163,14 +156,6 @@ public abstract class PRootNode extends RootNode {
         return rootNode instanceof BuiltinFunctionRootNode;
     }
 
-    private static Assumption createCallerFrameAssumption() {
-        return Truffle.getRuntime().createAssumption("does not need caller frame");
-    }
-
-    private static Assumption createExceptionStateAssumption() {
-        return Truffle.getRuntime().createAssumption("does not need exception state");
-    }
-
     public final void setCode(byte[] data) {
         CompilerAsserts.neverPartOfCompilation();
         assert this.code == null;
@@ -178,14 +163,14 @@ public abstract class PRootNode extends RootNode {
     }
 
     @TruffleBoundary
-    public final byte[] getCode() {
+    public final byte[] getCode(Node node) {
         if (code != null) {
             return code;
         }
-        return code = extractCode();
+        return code = extractCode(node);
     }
 
-    protected byte[] extractCode() {
+    protected byte[] extractCode(Node node) {
         // no code for non-user functions
         return PythonUtils.EMPTY_BYTE_ARRAY;
     }

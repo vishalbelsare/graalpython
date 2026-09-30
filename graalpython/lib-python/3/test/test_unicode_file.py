@@ -111,7 +111,7 @@ class TestUnicodeFiles(unittest.TestCase):
             os.unlink(filename)
         self.assertTrue(not os.path.exists(filename))
         # and again with os.open.
-        f = os.open(filename, os.O_CREAT)
+        f = os.open(filename, os.O_CREAT | os.O_WRONLY)
         os.close(f)
         try:
             self._do_single(filename)
@@ -120,13 +120,11 @@ class TestUnicodeFiles(unittest.TestCase):
 
     # The 'test' functions are unittest entry points, and simply call our
     # _test functions with each of the filename combinations we wish to test
-    @impl_detail("[GR-27024] [GR-23324] posix NFI support", graalpy=False)
     def test_single_files(self):
         self._test_single(TESTFN_UNICODE)
         if TESTFN_UNENCODABLE is not None:
             self._test_single(TESTFN_UNENCODABLE)
 
-    @impl_detail("[GR-27024] [GR-23324] posix NFI support", graalpy=False)
     def test_directories(self):
         # For all 'equivalent' combinations:
         #  Make dir with encoded, chdir with unicode, checkdir with encoded

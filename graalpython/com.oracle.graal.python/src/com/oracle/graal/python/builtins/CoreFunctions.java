@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,6 +25,8 @@
  */
 package com.oracle.graal.python.builtins;
 
+import com.oracle.graal.python.annotations.PythonOS;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
@@ -38,13 +40,9 @@ public @interface CoreFunctions {
      * Most builtins are not OS specific. If specified, the builtin is included only if the os
      * matches
      */
-    PythonOS os() default PythonOS.PLATFORM_ANY;
-
-    String publicName() default "";
+    PythonOS[] os() default PythonOS.PLATFORM_ANY;
 
     PythonBuiltinClassType[] extendClasses() default {};
-
-    String pythonFile() default "";
 
     boolean isEager() default false;
 }

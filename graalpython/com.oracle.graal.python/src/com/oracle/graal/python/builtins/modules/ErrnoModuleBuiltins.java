@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,9 +48,11 @@ import java.util.List;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.exception.OSErrorEnum;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -64,19 +66,21 @@ public final class ErrnoModuleBuiltins extends PythonBuiltins {
     @Override
     public void initialize(Python3Core core) {
         super.initialize(core);
-        PDict errorCode = core.factory().createDict();
+        OSErrorEnum[] enumValues = OSErrorEnum.values();
+        EconomicMapStorage storage = EconomicMapStorage.create(enumValues.length + 1);
 
-        for (OSErrorEnum value : OSErrorEnum.values()) {
+        for (OSErrorEnum value : enumValues) {
             // if more OSError have the same number -> the last one wins
-            addConstant(value.getNumber(), toTruffleStringUncached(value.name()), errorCode);
+            addConstant(value.getNumber(), toTruffleStringUncached(value.name()), storage);
         }
 
         // publish the dictionary with mapping code -> string name
+        PDict errorCode = PFactory.createDict(core.getLanguage(), storage);
         addBuiltinConstant("errorcode", errorCode);
     }
 
-    private void addConstant(int number, TruffleString name, PDict dict) {
+    private void addConstant(int number, TruffleString name, EconomicMapStorage storage) {
         addBuiltinConstant(name, number);
-        dict.setItem(number, name);
+        storage.putUncached(number, name);
     }
 }

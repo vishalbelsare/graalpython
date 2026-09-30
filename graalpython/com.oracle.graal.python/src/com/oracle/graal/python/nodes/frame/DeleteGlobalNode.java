@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,23 +41,26 @@
 package com.oracle.graal.python.nodes.frame;
 
 import com.oracle.graal.python.builtins.objects.dict.PDict;
-import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.lib.PyObjectDelItem;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.attributes.DeleteAttributeNode;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 52 -> 36
+@GenerateInline(false)       // footprint reduction 52 -> 36
 public abstract class DeleteGlobalNode extends PNodeWithContext {
+    @NeverDefault
     public static DeleteGlobalNode create() {
         return DeleteGlobalNodeGen.create();
     }
@@ -71,31 +74,26 @@ public abstract class DeleteGlobalNode extends PNodeWithContext {
 
     @Specialization(guards = {"isSingleContext()", "globals == cachedGlobals"}, limit = "1")
     static void deleteDictCached(VirtualFrame frame, @SuppressWarnings("unused") PDict globals, TruffleString attributeId,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached(value = "globals", weak = true) PDict cachedGlobals,
-                    @Shared("delItem") @Cached PyObjectDelItem deleteNode) {
-        deleteNode.execute(frame, inliningTarget, cachedGlobals, attributeId);
+                    @Shared("delItem") @Cached PyObjectDelItem deleteNode,
+                    @Shared @Cached PRaiseNode raiseNode) {
+        try {
+            deleteNode.execute(frame, inliningTarget, cachedGlobals, attributeId);
+        } catch (PException e) {
+            throw raiseNode.raiseNameError(inliningTarget, attributeId);
+        }
     }
 
     @Specialization(replaces = "deleteDictCached")
     static void deleteDict(VirtualFrame frame, PDict globals, TruffleString attributeId,
-                    @Bind("this") Node inliningTarget,
-                    @Shared("delItem") @Cached PyObjectDelItem deleteNode) {
-        deleteNode.execute(frame, inliningTarget, globals, attributeId);
-    }
-
-    @Specialization(guards = {"isSingleContext()", "globals == cachedGlobals"}, limit = "1")
-    static void deleteModuleCached(VirtualFrame frame, @SuppressWarnings("unused") PythonModule globals, TruffleString attributeId,
-                    @Bind("this") Node inliningTarget,
-                    @Cached(value = "globals", weak = true) PythonModule cachedGlobals,
-                    @Shared @Cached DeleteAttributeNode storeNode) {
-        storeNode.execute(frame, inliningTarget, cachedGlobals, attributeId);
-    }
-
-    @Specialization(replaces = "deleteModuleCached")
-    static void deleteModule(VirtualFrame frame, PythonModule globals, TruffleString attributeId,
-                    @Bind("this") Node inliningTarget,
-                    @Shared @Cached DeleteAttributeNode storeNode) {
-        storeNode.execute(frame, inliningTarget, globals, attributeId);
+                    @Bind Node inliningTarget,
+                    @Shared("delItem") @Cached PyObjectDelItem deleteNode,
+                    @Shared @Cached PRaiseNode raiseNode) {
+        try {
+            deleteNode.execute(frame, inliningTarget, globals, attributeId);
+        } catch (PException e) {
+            throw raiseNode.raiseNameError(inliningTarget, attributeId);
+        }
     }
 }

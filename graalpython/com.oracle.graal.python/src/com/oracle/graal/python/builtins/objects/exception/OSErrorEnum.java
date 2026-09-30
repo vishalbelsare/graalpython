@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,8 +40,8 @@
  */
 package com.oracle.graal.python.builtins.objects.exception;
 
-import static com.oracle.graal.python.builtins.PythonOS.PLATFORM_DARWIN;
-import static com.oracle.graal.python.builtins.PythonOS.getPythonOS;
+import static com.oracle.graal.python.PythonLanguage.getPythonOS;
+import static com.oracle.graal.python.annotations.PythonOS.PLATFORM_DARWIN;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
@@ -82,6 +82,8 @@ public enum OSErrorEnum {
      * Manually are changed EWOULDBLOCK and EDEADLOCK and move before appropriate errors with the
      * same number, because ErrnoModuleBuiltins and PosixModuleBuiltins built a dictionary from this
      * enum.
+     *
+     * Manually added ENOTSUP as alias of EOPNOTSUPP
      */
     EPERM(1, tsLiteral("Operation not permitted")),
     ENOENT(2, tsLiteral("No such file or directory")),
@@ -178,6 +180,7 @@ public enum OSErrorEnum {
     EPROTONOSUPPORT(platformSpecific(93, 43), tsLiteral("Protocol not supported")),
     ESOCKTNOSUPPORT(platformSpecific(94, 44), tsLiteral("Socket type not supported")),
     EOPNOTSUPP(platformSpecific(95, 102), tsLiteral("Operation not supported on transport endpoint")),
+    ENOTSUP(platformSpecific(95, 45), tsLiteral("Operation not supported")),
     EPFNOSUPPORT(platformSpecific(96, 46), tsLiteral("Protocol family not supported")),
     EAFNOSUPPORT(platformSpecific(97, 47), tsLiteral("Address family not supported by protocol")),
     EADDRINUSE(platformSpecific(98, 48), tsLiteral("Address already in use")),
@@ -223,11 +226,8 @@ public enum OSErrorEnum {
 
     OSErrorEnum(int number, TruffleString message, TruffleString... alternativeMessages) {
         this.number = number;
-        this.message = message != null ? message : null;
-        this.alternativeMessages = new TruffleString[alternativeMessages.length];
-        for (int i = 0; i < alternativeMessages.length; i++) {
-            this.alternativeMessages[i] = alternativeMessages[i];
-        }
+        this.message = message;
+        this.alternativeMessages = alternativeMessages;
     }
 
     OSErrorEnum(int number, TruffleString message) {
@@ -312,7 +312,7 @@ public enum OSErrorEnum {
                     return new ErrorAndMessagePair(oserror, oserror.getMessage());
                 }
             } else { // Generic IOException
-                OSErrorEnum oserror = tryFindErrnoFromMessage(e);
+                OSErrorEnum oserror = tryFindErrnoFromMessage(e, eqNode);
                 if (oserror == null) {
                     return new ErrorAndMessagePair(OSErrorEnum.EIO, getMessage(e));
                 } else {
@@ -360,15 +360,13 @@ public enum OSErrorEnum {
     }
 
     @TruffleBoundary
-    private static OSErrorEnum tryFindErrnoFromMessage(Exception e) {
-        if (e.getMessage().contains("Broken pipe")) {
-            return OSErrorEnum.EPIPE;
-        }
-        Matcher m = ERRNO_PATTERN.matcher(e.getMessage());
+    private static OSErrorEnum tryFindErrnoFromMessage(Exception e, TruffleString.EqualNode eqNode) {
+        String message = e.getMessage();
+        Matcher m = ERRNO_PATTERN.matcher(message);
         if (m.find()) {
             return fromNumber(Integer.parseInt(m.group(1)));
         }
-        return null;
+        return OSErrorEnum.fromMessage(toTruffleStringUncached(message), eqNode);
     }
 
     @ValueType

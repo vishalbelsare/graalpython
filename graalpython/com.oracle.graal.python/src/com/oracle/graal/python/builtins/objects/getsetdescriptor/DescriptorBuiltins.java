@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,46 +40,42 @@
  */
 package com.oracle.graal.python.builtins.objects.getsetdescriptor;
 
-import static com.oracle.graal.python.builtins.modules.io.IONodes.T__CHUNK_SIZE;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___NAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___QUALNAME__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.AttributeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
-import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetNameNode;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetIndexedSlotsCountNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.GetAttributeNode.GetFixedAttributeNode;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
+import com.oracle.graal.python.nodes.attributes.GetFixedAttributeNode;
 import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
 import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -102,14 +98,14 @@ public final class DescriptorBuiltins extends PythonBuiltins {
         static TruffleString doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor self,
                         @Shared @Cached("create(T___QUALNAME__)") GetFixedAttributeNode readQualNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
-            return simpleTruffleStringFormatNode.format("%s.%s", toStr(readQualNameNode.executeObject(frame, self.getType())), self.getName());
+            return simpleTruffleStringFormatNode.format("%s.%s", toStr(readQualNameNode.execute(frame, self.getType())), self.getName());
         }
 
         @Specialization
-        static TruffleString doHiddenKeyDescriptor(VirtualFrame frame, HiddenKeyDescriptor self,
+        static TruffleString doIndexedSlotDescriptor(VirtualFrame frame, IndexedSlotDescriptor self,
                         @Shared @Cached("create(T___QUALNAME__)") GetFixedAttributeNode readQualNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
-            return simpleTruffleStringFormatNode.format("%s.%s", toStr(readQualNameNode.executeObject(frame, self.getType())), self.getKey().getName());
+            return simpleTruffleStringFormatNode.format("%s.%s", toStr(readQualNameNode.execute(frame, self.getType())), self.getName());
         }
 
         @TruffleBoundary
@@ -128,89 +124,75 @@ public final class DescriptorBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        static TruffleString doHiddenKeyDescriptor(HiddenKeyDescriptor self,
-                        @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
-            return fromJavaStringNode.execute(self.getKey().getName(), TS_ENCODING);
+        static TruffleString doIndexedSlotDescriptor(IndexedSlotDescriptor self) {
+            return self.getName();
         }
     }
 
-    @GenerateInline
-    @GenerateCached(false)
-    abstract static class DescriptorCheckNode extends Node {
-
-        public void execute(Node inliningTarget, Object descrType, TruffleString name, Object obj) {
-            executeInternal(inliningTarget, descrType, name, obj);
-        }
-
-        public void execute(Node inliningTarget, Object descrType, HiddenKey name, Object obj) {
-            executeInternal(inliningTarget, descrType, name, obj);
-        }
-
-        abstract void executeInternal(Node inliningTarget, Object descrType, Object nameObj, Object obj);
-
-        // https://github.com/python/cpython/blob/e8b19656396381407ad91473af5da8b0d4346e88/Objects/descrobject.c#L70
-        @Specialization
-        static void check(Node inliningTarget, Object descrType, Object name, Object obj,
-                        @Cached GetClassNode getClassNode,
-                        @Cached(inline = false) IsSubtypeNode isSubtypeNode,
-                        @Cached(inline = false) PRaiseNode raiseNode) {
-            Object type = getClassNode.execute(inliningTarget, obj);
-            if (!isSubtypeNode.execute(type, descrType)) {
-                throw raiseNode.raise(TypeError, ErrorMessages.DESC_S_FOR_N_DOESNT_APPLY_TO_N, name, descrType, type);
-            }
-        }
-    }
-
-    public abstract static class DescrGetNode extends AbstractDescrNode {
+    @GenerateUncached
+    @GenerateInline(value = false)
+    public abstract static class DescrGetNode extends Node {
         public abstract Object execute(VirtualFrame frame, Object descr, Object obj);
 
         @Specialization
         Object doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor descr, Object obj,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PRaiseNode raiseNode,
                         @Cached CallUnaryMethodNode callNode) {
             if (descr.getGet() != null) {
                 return callNode.executeObject(frame, descr.getGet(), obj);
             } else {
-                throw getRaiseNode().raise(AttributeError, ErrorMessages.ATTR_S_OF_S_IS_NOT_READABLE, descr.getName(), getTypeName(descr.getType()));
+                throw raiseNode.raise(inliningTarget, AttributeError, ErrorMessages.ATTR_S_OF_N_IS_NOT_READABLE, descr.getName(), descr.getType());
             }
         }
 
         @Specialization
-        Object doHiddenKeyDescriptor(HiddenKeyDescriptor descr, Object obj,
-                        @Cached ReadAttributeFromObjectNode readNode) {
-            Object val = readNode.execute(obj, descr.getKey());
-            if (val != PNone.NO_VALUE) {
+        static Object doIndexedSlotDescriptor(IndexedSlotDescriptor descr, PythonAbstractObject obj,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PRaiseNode raiseNode,
+                        @Cached GetOrCreateIndexedSlots getSlotsNode) {
+            Object[] slots = getSlotsNode.execute(inliningTarget, obj);
+            Object val = slots[descr.getIndex()];
+            if (val != null) {
                 return val;
             }
-            throw getRaiseNode().raise(AttributeError, ErrorMessages.OBJ_N_HAS_NO_ATTR_S, descr.getType(), descr.getKey().getName());
+            throw raiseNode.raise(inliningTarget, AttributeError, ErrorMessages.OBJ_T_HAS_NO_ATTR_S, obj, descr.getName());
         }
     }
 
-    public abstract static class DescrSetNode extends AbstractDescrNode {
+    @GenerateInline(value = false)
+    public abstract static class DescrSetNode extends Node {
         public abstract Object execute(VirtualFrame frame, Object descr, Object obj, Object value);
 
         @Specialization
         Object doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor descr, Object obj, Object value,
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode,
                         @Cached CallBinaryMethodNode callNode) {
             if (descr.getSet() != null) {
                 return callNode.executeObject(frame, descr.getSet(), obj, value);
             } else {
-                throw getRaiseNode().raise(AttributeError, ErrorMessages.ATTR_S_OF_S_OBJ_IS_NOT_WRITABLE, descr.getName(), getTypeName(descr.getType()));
+                throw raiseNode.raise(inliningTarget, AttributeError, ErrorMessages.ATTR_S_OF_N_OBJ_IS_NOT_WRITABLE, descr.getName(), descr.getType());
             }
         }
 
         @Specialization
-        static Object doHiddenKeyDescriptor(HiddenKeyDescriptor descr, Object obj, Object value,
-                        @Cached WriteAttributeToObjectNode writeNode) {
-            return writeNode.execute(obj, descr.getKey(), value);
+        static Object doIndexedSlotDescriptor(IndexedSlotDescriptor descr, PythonAbstractObject obj, Object value,
+                        @Bind Node inliningTarget,
+                        @Cached GetOrCreateIndexedSlots getSlotsNode) {
+            getSlotsNode.execute(inliningTarget, obj)[descr.getIndex()] = value;
+            return true;
         }
     }
 
-    public abstract static class DescrDeleteNode extends AbstractDescrNode {
+    @GenerateInline(value = false)
+    public abstract static class DescrDeleteNode extends Node {
         public abstract Object execute(VirtualFrame frame, Object descr, Object obj);
 
         @Specialization
         Object doGetSetDescriptor(VirtualFrame frame, GetSetDescriptor descr, Object obj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PRaiseNode raiseNode,
                         @Cached CallBinaryMethodNode callNode,
                         @Cached InlinedBranchProfile branchProfile) {
             if (descr.allowsDelete()) {
@@ -218,51 +200,59 @@ public final class DescriptorBuiltins extends PythonBuiltins {
             } else {
                 branchProfile.enter(inliningTarget);
                 if (descr.getSet() != null) {
-                    if (descr.getName().equalsUncached(T__CHUNK_SIZE, TS_ENCODING)) {
-                        // This is a special error message case. see
-                        // Modules/_io/textio.c:textiowrapper_chunk_size_set
-                        throw getRaiseNode().raise(AttributeError, ErrorMessages.CANNOT_DELETE);
-                    }
-                    throw getRaiseNode().raise(TypeError, ErrorMessages.CANNOT_DELETE_ATTRIBUTE, getTypeName(descr.getType()), descr.getName());
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.CANNOT_DELETE_ATTRIBUTE, descr.getType(), descr.getName());
                 } else {
-                    throw getRaiseNode().raise(AttributeError, ErrorMessages.ATTRIBUTE_S_OF_P_OBJECTS_IS_NOT_WRITABLE, descr.getName(), obj);
+                    throw raiseNode.raise(inliningTarget, AttributeError, ErrorMessages.ATTRIBUTE_S_OF_P_OBJECTS_IS_NOT_WRITABLE, descr.getName(), obj);
                 }
             }
         }
 
         @Specialization
-        Object doHiddenKeyDescriptor(HiddenKeyDescriptor descr, Object obj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached WriteAttributeToObjectNode writeNode,
-                        @Cached ReadAttributeFromObjectNode readNode,
+        Object doIndexedSlotDescriptor(IndexedSlotDescriptor descr, PythonAbstractObject obj,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PRaiseNode raiseNode,
+                        @Cached GetOrCreateIndexedSlots getSlotsNode,
                         @Cached InlinedConditionProfile profile) {
             // PyMember_SetOne - Check if the attribute is set.
-            if (profile.profile(inliningTarget, readNode.execute(obj, descr.getKey()) != PNone.NO_VALUE)) {
-                writeNode.execute(obj, descr.getKey(), PNone.NO_VALUE);
+            Object[] slots = getSlotsNode.execute(inliningTarget, obj);
+            if (profile.profile(inliningTarget, slots[descr.getIndex()] != null)) {
+                slots[descr.getIndex()] = null;
                 return PNone.NONE;
             }
-            throw getRaiseNode().raise(PythonBuiltinClassType.AttributeError, ErrorMessages.S, descr.getKey().getName());
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.AttributeError, ErrorMessages.S, descr.getName());
         }
     }
 
-    private abstract static class AbstractDescrNode extends Node {
-        @Child private GetNameNode getNameNode;
-        @Child private PRaiseNode raiseNode;
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    public abstract static class GetOrCreateIndexedSlots extends Node {
+        abstract Object[] execute(Node inliningTarget, PythonAbstractObject object);
 
-        protected Object getTypeName(Object descrType) {
-            if (getNameNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                getNameNode = insert(GetNameNode.create());
+        public static Object[] executeKnownCount(Node inliningTarget, InlinedBranchProfile initProfile, PythonAbstractObject object, int slotsCount) {
+            Object[] slots = object.getIndexedSlots();
+            if (slots == null) {
+                initProfile.enter(inliningTarget);
+                slots = new Object[slotsCount];
+                object.setIndexedSlots(slots);
             }
-            return getNameNode.executeCached(descrType);
+            return slots;
         }
 
-        protected PRaiseNode getRaiseNode() {
-            if (raiseNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                raiseNode = insert(PRaiseNode.create());
-            }
-            return raiseNode;
+        @Specialization(guards = "object.getIndexedSlots() != null")
+        static Object[] doGet(PythonAbstractObject object) {
+            return object.getIndexedSlots();
+        }
+
+        @Specialization(guards = "object.getIndexedSlots() == null")
+        static Object[] doCreate(Node inliningTarget, PythonAbstractObject object,
+                        @Cached GetIndexedSlotsCountNode getIndexedSlotsCountNode,
+                        @Cached GetClassNode getClassNode) {
+            Object cls = getClassNode.execute(inliningTarget, object);
+            int slotCount = getIndexedSlotsCountNode.execute(inliningTarget, cls);
+            Object[] slots = new Object[slotCount];
+            object.setIndexedSlots(slots);
+            return slots;
         }
     }
 }

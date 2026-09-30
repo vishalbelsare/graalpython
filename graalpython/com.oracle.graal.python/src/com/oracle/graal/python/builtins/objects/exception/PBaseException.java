@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,7 +41,7 @@
 package com.oracle.graal.python.builtins.objects.exception;
 
 import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.assertContainsNoJavaString;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+import static com.oracle.graal.python.util.PythonUtils.tsInternedLiteral;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -53,22 +53,17 @@ import com.oracle.graal.python.builtins.objects.traceback.PTraceback;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
-import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetNameNode;
 import com.oracle.graal.python.lib.PyExceptionInstanceCheckNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromDynamicObjectNode;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromPythonObjectNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
 import com.oracle.graal.python.runtime.GilNode;
+import com.oracle.graal.python.runtime.exception.ExceptionUtils;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.formatting.ErrorMessageFormatter;
-import com.oracle.graal.python.runtime.sequence.storage.BasicSequenceStorage;
-import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
@@ -84,8 +79,8 @@ import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @ExportLibrary(InteropLibrary.class)
-public final class PBaseException extends PythonObject {
-    public static final TruffleString T_CODE = tsLiteral("code");
+public class PBaseException extends PythonObject {
+    public static final TruffleString T_CODE = tsInternedLiteral("code");
 
     private PTuple args; // can be null for lazily generated message
 
@@ -235,34 +230,11 @@ public final class PBaseException extends PythonObject {
         return messageArgs != null ? messageArgs.clone() : PythonUtils.EMPTY_OBJECT_ARRAY;
     }
 
-    @TruffleBoundary
-    public String getFormattedMessage() {
-        final Object clazz = GetPythonObjectClassNode.executeUncached(this);
-        String typeName = GetNameNode.doSlowPath(clazz).toJavaStringUncached();
-        if (args == null) {
-            if (messageArgs != null && messageArgs.length > 0) {
-                return typeName + ": " + ErrorMessageFormatter.format(messageFormat.toJavaStringUncached(), getMessageArgs());
-            } else if (hasMessageFormat) {
-                return typeName + ": " + messageFormat.toJavaStringUncached();
-            } else {
-                return typeName;
-            }
-        } else if (args.getSequenceStorage().length() == 0) {
-            return typeName;
-        } else if (args.getSequenceStorage().length() == 1) {
-            SequenceStorage store = args.getSequenceStorage();
-            Object item = store instanceof BasicSequenceStorage ? store.getItemNormalized(0) : "<unknown>";
-            return typeName + ": " + item.toString();
-        } else {
-            return typeName + ": " + args.toString();
-        }
-    }
-
     @Override
     public String toString() {
         CompilerAsserts.neverPartOfCompilation();
         // We *MUST NOT* call anything here that may need a context!
-        StringBuilder sb = new StringBuilder(this.getInitialPythonClass().toString());
+        StringBuilder sb = new StringBuilder(this.getPythonClass().toString());
         if (messageArgs != null && messageArgs.length > 0) {
             sb.append("(fmt=\"").append(messageFormat.toJavaStringUncached()).append("\", args = (");
             for (Object arg : messageArgs) {
@@ -326,11 +298,11 @@ public final class PBaseException extends PythonObject {
 
     @ExportMessage
     RuntimeException throwException(
-                    @Cached PRaiseNode raiseNode,
+                    @Bind Node node,
                     @Shared("gil") @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
         try {
-            throw raiseNode.raiseExceptionObject(this);
+            throw PRaiseNode.raiseExceptionObjectStatic(node, this);
         } finally {
             gil.release(mustRelease);
         }
@@ -338,7 +310,7 @@ public final class PBaseException extends PythonObject {
 
     @ExportMessage
     ExceptionType getExceptionType(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GetClassNode getClassNode,
                     @Shared("gil") @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
@@ -349,7 +321,8 @@ public final class PBaseException extends PythonObject {
             }
             // these are the only ones we'll raise, we don't want to report user subtypes of
             // SyntaxError as Truffle syntax errors
-            if (clazz == PythonBuiltinClassType.SyntaxError || clazz == PythonBuiltinClassType.IndentationError || clazz == PythonBuiltinClassType.TabError) {
+            if (clazz == PythonBuiltinClassType.SyntaxError || clazz == PythonBuiltinClassType.IncompleteInputError || clazz == PythonBuiltinClassType.IndentationError ||
+                            clazz == PythonBuiltinClassType.TabError) {
                 return ExceptionType.PARSE_ERROR;
             }
             if (clazz == PythonBuiltinClassType.SystemExit) {
@@ -377,7 +350,7 @@ public final class PBaseException extends PythonObject {
     String getExceptionMessage(@Shared("gil") @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
         try {
-            return getFormattedMessage();
+            return ExceptionUtils.getExceptionMessage(this);
         } finally {
             gil.release(mustRelease);
         }
@@ -386,9 +359,9 @@ public final class PBaseException extends PythonObject {
     @ExportMessage
     int getExceptionExitStatus(
                     @Cached CastToJavaIntExactNode castToInt,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GetClassNode getClassNode,
-                    @Cached ReadAttributeFromDynamicObjectNode readNode,
+                    @Cached(inline = true) ReadAttributeFromPythonObjectNode readNode,
                     @Exclusive @Cached InlinedBranchProfile unsupportedProfile,
                     @Shared("gil") @Cached GilNode gil) throws UnsupportedMessageException {
         boolean mustRelease = gil.acquire();
@@ -396,7 +369,7 @@ public final class PBaseException extends PythonObject {
             if (getExceptionType(inliningTarget, getClassNode, gil) == ExceptionType.EXIT) {
                 try {
                     // Avoiding getattr because this message shouldn't have side-effects
-                    Object code = readNode.execute(this, T_CODE);
+                    Object code = readNode.execute(inliningTarget, this, T_CODE);
                     if (code == PNone.NO_VALUE) {
                         return 1;
                     }
@@ -418,32 +391,21 @@ public final class PBaseException extends PythonObject {
     }
 
     @ExportMessage
-    boolean hasExceptionCause(@Shared("gil") @Cached GilNode gil) {
-        boolean mustRelease = gil.acquire();
-        try {
-            return cause != null || (!suppressContext && context != null);
-        } finally {
-            gil.release(mustRelease);
-        }
+    boolean hasExceptionCause() {
+        return cause != null || !suppressContext && context != null;
     }
 
     @ExportMessage
     Object getExceptionCause(
-                    @Bind("$node") Node inliningTarget,
-                    @Exclusive @Cached InlinedBranchProfile unsupportedProfile,
-                    @Shared("gil") @Cached GilNode gil) throws UnsupportedMessageException {
-        boolean mustRelease = gil.acquire();
-        try {
-            if (cause != null) {
-                return cause;
-            }
-            if (!suppressContext && context != null) {
-                return context;
-            }
-            unsupportedProfile.enter(inliningTarget);
-            throw UnsupportedMessageException.create();
-        } finally {
-            gil.release(mustRelease);
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached InlinedBranchProfile unsupportedProfile) throws UnsupportedMessageException {
+        if (cause != null) {
+            return cause;
         }
+        if (!suppressContext && context != null) {
+            return context;
+        }
+        unsupportedProfile.enter(inliningTarget);
+        throw UnsupportedMessageException.create();
     }
 }

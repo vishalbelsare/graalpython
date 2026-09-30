@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,16 @@
  */
 package com.oracle.graal.python.resources;
 
+import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.function.Predicate;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.InternalResource;
@@ -56,23 +61,6 @@ import com.oracle.truffle.api.InternalResource;
  */
 @InternalResource.Id(value = "python-home", componentId = "python", optional = true)
 public final class PythonResource implements InternalResource {
-    private static final int PYTHON_MAJOR;
-    private static final int PYTHON_MINOR;
-    private static final int GRAALVM_MAJOR;
-    private static final int GRAALVM_MINOR;
-
-    static {
-        try (InputStream is = PythonResource.class.getResourceAsStream("/graalpy_versions")) {
-            PYTHON_MAJOR = is.read() - ' ';
-            PYTHON_MINOR = is.read() - ' ';
-            is.read(); // skip python micro version
-            GRAALVM_MAJOR = is.read() - ' ';
-            GRAALVM_MINOR = is.read() - ' ';
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     private static final Path BASE_PATH = Path.of("META-INF", "resources");
     private static final String LIBGRAALPY = "libgraalpy";
     private static final String LIBPYTHON = "libpython";
@@ -86,32 +74,145 @@ public final class PythonResource implements InternalResource {
     private static final Path LIBPYTHON_SHA256 = Path.of(LIBPYTHON + ".sha256");
     private static final Path INCLUDE_SHA256 = Path.of("include.sha256");
     private static final Path NI_SHA256 = Path.of("ni.sha256");
+    private static final Path VERSIONS_SHA256 = Path.of("versions.sha256");
     private static final Path NATIVE_SHA256 = Path.of("native.sha256");
 
     @Override
     public void unpackFiles(Env env, Path targetDirectory) throws IOException {
         OS os = env.getOS();
-        Path osArch = Path.of(os.toString()).resolve(env.getCPUArchitecture().toString());
+        CPUArchitecture cpuArchitecture = env.getCPUArchitecture();
+        Path osArch = Path.of(os.toString()).resolve(cpuArchitecture.toString());
+        GraalPyPlatformInfoProviderImpl.VersionsInfo versionsInfo = GraalPyPlatformInfoProviderImpl.getVersionsInfo();
+        ResourcesFilter filter = new ResourcesFilter();
         if (os.equals(OS.WINDOWS)) {
-            env.unpackResourceFiles(BASE_PATH.resolve(LIBPYTHON_FILES), targetDirectory.resolve("Lib"), BASE_PATH.resolve(LIBPYTHON));
-            env.unpackResourceFiles(BASE_PATH.resolve(LIBGRAALPY_FILES), targetDirectory.resolve("lib-graalpython"), BASE_PATH.resolve(LIBGRAALPY));
-            env.unpackResourceFiles(BASE_PATH.resolve(INCLUDE_FILES), targetDirectory.resolve("Include"), BASE_PATH.resolve(INCLUDE));
+            env.unpackResourceFiles(BASE_PATH.resolve(LIBPYTHON_FILES), targetDirectory.resolve("Lib"), BASE_PATH.resolve(LIBPYTHON), filter);
+            env.unpackResourceFiles(BASE_PATH.resolve(LIBGRAALPY_FILES), targetDirectory.resolve("lib-graalpython"), BASE_PATH.resolve(LIBGRAALPY), filter);
+            env.unpackResourceFiles(BASE_PATH.resolve(INCLUDE_FILES), targetDirectory.resolve("Include"), BASE_PATH.resolve(INCLUDE), filter);
         } else {
-            String pythonMajMin = "python" + PYTHON_MAJOR + "." + PYTHON_MINOR;
-            env.unpackResourceFiles(BASE_PATH.resolve(LIBPYTHON_FILES), targetDirectory.resolve("lib").resolve(pythonMajMin), BASE_PATH.resolve(LIBPYTHON));
-            env.unpackResourceFiles(BASE_PATH.resolve(LIBGRAALPY_FILES), targetDirectory.resolve("lib").resolve("graalpy" + GRAALVM_MAJOR + "." + GRAALVM_MINOR), BASE_PATH.resolve(LIBGRAALPY));
-            env.unpackResourceFiles(BASE_PATH.resolve(INCLUDE_FILES), targetDirectory.resolve("include").resolve(pythonMajMin), BASE_PATH.resolve(INCLUDE));
+            String pythonMajMin = "python" + versionsInfo.pythonMajor() + "." + versionsInfo.pythonMinor();
+            env.unpackResourceFiles(BASE_PATH.resolve(LIBPYTHON_FILES), targetDirectory.resolve("lib").resolve(pythonMajMin), BASE_PATH.resolve(LIBPYTHON), filter);
+            env.unpackResourceFiles(BASE_PATH.resolve(LIBGRAALPY_FILES),
+                            targetDirectory.resolve("lib").resolve("graalpy" + versionsInfo.graalVMajor() + "." + versionsInfo.graalVMinor()), BASE_PATH.resolve(LIBGRAALPY),
+                            filter);
+            env.unpackResourceFiles(BASE_PATH.resolve(INCLUDE_FILES), targetDirectory.resolve("include").resolve(pythonMajMin + versionsInfo.pythonAbiFlags()), BASE_PATH.resolve(INCLUDE), filter);
         }
         // ni files are in the same place on all platforms
-        env.unpackResourceFiles(BASE_PATH.resolve(NI_FILES), targetDirectory, BASE_PATH);
+        env.unpackResourceFiles(BASE_PATH.resolve(NI_FILES), targetDirectory, BASE_PATH, filter);
         // native files already have the correct structure
-        env.unpackResourceFiles(BASE_PATH.resolve(osArch).resolve(NATIVE_FILES), targetDirectory, BASE_PATH.resolve(osArch));
+        if (!os.equals(OS.UNSUPPORTED) && !cpuArchitecture.equals(CPUArchitecture.UNSUPPORTED)) {
+            env.unpackResourceFiles(BASE_PATH.resolve(osArch).resolve(NATIVE_FILES), targetDirectory, BASE_PATH.resolve(osArch), filter);
+        } else {
+            // Native resources are not available for unsupported operating systems.
+            if (!filter.test(Path.of(NATIVE_FILES))) {
+                throw new IOException("Extracting native resources failed for " +
+                                osArch.toString() +
+                                ". This means that GraalPy cannot use native extensions and some built-in features that rely on native code will be unavailable. " +
+                                "Currently supported platforms are linux/amd64, linux/aarch64, macos/aarch64, and windows/amd64. " +
+                                "If you are running on one of these platforms and are receiving this error, that indicates a bug in this build of GraalPy. " +
+                                "If you are running on a different platform and want to keep going with this unsupported configuration, you can specify the system property \"" +
+                                ResourcesFilter.EXCLUDE_PROP +
+                                "\" with a pattern to exclude \"" +
+                                NATIVE_FILES +
+                                "\" to continue past this point. ");
+            }
+        }
+
+        if (filter.log) {
+            System.out.println("unpacked python resources:");
+            System.out.println("include pattern: '" + filter.include + "'");
+            System.out.println("exclude pattern: '" + filter.exclude + "'");
+            listFiles("included files:", filter.included);
+            listFiles("excluded files:", filter.excluded);
+        }
+    }
+
+    private static void listFiles(String header, List<String> l) {
+        if (!l.isEmpty()) {
+            Collections.sort(l);
+            System.out.println(header);
+            for (String s : l) {
+                System.out.println("\t" + s);
+            }
+        }
+    }
+
+    private static class ResourcesFilter implements Predicate<Path> {
+
+        private final boolean log;
+        private final Pattern includePattern;
+        private final Pattern excludePattern;
+        private final String exclude;
+        private final String include;
+        private final List<String> excluded;
+        private final List<String> included;
+        private static final String INCLUDE_PROP = "org.graalvm.python.resources.include";
+        private static final String EXCLUDE_PROP = "org.graalvm.python.resources.exclude";
+        private static final String LOG_PROP = "org.graalvm.python.resources.log";
+
+        private ResourcesFilter() {
+            include = getProperty(INCLUDE_PROP);
+            exclude = getProperty(EXCLUDE_PROP);
+            log = Boolean.parseBoolean(getProperty(LOG_PROP));
+            includePattern = include != null ? compile(include, INCLUDE_PROP) : null;
+            excludePattern = exclude != null ? compile(exclude, EXCLUDE_PROP) : null;
+            included = log ? new ArrayList<>() : null;
+            excluded = log ? new ArrayList<>() : null;
+        }
+
+        private static Pattern compile(String re, String property) {
+            try {
+                return Pattern.compile(re);
+            } catch (PatternSyntaxException pse) {
+                throw new IllegalArgumentException("could not compile regex pattern '" + re + "' provided by system property '" + property + "'", pse);
+            }
+        }
+
+        @Override
+        public boolean test(Path path) {
+            String absolutePath = path.toAbsolutePath().toString();
+            if (File.separator.equals("\\")) {
+                absolutePath = absolutePath.replaceAll("\\\\", "/");
+            }
+            if ((includePattern != null && !includePattern.matcher(absolutePath).matches()) ||
+                            (excludePattern != null && excludePattern.matcher(absolutePath).matches())) {
+                if (log) {
+                    excluded.add(absolutePath);
+                }
+                return false;
+            } else {
+                if (log) {
+                    included.add(absolutePath);
+                }
+                return true;
+            }
+        }
+
+        private static String getProperty(String prop) {
+            String s = System.getProperty(prop);
+            if (s != null) {
+                if (s.isEmpty()) {
+                    s = null;
+                } else if (s.startsWith("\"") && s.endsWith("\"")) {
+                    // native-gradle-plugin sends system properties wrapped in "
+                    s = s.substring(1, s.length() - 1);
+                }
+            }
+            return s;
+        }
     }
 
     @Override
     public String versionHash(Env env) {
         StringBuilder sb = new StringBuilder();
-        for (var s : List.of(LIBGRAALPY_SHA256, LIBPYTHON_SHA256, NI_SHA256, INCLUDE_SHA256, Path.of(env.getOS().toString()).resolve(env.getCPUArchitecture().toString()).resolve(NATIVE_SHA256))) {
+        List<Path> al = List.of(LIBGRAALPY_SHA256, LIBPYTHON_SHA256, NI_SHA256, INCLUDE_SHA256);
+        OS os = env.getOS();
+        CPUArchitecture cpuArchitecture = env.getCPUArchitecture();
+        if (!os.equals(OS.UNSUPPORTED) && !cpuArchitecture.equals(CPUArchitecture.UNSUPPORTED)) {
+            al = new ArrayList<>(al);
+            al.add(Path.of(os.toString()).resolve(cpuArchitecture.toString()).resolve(VERSIONS_SHA256));
+            al.add(Path.of(os.toString()).resolve(cpuArchitecture.toString()).resolve(NATIVE_SHA256));
+        }
+        for (var s : al) {
             try {
                 sb.append(env.readResourceLines(BASE_PATH.resolve(s)).get(0).substring(0, 8));
             } catch (IOException | IndexOutOfBoundsException | InvalidPathException e) {

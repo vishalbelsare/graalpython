@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,18 +42,20 @@ package com.oracle.graal.python.builtins.objects.method;
 
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OBJCLASS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetNameNode;
-import com.oracle.graal.python.nodes.attributes.GetAttributeNode;
+import com.oracle.graal.python.nodes.attributes.GetFixedAttributeNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
@@ -71,6 +73,8 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = PythonBuiltinClassType.MethodWrapper)
 public final class MethodWrapperBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = MethodWrapperBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return MethodWrapperBuiltinsFactory.getFactories();
@@ -85,36 +89,36 @@ public final class MethodWrapperBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         static TruffleString reprBuiltinMethod(VirtualFrame frame, PBuiltinMethod self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached GetClassNode getClassNode,
-                        @Shared @Cached("createGetAttributeNode()") GetAttributeNode getNameNode,
+                        @Shared @Cached("createGetAttributeNode()") GetFixedAttributeNode getNameNode,
                         @Shared @Cached GetNameNode getTypeNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             TruffleString typeName = getTypeNameNode.execute(inliningTarget, getClassNode.execute(inliningTarget, self.getSelf()));
-            return simpleTruffleStringFormatNode.format("<method-wrapper '%s' of %s object at 0x%s>", getNameNode.executeObject(frame, self.getFunction()), typeName,
+            return simpleTruffleStringFormatNode.format("<method-wrapper '%s' of %s object at 0x%s>", getNameNode.execute(frame, self.getFunction()), typeName,
                             PythonAbstractObject.systemHashCodeAsHexString(self.getSelf()));
         }
 
         @Specialization
         static TruffleString reprBuiltinMethod(VirtualFrame frame, PMethod self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached GetClassNode getClassNode,
-                        @Shared @Cached("createGetAttributeNode()") GetAttributeNode getNameNode,
+                        @Shared @Cached("createGetAttributeNode()") GetFixedAttributeNode getNameNode,
                         @Shared @Cached GetNameNode getTypeNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             TruffleString typeName = getTypeNameNode.execute(inliningTarget, getClassNode.execute(inliningTarget, self.getSelf()));
-            return simpleTruffleStringFormatNode.format("<method-wrapper '%s' of %s object at 0x%s>", getNameNode.executeObject(frame, self.getFunction()), typeName,
+            return simpleTruffleStringFormatNode.format("<method-wrapper '%s' of %s object at 0x%s>", getNameNode.execute(frame, self.getFunction()), typeName,
                             PythonAbstractObject.systemHashCodeAsHexString(self.getSelf()));
         }
 
         @NeverDefault
-        protected static GetAttributeNode createGetAttributeNode() {
-            return GetAttributeNode.create(T___NAME__);
+        protected static GetFixedAttributeNode createGetAttributeNode() {
+            return GetFixedAttributeNode.create(T___NAME__);
         }
     }
 }

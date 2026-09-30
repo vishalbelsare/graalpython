@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -28,13 +28,15 @@ package com.oracle.graal.python.runtime.sequence.storage;
 import java.util.Arrays;
 
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives;
 
-public final class IntSequenceStorage extends TypedSequenceStorage {
+public final class IntSequenceStorage extends ArrayBasedSequenceStorage {
 
     private int[] values;
 
     public IntSequenceStorage() {
-        values = new int[]{};
+        this.values = new int[DEFAULT_CAPACITY];
+        this.capacity = values.length;
     }
 
     public IntSequenceStorage(int[] elements) {
@@ -55,121 +57,22 @@ public final class IntSequenceStorage extends TypedSequenceStorage {
         this.length = 0;
     }
 
-    @Override
-    protected void increaseCapacityExactWithCopy(int newCapacity) {
-        values = Arrays.copyOf(values, newCapacity);
+    private void increaseCapacityExactWithCopy(int newCapacity) {
+        values = PythonUtils.arrayCopyOf(values, newCapacity);
         capacity = values.length;
     }
 
-    @Override
-    protected void increaseCapacityExact(int newCapacity) {
-        values = new int[newCapacity];
-        capacity = values.length;
+    public void ensureCapacity(int newCapacity) throws ArithmeticException {
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.UNLIKELY_PROBABILITY, newCapacity > capacity)) {
+            increaseCapacityExactWithCopy(capacityFor(newCapacity));
+        }
     }
 
     @Override
-    public SequenceStorage copy() {
-        return new IntSequenceStorage(PythonUtils.arrayCopyOf(values, length));
-    }
-
-    @Override
-    public SequenceStorage createEmpty(int newCapacity) {
+    public IntSequenceStorage createEmpty(int newCapacity) {
         return new IntSequenceStorage(newCapacity);
     }
 
-    @Override
-    public Object[] getInternalArray() {
-        /**
-         * Have to box and copy.
-         */
-        Object[] boxed = new Object[length];
-
-        for (int i = 0; i < length; i++) {
-            boxed[i] = values[i];
-        }
-
-        return boxed;
-    }
-
-    public int[] getInternalIntArray() {
-        return values;
-    }
-
-    @Override
-    public Object getItemNormalized(int idx) {
-        return getIntItemNormalized(idx);
-    }
-
-    public int getIntItemNormalized(int idx) {
-        return values[idx];
-    }
-
-    @Override
-    public void setItemNormalized(int idx, Object value) throws SequenceStoreException {
-        if (value instanceof Integer) {
-            setIntItemNormalized(idx, (int) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    public void setIntItemNormalized(int idx, int value) {
-        values[idx] = value;
-    }
-
-    @Override
-    public void insertItem(int idx, Object value) throws SequenceStoreException {
-        if (value instanceof Integer) {
-            insertIntItem(idx, (int) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    public void insertIntItem(int idx, int value) {
-        ensureCapacity(length + 1);
-
-        // shifting tail to the right by one slot
-        for (int i = values.length - 1; i > idx; i--) {
-            values[i] = values[i - 1];
-        }
-
-        values[idx] = value;
-        incLength();
-    }
-
-    @Override
-    public void copyItem(int idxTo, int idxFrom) {
-        values[idxTo] = values[idxFrom];
-    }
-
-    @Override
-    public IntSequenceStorage getSliceInBound(int start, int stop, int step, int sliceLength) {
-        int[] newArray = new int[sliceLength];
-
-        if (step == 1) {
-            PythonUtils.arraycopy(values, start, newArray, 0, sliceLength);
-            return new IntSequenceStorage(newArray);
-        }
-
-        for (int i = start, j = 0; j < sliceLength; i += step, j++) {
-            newArray[j] = values[i];
-        }
-
-        return new IntSequenceStorage(newArray);
-    }
-
-    public int indexOfInt(int value) {
-        for (int i = 0; i < length; i++) {
-            if (values[i] == value) {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    @Override
     public void reverse() {
         if (length > 0) {
             int head = 0;
@@ -184,25 +87,43 @@ public final class IntSequenceStorage extends TypedSequenceStorage {
         }
     }
 
-    @Override
-    public Object getIndicativeValue() {
-        return 0;
+    public int[] getInternalIntArray() {
+        return values;
     }
 
-    @Override
-    public boolean equals(SequenceStorage other) {
-        if (other.length() != length() || !(other instanceof IntSequenceStorage)) {
-            return false;
+    public int getIntItemNormalized(int idx) {
+        return values[idx];
+    }
+
+    public void setIntItemNormalized(int idx, int value) {
+        values[idx] = value;
+    }
+
+    public void insertIntItem(int idx, int value) {
+        ensureCapacity(length + 1);
+
+        // shifting tail to the right by one slot
+        if (idx < length) {
+            PythonUtils.arraycopy(values, idx, values, idx + 1, length - idx);
         }
 
-        int[] otherArray = ((IntSequenceStorage) other).getInternalIntArray();
-        for (int i = 0; i < length(); i++) {
-            if (values[i] != otherArray[i]) {
-                return false;
+        values[idx] = value;
+        incLength();
+    }
+
+    public int indexOfInt(int value) {
+        for (int i = 0; i < length; i++) {
+            if (values[i] == value) {
+                return i;
             }
         }
 
-        return true;
+        return -1;
+    }
+
+    @Override
+    public Object getIndicativeValue() {
+        return 0;
     }
 
     @Override
@@ -215,9 +136,17 @@ public final class IntSequenceStorage extends TypedSequenceStorage {
         return Arrays.copyOf(values, length);
     }
 
-    @Override
     public Object[] getCopyOfInternalArray() {
-        return getInternalArray();
+        /*
+         * Have to box and copy.
+         */
+        Object[] boxed = new Object[length];
+
+        for (int i = 0; i < length; i++) {
+            boxed[i] = values[i];
+        }
+
+        return boxed;
     }
 
     @Override
@@ -226,7 +155,7 @@ public final class IntSequenceStorage extends TypedSequenceStorage {
     }
 
     @Override
-    public ListStorageType getElementType() {
-        return ListStorageType.Int;
+    public StorageType getElementType() {
+        return StorageType.Int;
     }
 }

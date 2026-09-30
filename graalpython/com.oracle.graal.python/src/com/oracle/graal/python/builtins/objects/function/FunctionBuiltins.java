@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -26,17 +26,19 @@
 
 package com.oracle.graal.python.builtins.objects.function;
 
+import static com.oracle.graal.python.nodes.BuiltinNames.T_LAMBDA_NAME;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___CODE__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DEFAULTS__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DOC__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___KWDEFAULTS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___NAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___QUALNAME__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___TYPE_PARAMS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DEFAULTS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___QUALNAME__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___TYPE_PARAMS__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J_TRUFFLE_SOURCE;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GET__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.assertNoJavaString;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
@@ -44,12 +46,17 @@ import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.cell.PCell;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
@@ -57,62 +64,162 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorValue;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageLen;
+import com.oracle.graal.python.builtins.objects.common.KeywordsStorage;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetObjectArrayNode;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.ToArrayNode;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
+import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorDeleteMarker;
 import com.oracle.graal.python.builtins.objects.method.PMethod;
 import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.str.StringNodes;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.DescrGetBuiltinNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
+import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
 import com.oracle.graal.python.nodes.builtins.FunctionNodes.GetFunctionCodeNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.EnsureManagedTupleNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.GetTupleStorage;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PFunction)
 public final class FunctionBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = FunctionBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return FunctionBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___GET__, minNumOfPositionalArgs = 2, maxNumOfPositionalArgs = 3)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "function", minNumOfPositionalArgs = 3, parameterNames = {"$cls", "code", "globals", "name", "argdefs", "closure"})
     @GenerateNodeFactory
-    @SuppressWarnings("unused")
-    public abstract static class GetNode extends PythonTernaryBuiltinNode {
-        @Specialization(guards = {"!isPNone(instance)"})
-        static PMethod doMethod(PFunction self, Object instance, Object klass,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createMethod(instance, self);
+    @ImportStatic(PGuards.class)
+    public abstract static class FunctionNode extends PythonBuiltinNode {
+
+        @Specialization
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, TruffleString name, @SuppressWarnings("unused") PNone defaultArgs,
+                        @SuppressWarnings("unused") PNone closure,
+                        @Bind PythonLanguage language) {
+            return PFactory.createFunction(language, name, code, globals, null);
+        }
+
+        @Specialization(guards = "tupleCheckNode.execute(inliningTarget, closure)")
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, @SuppressWarnings("unused") PNone name, @SuppressWarnings("unused") PNone defaultArgs,
+                        Object closure,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Shared("tupleCheck") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Shared("getTupleStorage") @Cached GetTupleStorage getTupleStorage,
+                        @Shared("toArray") @Cached ToArrayNode toArray,
+                        @Bind PythonLanguage language) {
+            Object[] closureArray = toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, closure));
+            return PFactory.createFunction(language, T_LAMBDA_NAME, code, globals, PCell.toCellArray(closureArray));
         }
 
         @Specialization
-        static Object doFunction(PFunction self, PNone instance, Object klass) {
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, @SuppressWarnings("unused") PNone name, @SuppressWarnings("unused") PNone defaultArgs,
+                        @SuppressWarnings("unused") PNone closure,
+                        @SuppressWarnings("unused") @Shared("getObjectArrayNode") @Cached GetObjectArrayNode getObjectArrayNode,
+                        @Bind PythonLanguage language) {
+            return PFactory.createFunction(language, T_LAMBDA_NAME, code, globals, null);
+        }
+
+        @Specialization(guards = "tupleCheckNode.execute(inliningTarget, closure)")
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, TruffleString name, @SuppressWarnings("unused") PNone defaultArgs, Object closure,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Shared("tupleCheck") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Shared("getTupleStorage") @Cached GetTupleStorage getTupleStorage,
+                        @Shared("toArray") @Cached ToArrayNode toArray,
+                        @Bind PythonLanguage language) {
+            Object[] closureArray = toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, closure));
+            return PFactory.createFunction(language, name, code, globals, PCell.toCellArray(closureArray));
+        }
+
+        @Specialization(guards = "tupleCheckNode.execute(inliningTarget, defaultArgs)")
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, @SuppressWarnings("unused") PNone name, Object defaultArgs,
+                        @SuppressWarnings("unused") PNone closure,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Shared("tupleCheck") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Shared("getTupleStorage") @Cached GetTupleStorage getTupleStorage,
+                        @Shared("toArray") @Cached ToArrayNode toArray,
+                        @Bind PythonLanguage language) {
+            // TODO split defaults of positional args from kwDefaults
+            Object[] defaultArgsArray = toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, defaultArgs));
+            return PFactory.createFunction(language, code.getName(), code, globals, defaultArgsArray, null, null);
+        }
+
+        @Specialization(guards = "tupleCheckNode.execute(inliningTarget, defaultArgs)")
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, TruffleString name, Object defaultArgs, @SuppressWarnings("unused") PNone closure,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Shared("tupleCheck") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Shared("getTupleStorage") @Cached GetTupleStorage getTupleStorage,
+                        @Shared("toArray") @Cached ToArrayNode toArray,
+                        @Bind PythonLanguage language) {
+            // TODO split defaults of positional args from kwDefaults
+            Object[] defaultArgsArray = toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, defaultArgs));
+            return PFactory.createFunction(language, name, code, globals, defaultArgsArray, null, null);
+        }
+
+        @Specialization(guards = {"tupleCheckNode.execute(inliningTarget, defaultArgs)", "tupleCheckNode.execute(inliningTarget, closure)"})
+        static PFunction function(@SuppressWarnings("unused") Object cls, PCode code, PDict globals, TruffleString name, Object defaultArgs, Object closure,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Shared("tupleCheck") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Shared("getTupleStorage") @Cached GetTupleStorage getTupleStorage,
+                        @Shared("toArray") @Cached ToArrayNode toArray,
+                        @Bind PythonLanguage language) {
+            // TODO split defaults of positional args from kwDefaults
+            Object[] closureArray = toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, closure));
+            Object[] defaultArgsArray = toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, defaultArgs));
+            return PFactory.createFunction(language, name, code, globals, defaultArgsArray, null, PCell.toCellArray(closureArray));
+        }
+
+        @Fallback
+        @SuppressWarnings("unused")
+        static PFunction function(@SuppressWarnings("unused") Object cls, Object code, Object globals, Object name, Object defaultArgs, Object closure,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.FUNC_CONSTRUCTION_NOT_SUPPORTED, cls, code, globals, name, defaultArgs, closure);
+        }
+    }
+
+    @Slot(SlotKind.tp_descr_get)
+    @GenerateUncached
+    @GenerateNodeFactory
+    public abstract static class GetNode extends DescrGetBuiltinNode {
+        @Specialization(guards = {"!isPNone(instance)"})
+        static PMethod doMethod(PFunction self, Object instance, @SuppressWarnings("unused") Object klass,
+                        @Bind PythonLanguage language) {
+            return PFactory.createMethod(language, instance, self);
+        }
+
+        @Specialization
+        static Object doFunction(PFunction self, @SuppressWarnings("unused") PNone instance, @SuppressWarnings("unused") Object klass) {
             return self;
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -138,8 +245,8 @@ public final class FunctionBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNoValue(value)")
         static Object setName(PFunction self, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached StringNodes.CastToTruffleStringCheckedNode cast) {
+                        @Bind Node inliningTarget,
+                        @Cached StringNodes.CastToTruffleStringChecked2Node cast) {
             return setName(self, cast.cast(inliningTarget, value, ErrorMessages.MUST_BE_SET_TO_S_OBJ, T___NAME__, "string"));
         }
     }
@@ -160,28 +267,31 @@ public final class FunctionBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNoValue(value)")
         static Object setQualname(PFunction self, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached StringNodes.CastToTruffleStringCheckedNode cast) {
+                        @Bind Node inliningTarget,
+                        @Cached StringNodes.CastToTruffleStringChecked2Node cast) {
             return setQualname(self, cast.cast(inliningTarget, value, ErrorMessages.MUST_BE_SET_TO_S_OBJ, T___QUALNAME__, "string"));
         }
     }
 
     @Builtin(name = J___DEFAULTS__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, isGetter = true, isSetter = true, allowsDelete = true)
     @GenerateNodeFactory
+    @ImportStatic(PGuards.class)
     public abstract static class GetDefaultsNode extends PythonBinaryBuiltinNode {
         @Specialization(guards = "isNoValue(defaults)")
         static Object defaults(PFunction self, @SuppressWarnings("unused") PNone defaults,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object[] argDefaults = self.getDefaults();
             assert argDefaults != null;
-            return (argDefaults.length == 0) ? PNone.NONE : factory.createTuple(argDefaults);
+            return (argDefaults.length == 0) ? PNone.NONE : PFactory.createTuple(language, argDefaults);
         }
 
-        @Specialization
-        static Object setDefaults(PFunction self, PTuple defaults,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetObjectArrayNode getObjectArrayNode) {
-            self.setDefaults(getObjectArrayNode.execute(inliningTarget, defaults));
+        @Specialization(guards = "tupleCheckNode.execute(inliningTarget, defaults)", limit = "1")
+        static Object setDefaults(PFunction self, Object defaults,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Cached GetTupleStorage getTupleStorage,
+                        @Cached ToArrayNode toArray) {
+            self.setDefaults(toArray.execute(inliningTarget, getTupleStorage.execute(inliningTarget, defaults)));
             return PNone.NONE;
         }
 
@@ -200,8 +310,8 @@ public final class FunctionBuiltins extends PythonBuiltins {
         @Fallback
         @SuppressWarnings("unused")
         static Object setDefaults(Object self, Object defaults,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.MUST_BE_SET_TO_S_NOT_P, T___DEFAULTS__, "tuple");
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.MUST_BE_SET_TO_S_NOT_P, T___DEFAULTS__, "tuple", defaults);
         }
     }
 
@@ -210,21 +320,20 @@ public final class FunctionBuiltins extends PythonBuiltins {
     public abstract static class GetKeywordDefaultsNode extends PythonBinaryBuiltinNode {
         @Specialization(guards = "isNoValue(arg)")
         static Object get(PFunction self, @SuppressWarnings("unused") PNone arg,
-                        @Cached PythonObjectFactory factory) {
-            PKeyword[] kwdefaults = self.getKwDefaults();
-            return (kwdefaults.length > 0) ? factory.createDict(kwdefaults) : PNone.NONE;
+                        @Bind PythonLanguage language) {
+            return self.getKwDefaultsDict(language);
         }
 
         @Specialization(guards = "!isNoValue(arg)")
-        static Object set(PFunction self, @SuppressWarnings("unused") PNone arg) {
-            self.setKwDefaults(PKeyword.EMPTY_KEYWORDS);
+        static Object set(PFunction self, @SuppressWarnings("unused") PNone arg,
+                        @Bind PythonLanguage language) {
+            self.setKwDefaultsDict(PFactory.createDict(language, PKeyword.EMPTY_KEYWORDS));
             return PNone.NONE;
         }
 
         @Specialization(guards = "!isNoValue(arg)")
         @TruffleBoundary
         Object set(PFunction self, PDict arg) {
-            CompilerDirectives.transferToInterpreter();
             ArrayList<PKeyword> keywords = new ArrayList<>();
             final HashingStorage storage = arg.getDictStorage();
             HashingStorageIterator it = HashingStorageGetIterator.executeUncached(storage);
@@ -232,12 +341,16 @@ public final class FunctionBuiltins extends PythonBuiltins {
                 Object key = assertNoJavaString(HashingStorageIteratorKey.executeUncached(storage, it));
                 if (key instanceof PString) {
                     key = ((PString) key).getValueUncached();
-                } else if (!(key instanceof TruffleString)) {
-                    throw PRaiseNode.raiseUncached(this, PythonBuiltinClassType.TypeError, ErrorMessages.KEYWORD_NAMES_MUST_BE_STR_GOT_P, key);
                 }
-                keywords.add(new PKeyword((TruffleString) key, HashingStorageIteratorValue.executeUncached(storage, it)));
+                if (key instanceof TruffleString) {
+                    keywords.add(new PKeyword((TruffleString) key, HashingStorageIteratorValue.executeUncached(storage, it)));
+                }
             }
-            self.setKwDefaults(keywords.isEmpty() ? PKeyword.EMPTY_KEYWORDS : keywords.toArray(new PKeyword[keywords.size()]));
+            PKeyword[] kwdefaults = keywords.isEmpty() ? PKeyword.EMPTY_KEYWORDS : keywords.toArray(new PKeyword[keywords.size()]);
+            if (kwdefaults.length == HashingStorageLen.executeUncached(storage)) {
+                arg.setDictStorage(new KeywordsStorage(kwdefaults));
+            }
+            self.setKwDefaultsDict(arg);
             return PNone.NONE;
         }
     }
@@ -270,8 +383,8 @@ public final class FunctionBuiltins extends PythonBuiltins {
 
         @Fallback
         static Object doGeneric(Object object,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.GETTING_THER_SOURCE_NOT_SUPPORTED_FOR_P, object);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.GETTING_THER_SOURCE_NOT_SUPPORTED_FOR_P, object);
         }
     }
 
@@ -280,7 +393,7 @@ public final class FunctionBuiltins extends PythonBuiltins {
     public abstract static class GetCodeNode extends PythonBinaryBuiltinNode {
         @Specialization(guards = {"isNoValue(none)"})
         static Object getCodeU(PFunction self, @SuppressWarnings("unused") PNone none,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetFunctionCodeNode getFunctionCodeNode) {
             return getFunctionCodeNode.execute(inliningTarget, self);
         }
@@ -288,15 +401,69 @@ public final class FunctionBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization
         static Object setCode(PFunction self, PCode code,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode) {
             int closureLength = self.getClosure() == null ? 0 : self.getClosure().length;
             int freeVarsLength = code.getFreeVars().length;
             if (closureLength != freeVarsLength) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.ValueError, ErrorMessages.REQUIRES_CODE_OBJ, self.getName(), closureLength, freeVarsLength);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.REQUIRES_CODE_OBJ, self.getName(), closureLength, freeVarsLength);
             }
             self.setCode(code);
             return PNone.NONE;
+        }
+    }
+
+    @Builtin(name = J___DOC__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, isGetter = true, isSetter = true, allowsDelete = true)
+    @GenerateNodeFactory
+    abstract static class DocNode extends PythonBinaryBuiltinNode {
+        @Specialization(guards = "isNoValue(none)")
+        Object get(PFunction self, @SuppressWarnings("unused") Object none) {
+            return self.getDoc();
+        }
+
+        @Specialization(guards = {"!isNoValue(value)", "!isDeleteMarker(value)"})
+        Object set(PFunction self, Object value) {
+            self.setDoc(value);
+            return PNone.NONE;
+        }
+
+        @Specialization
+        Object delete(PFunction self, @SuppressWarnings("unused") DescriptorDeleteMarker marker) {
+            self.setDoc(PNone.NONE);
+            return PNone.NONE;
+        }
+    }
+
+    @Builtin(name = J___TYPE_PARAMS__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, isGetter = true, isSetter = true)
+    @GenerateNodeFactory
+    @ImportStatic(PGuards.class)
+    public abstract static class GetTypeParamsNode extends PythonBinaryBuiltinNode {
+        @Specialization(guards = "isNoValue(value)")
+        static Object get(PFunction self, @SuppressWarnings("unused") PNone value,
+                        @Bind PythonLanguage language,
+                        @Cached ReadAttributeFromObjectNode readObject) {
+            Object typeParams = readObject.execute(self, T___TYPE_PARAMS__);
+            if (typeParams == PNone.NO_VALUE) {
+                return PFactory.createEmptyTuple(language);
+            }
+            return typeParams;
+        }
+
+        @Specialization(guards = "tupleCheckNode.execute(inliningTarget, typeParams)", limit = "1")
+        static Object set(PFunction self, Object typeParams,
+                        @Bind Node inliningTarget,
+                        @SuppressWarnings("unused") @Cached PyTupleCheckNode tupleCheckNode,
+                        @Cached EnsureManagedTupleNode ensureManagedTupleNode,
+                        @Cached WriteAttributeToObjectNode writeObject) {
+            writeObject.execute(self, T___TYPE_PARAMS__, ensureManagedTupleNode.execute(inliningTarget, typeParams));
+            return PNone.NONE;
+        }
+
+        @Fallback
+        @SuppressWarnings("unused")
+        static Object error(Object self, Object value,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.MUST_BE_SET_TO_S_NOT_P, T___TYPE_PARAMS__, "tuple", value);
         }
     }
 }

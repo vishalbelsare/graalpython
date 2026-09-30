@@ -1,4 +1,4 @@
-# Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,23 +37,38 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-try:
-    import __graalpython__
-    managed_launcher = __graalpython__.is_managed_launcher()
-except ImportError:
-    managed_launcher = False
+from tests.util import needs_capi
 
+
+@needs_capi
 def test_basic_functionality():
     """
     This is a basic test to ensure that the module can be imported.
-    The main sqlite3 test suite will be silently skipped if the 
+    The main sqlite3 test suite will be silently skipped if the
     "_sqlite3" module is not available.
     """
-    if not managed_launcher:
-        import sqlite3
-        import _sqlite3
-        conn = sqlite3.connect(':memory:')
-        rows = conn.execute("select sqlite_version()")
-        assert len(next(rows)[0]) >= 5
-        conn.close()
+    import sqlite3
+    import _sqlite3
+    conn = sqlite3.connect(':memory:')
+    rows = conn.execute("select sqlite_version()")
+    assert len(next(rows)[0]) >= 5
+    conn.close()
 
+
+@needs_capi
+def test_fts5_works():
+    # we explicitly enable those features below, but on CPython they might not
+    # be available if using some system libsqlite that doesn't have them
+    import sqlite3
+    conn = sqlite3.connect(':memory:')
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS your_table USING fts5(column1, column2)")
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS your_table USING fts4(column1, column2)")
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS your_table USING fts3(column1, column2)")
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS your_table USING rtree(column1, column2)")
+        sqpi = next(conn.execute("SELECT pi()"))[0]
+        assert 3.14 == float(f'{sqpi:.2f}'), sqpi
+    except sqlite3.OperationalError:
+        import sys
+        assert sys.implementation.name != "graalpy"
+    conn.close()

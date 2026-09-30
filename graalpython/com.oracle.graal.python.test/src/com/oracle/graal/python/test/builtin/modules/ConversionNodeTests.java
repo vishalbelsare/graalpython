@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,15 +42,14 @@ package com.oracle.graal.python.test.builtin.modules;
 
 import static com.oracle.graal.python.util.PythonUtils.tsArray;
 
-import org.junit.Rule;
-import org.junit.rules.ExpectedException;
+import org.junit.Assert;
+import org.junit.function.ThrowingRunnable;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.objects.exception.PBaseException;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.nodes.PRootNode;
-import com.oracle.graal.python.nodes.call.CallTargetInvokeNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentCastNode;
 import com.oracle.graal.python.runtime.ExecutionContext.CalleeContext;
 import com.oracle.graal.python.runtime.ExecutionContext.IndirectCalleeContext;
@@ -58,16 +57,16 @@ import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.frame.VirtualFrame;
 
 public class ConversionNodeTests {
-    static final Signature SIGNATURE = new Signature(-1, false, -1, false, tsArray("arg"), null);
-    @Rule public ExpectedException expectedException = ExpectedException.none();
+    static final Signature SIGNATURE = new Signature(-1, false, -1, tsArray("arg"), null);
 
     protected static Object call(Object arg, ArgumentCastNode castNode) {
-        PythonLanguage language = PythonLanguage.get(castNode);
         final PythonContext pythonContext = PythonContext.get(castNode);
+        PythonLanguage language = pythonContext.getLanguage(castNode);
 
         RootCallTarget callTarget = new PRootNode(language) {
             @Child private CalleeContext calleeContext = CalleeContext.create();
@@ -77,7 +76,7 @@ public class ConversionNodeTests {
             public Object execute(VirtualFrame frame) {
                 GilNode gilNode = GilNode.getUncached();
                 boolean wasAcquired = gilNode.acquire();
-                calleeContext.enter(frame);
+                calleeContext.enter(frame, this);
                 try {
                     return node.execute(frame, PArguments.getArgument(frame, 0));
                 } finally {
@@ -98,27 +97,26 @@ public class ConversionNodeTests {
         }.getCallTarget();
         try {
             Object[] arguments = PArguments.create(1);
-            PArguments.setGlobals(arguments, pythonContext.factory().createDict());
+            PArguments.setGlobals(arguments, PFactory.createDict(language));
             PArguments.setException(arguments, PException.NO_EXCEPTION);
             PArguments.setArgument(arguments, 0, arg);
             PythonThreadState threadState = pythonContext.getThreadState(language);
-            Object state = IndirectCalleeContext.enter(threadState, arguments, callTarget);
+            Object state = IndirectCalleeContext.enter(threadState, arguments);
             try {
-                return CallTargetInvokeNode.invokeUncached(callTarget, arguments);
+                return CallDispatchers.SimpleIndirectInvokeNode.executeUncached(callTarget, arguments);
             } finally {
                 IndirectCalleeContext.exit(threadState, state);
             }
         } catch (PException e) {
             // materialize PException's error message since we are leaving Python
-            if (e.getUnreifiedException() instanceof PBaseException managedException) {
-                e.setMessage(managedException.getFormattedMessage());
-            }
+            e.materializeMessage();
             throw e;
         }
     }
 
-    protected void expectPythonMessage(String expectedMessage) {
-        expectedException.expect(PException.class);
-        expectedException.expectMessage(expectedMessage);
+    protected void expectPythonMessage(String expectedMessage, ThrowingRunnable runnable) {
+        PException exception = Assert.assertThrows(PException.class, runnable);
+        exception.materializeMessage();
+        Assert.assertEquals(expectedMessage, exception.getMessage());
     }
 }

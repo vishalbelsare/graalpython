@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,6 +54,7 @@ import static com.oracle.graal.python.runtime.PosixConstants.S_IFREG;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
+import com.oracle.graal.python.builtins.objects.exception.OSErrorEnum;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -103,13 +104,25 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract void setInheritable(Object receiver, int fd, boolean inheritable) throws PosixException;
 
+    public abstract long getOsfHandle(Object receiver, int fd) throws PosixException;
+
+    public abstract int openOsfHandle(Object receiver, long handle, int flags) throws PosixException;
+
+    public abstract int setMode(Object receiver, int fd, int mode) throws PosixException;
+
+    public abstract void msvcrtLocking(Object receiver, int fd, int mode, long nbytes) throws PosixException;
+
     public abstract int[] pipe(Object receiver) throws PosixException;
 
     public abstract SelectResult select(Object receiver, int[] readfds, int[] writefds, int[] errorfds, Timeval timeout) throws PosixException;
 
+    public abstract void poll(Object receiver, int[] fds, int[] events, int[] revents, int timeout) throws PosixException;
+
     public abstract long lseek(Object receiver, int fd, long offset, int how) throws PosixException;
 
     public abstract void ftruncate(Object receiver, int fd, long length) throws PosixException;
+
+    public abstract void truncate(Object receiver, Object path, long length) throws PosixException;
 
     public abstract void fsync(Object receiver, int fd) throws PosixException;
 
@@ -122,6 +135,8 @@ public abstract class PosixSupportLibrary extends Library {
     public abstract void setBlocking(Object receiver, int fd, boolean blocking) throws PosixException;
 
     public abstract int[] getTerminalSize(Object receiver, int fd) throws PosixException;
+
+    public abstract long sysconf(Object receiver, int name) throws PosixException;
 
     // see stat_struct_to_longs in posix.c for the layout of the array
     public abstract long[] fstatat(Object receiver, int dirFd, Object pathname, boolean followSymlinks) throws PosixException;
@@ -240,7 +255,9 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract void renameat(Object receiver, int oldDirFd, Object oldPath, int newDirFd, Object newPath) throws PosixException;
 
-    public abstract boolean faccessat(Object receiver, int dirFd, Object path, int mode, boolean effectiveIds, boolean followSymlinks);
+    public abstract void replaceat(Object receiver, int oldDirFd, Object oldPath, int newDirFd, Object newPath) throws PosixException;
+
+    public abstract boolean faccessat(Object receiver, int dirFd, Object path, int mode, boolean effectiveIds, boolean followSymlinks) throws UnsupportedPosixFeatureException;
 
     public abstract void fchmodat(Object receiver, int dirFd, Object path, int mode, boolean followSymlinks) throws PosixException;
 
@@ -252,13 +269,21 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract Object readlinkat(Object receiver, int dirFd, Object path) throws PosixException;
 
+    public abstract void raise(Object receiver, int signal) throws PosixException;
+
+    public abstract int alarm(Object receiver, int seconds) throws PosixException;
+
+    public abstract Timeval[] getitimer(Object receiver, int which) throws PosixException;
+
+    public abstract Timeval[] setitimer(Object receiver, int which, Timeval delay, Timeval interval) throws PosixException;
+
+    public abstract void signalSelf(Object receiver, int signal) throws PosixException;
+
     public abstract void kill(Object receiver, long pid, int signal) throws PosixException;
 
     public abstract void killpg(Object receiver, long pid, int signal) throws PosixException;
 
     public abstract long[] waitpid(Object receiver, long pid, int options) throws PosixException;
-
-    public abstract void abort(Object receiver);
 
     public abstract boolean wcoredump(Object receiver, int status);
 
@@ -278,23 +303,53 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract long getuid(Object receiver);
 
-    public abstract long geteuid(Object receiver);
+    public abstract long geteuid(Object receiver) throws UnsupportedPosixFeatureException;
 
     public abstract long getgid(Object receiver);
 
-    public abstract long getppid(Object receiver);
+    public abstract long getegid(Object receiver) throws UnsupportedPosixFeatureException;
+
+    public abstract long getppid(Object receiver) throws UnsupportedPosixFeatureException;
 
     public abstract long getpgid(Object receiver, long pid) throws PosixException;
 
     public abstract void setpgid(Object receiver, long pid, long pgid) throws PosixException;
 
-    public abstract long getpgrp(Object receiver);
+    public abstract long getpgrp(Object receiver) throws UnsupportedPosixFeatureException;
 
     public abstract long getsid(Object receiver, long pid) throws PosixException;
 
     public abstract long setsid(Object receiver) throws PosixException;
 
     public abstract long[] getgroups(Object receiver) throws PosixException;
+
+    /**
+     * Equivalent to struct r_usage with the fields expected on macOS and Linux.
+     *
+     * @param ru_utime time in user mode (fractional seconds)
+     * @param ru_stime time in system mode (fractional seconds)
+     * @param ru_maxrss reserved memory size
+     * @param ru_ixrss shared memory size
+     * @param ru_idrss unshared memory size
+     * @param ru_isrss unshared stack size
+     * @param ru_minflt page faults not requiring I/O
+     * @param ru_majflt page faults requiring I/O
+     * @param ru_nswap number of swap outs
+     * @param ru_inblock block input operations
+     * @param ru_oublock block output operations
+     * @param ru_msgsnd messages sent
+     * @param ru_msgrcv messages received
+     * @param ru_nsignals signals received
+     * @param ru_nvcsw voluntary context switches
+     * @param ru_nivcsw involuntary context switches
+     */
+    public record RusageResult(double ru_utime, double ru_stime,
+                    long ru_maxrss, long ru_ixrss, long ru_idrss, long ru_isrss,
+                    long ru_minflt, long ru_majflt, long ru_nswap, long ru_inblock, long ru_oublock,
+                    long ru_msgsnd, long ru_msgrcv, long ru_nsignals, long ru_nvcsw, long ru_nivcsw) {
+    }
+
+    public abstract RusageResult getrusage(Object receiver, int who) throws PosixException;
 
     public record OpenPtyResult(int masterFd, int slaveFd) {
     }
@@ -303,14 +358,15 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract TruffleString ctermid(Object receiver) throws PosixException;
 
-    // note: this leaks memory in nfi backend and is not synchronized
+    // note: this leaks memory in native backend and is not synchronized
     // TODO is it worth synchronizing at least all accesses made through PosixSupportLibrary?
     public abstract void setenv(Object receiver, Object name, Object value, boolean overwrite) throws PosixException;
 
     public abstract void unsetenv(Object receiver, Object name) throws PosixException;
 
     public abstract int forkExec(Object receiver, Object[] executables, Object[] args, Object cwd, Object[] env, int stdinReadFd, int stdinWriteFd, int stdoutReadFd, int stdoutWriteFd,
-                    int stderrReadFd, int stderrWriteFd, int errPipeReadFd, int errPipeWriteFd, boolean closeFds, boolean restoreSignals, boolean callSetsid, int[] fdsToKeep) throws PosixException;
+                    int stderrReadFd, int stderrWriteFd, int errPipeReadFd, int errPipeWriteFd, boolean closeFds, boolean restoreSignals, boolean callSetsid, int pgidToSet, int[] fdsToKeep,
+                    boolean allowVFork) throws PosixException;
 
     // args.length must be > 0
     public abstract void execv(Object receiver, Object pathname, Object[] args) throws PosixException;
@@ -318,7 +374,7 @@ public abstract class PosixSupportLibrary extends Library {
     // does not throw, because posix does not exactly define the return value
     public abstract int system(Object receiver, Object command);
 
-    public abstract Object mmap(Object receiver, long length, int prot, int flags, int fd, long offset) throws PosixException;
+    public abstract Object mmap(Object receiver, long length, int prot, int flags, int fd, long offset, Object tagname) throws PosixException;
 
     public abstract byte mmapReadByte(Object receiver, Object mmap, long index) throws PosixException;
 
@@ -332,7 +388,7 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract void mmapUnmap(Object receiver, Object mmap, long length) throws PosixException;
 
-    public abstract long mmapGetPointer(Object receiver, Object mmap);
+    public abstract long mmapGetPointer(Object receiver, Object mmap) throws UnsupportedPosixFeatureException;
 
     public abstract long semOpen(Object receiver, Object name, int openFlags, int mode, int value) throws PosixException;
 
@@ -343,6 +399,10 @@ public abstract class PosixSupportLibrary extends Library {
     public abstract void semClose(Object receiver, long handle) throws PosixException;
 
     public abstract void semUnlink(Object receiver, Object name) throws PosixException;
+
+    public abstract int shmOpen(Object receiver, Object name, int openFlags, int mode) throws PosixException;
+
+    public abstract void shmUnlink(Object receiver, Object name) throws PosixException;
 
     public abstract int semGetValue(Object receiver, long handle) throws PosixException;
 
@@ -439,6 +499,19 @@ public abstract class PosixSupportLibrary extends Library {
     public abstract TruffleString getPathAsString(Object receiver, Object path);
 
     public abstract Buffer getPathAsBytes(Object receiver, Object path);
+
+    /** Converts a string to strict UTF-8 for non-filesystem APIs that use CPython's {@code s} conversion. */
+    public abstract Object createCStringFromString(Object receiver, TruffleString string);
+
+    /** Wraps already-encoded bytes for narrow native APIs without applying a filesystem conversion. */
+    public abstract Object createCStringFromBytes(Object receiver, byte[] bytes);
+
+    /** Converts a string to the UTF-16 representation used by Windows wide-character APIs. */
+    public abstract Object createWideStringFromString(Object receiver, TruffleString string);
+
+    public abstract TruffleString getCStringAsString(Object receiver, Object string);
+
+    public abstract Buffer getCStringAsBytes(Object receiver, Object string);
 
     // region Socket addresses
 
@@ -689,7 +762,8 @@ public abstract class PosixSupportLibrary extends Library {
      * information.
      *
      * @param src the IPv4 address in numbers-and-dots notation (converted to opaque object using
-     *            createPathFromBytes or createPathFromString)
+     *            {@link #createCStringFromBytes(Object, byte[])} or
+     *            {@link #createCStringFromString(Object, TruffleString)})
      * @return address in host byte order or {@link PosixConstants#INADDR_NONE} if the input is
      *         invalid
      * @see "inet(3) man pages"
@@ -702,7 +776,8 @@ public abstract class PosixSupportLibrary extends Library {
      * further conversions.
      *
      * @param src the IPv4 address in numbers-and-dots notation (converted to opaque object using
-     *            createPathFromBytes or createPathFromString)
+     *            {@link #createCStringFromBytes(Object, byte[])} or
+     *            {@link #createCStringFromString(Object, TruffleString)})
      * @return address in host byte order
      * @throws InvalidAddressException if {@code cp} is not a valid representation of an IPv4
      *             address
@@ -716,8 +791,8 @@ public abstract class PosixSupportLibrary extends Library {
      *
      * @param address tha IPv4 address in host byte order
      * @return opaque string in IPv4 dotted-decimal notation to be converted using
-     *         {@link PosixSupportLibrary#getPathAsString(Object, Object)} or
-     *         {@link PosixSupportLibrary#getPathAsBytes(Object, Object)}
+     *         {@link #getCStringAsString(Object, Object)} or
+     *         {@link #getCStringAsBytes(Object, Object)}
      * @see "inet(3) man pages"
      */
     public abstract Object inet_ntoa(Object receiver, int address);
@@ -726,7 +801,8 @@ public abstract class PosixSupportLibrary extends Library {
      * Corresponds to POSIX {@code inet_pton} function.
      *
      * @param family {@code AF_INET} or {@code AF_INET6}
-     * @param src opaque string (converted using createPathFromBytes or createPathFromString)
+     * @param src opaque string (converted using {@link #createCStringFromBytes(Object, byte[])} or
+     *            {@link #createCStringFromString(Object, TruffleString)})
      * @return the binary address in network order (4 bytes for {@code AF_INET}, 16 bytes for
      *         {@code AF_INET6})
      * @throws PosixException with {@code EAFNOSUPPORT} if the {@code family} is not supported
@@ -741,7 +817,8 @@ public abstract class PosixSupportLibrary extends Library {
      * @param family {@code AF_INET} or {@code AF_INET6}
      * @param src the address in network order, must be at least 4 (for {@code AF_INET}) or 16 (for
      *            {@code AF_INET6}) bytes long, extra bytes are ignored
-     * @return an opaque string to be converted using getPathAsString or getPathAsBytes
+     * @return an opaque string to be converted using {@link #getCStringAsString(Object, Object)} or
+     *         {@link #getCStringAsBytes(Object, Object)}
      * @throws PosixException with {@code EAFNOSUPPORT} if the {@code family} is not supported
      * @throws IllegalArgumentException if {@code src} does not satisfy the requirements stated
      *             above
@@ -749,7 +826,8 @@ public abstract class PosixSupportLibrary extends Library {
     public abstract Object inet_ntop(Object receiver, int family, byte[] src) throws PosixException;
 
     /**
-     * @return an opaque string to be converted using getPathAsString or getPathAsBytes
+     * @return an opaque string to be converted using {@link #getCStringAsString(Object, Object)} or
+     *         {@link #getCStringAsBytes(Object, Object)}
      */
     public abstract Object gethostname(Object receiver) throws PosixException;
 
@@ -759,24 +837,25 @@ public abstract class PosixSupportLibrary extends Library {
      *
      * @param addr socket address to convert
      * @param flags a combination of {@code NI_xxx} flags
-     * @return an array of two (host, service) opaque strings to be converted using getPathAsString
-     *         or getPathAsBytes
+     * @return an array of two (host, service) opaque strings to be converted using
+     *         {@link #getCStringAsString(Object, Object)} or
+     *         {@link #getCStringAsBytes(Object, Object)}
      * @throws GetAddrInfoException when an error occurs (PosixException is not thrown because
      *             getnameinfo uses its own error codes and gai_strerror instead of the usual errno
      *             and strerror)
      */
-    public abstract Object[] getnameinfo(Object receiver, UniversalSockAddr addr, int flags) throws GetAddrInfoException;
+    public abstract Object[] getnameinfo(Object receiver, UniversalSockAddr addr, int flags) throws UnsupportedPosixFeatureException, GetAddrInfoException;
 
     /**
      * Corresponds to POSIX {@code getaddrinfo(3)}, except it always passes a non-null value for the
      * {@code hints} parameter.
      *
      * @param node {@code null} or the host name converted using
-     *            {@link PosixSupportLibrary#createPathFromBytes(Object, byte[])} or
-     *            {@link PosixSupportLibrary#createPathFromString(Object, TruffleString)}
+     *            {@link #createCStringFromBytes(Object, byte[])} or
+     *            {@link #createCStringFromString(Object, TruffleString)}
      * @param service {@code null} or the service name converted using
-     *            {@link PosixSupportLibrary#createPathFromBytes(Object, byte[])} or
-     *            {@link PosixSupportLibrary#createPathFromString(Object, TruffleString)}
+     *            {@link #createCStringFromBytes(Object, byte[])} or
+     *            {@link #createCStringFromString(Object, TruffleString)}
      * @param family one of the {@code AF_xxx} constants, or {@link PosixConstants#AF_UNSPEC} to get
      *            addresses of any family
      * @param sockType one of the {@code SOCK_xxx} constants, or 0 to get addresses of any type
@@ -788,7 +867,8 @@ public abstract class PosixSupportLibrary extends Library {
      *             getaddrinfo uses its own error codes and gai_strerror instead of the usual errno
      *             and strerror)
      */
-    public abstract AddrInfoCursor getaddrinfo(Object receiver, Object node, Object service, int family, int sockType, int protocol, int flags) throws GetAddrInfoException;
+    public abstract AddrInfoCursor getaddrinfo(Object receiver, Object node, Object service, int family, int sockType, int protocol, int flags)
+                    throws UnsupportedPosixFeatureException, GetAddrInfoException;
 
     /**
      * Represents one or more addrinfos returned by {@code getaddrinfo()}.
@@ -803,16 +883,9 @@ public abstract class PosixSupportLibrary extends Library {
     public interface AddrInfoCursor {
     }
 
-    /**
-     * Corresponds to POSIX crypt function that hashes passwords with salt.
-     *
-     * @param word password to be hashed
-     * @param salt random salt, optionally prefixed with $DIGIT$ hash method indication
-     * @return hashed password
-     * @throws PosixException when an error occurs in the underlying crypt call
-     * @see "crypt(3) manpage"
-     */
-    public abstract TruffleString crypt(Object receiver, TruffleString word, TruffleString salt) throws PosixException;
+    public abstract int ioctlBytes(Object receiver, int fd, long request, byte[] arg) throws PosixException;
+
+    public abstract int ioctlInt(Object receiver, int fd, long request, int arg) throws PosixException;
 
     /**
      * Provides messages for manipulating {@link AddrInfoCursor}.
@@ -872,7 +945,7 @@ public abstract class PosixSupportLibrary extends Library {
      * Exception that indicates and error while executing
      * {@link #getaddrinfo(Object, Object, Object, int, int, int, int)}.
      */
-    public static class GetAddrInfoException extends Exception {
+    public static final class GetAddrInfoException extends Exception {
 
         private static final long serialVersionUID = 3013253817849329391L;
 
@@ -909,7 +982,7 @@ public abstract class PosixSupportLibrary extends Library {
 
     public abstract UniversalSockAddr createUniversalSockAddrInet6(Object receiver, Inet6SockAddr src);
 
-    public abstract UniversalSockAddr createUniversalSockAddrUnix(Object receiver, UnixSockAddr src) throws InvalidUnixSocketPathException;
+    public abstract UniversalSockAddr createUniversalSockAddrUnix(Object receiver, UnixSockAddr src) throws UnsupportedPosixFeatureException, InvalidUnixSocketPathException;
 
     /**
      * Provides messages for manipulating {@link UniversalSockAddr}.
@@ -965,23 +1038,59 @@ public abstract class PosixSupportLibrary extends Library {
     }
 
     /**
+     * Base class for exceptions that originate in the POSIX support layer.
+     */
+    public abstract static class PosixException extends Exception {
+
+        private static final long serialVersionUID = 8700515065120346760L;
+
+        protected PosixException() {
+        }
+
+        protected PosixException(String message) {
+            super(message);
+        }
+
+        public final boolean hasErrno(OSErrorEnum errno) {
+            return this instanceof PosixErrnoException errnoException && errnoException.getErrorCode() == errno.getNumber();
+        }
+
+        @SuppressWarnings("sync-override")
+        @Override
+        public Throwable fillInStackTrace() {
+            return this;
+        }
+    }
+
+    /**
      * Exception that indicates POSIX level error associated with numeric code. If the message is
      * known, it may be included in the exception, otherwise it can be queried using
      * {@link #strerror(Object, int)}.
      */
-    public static final class PosixException extends Exception {
+    public static final class PosixErrnoException extends PosixException {
 
         private static final long serialVersionUID = -115762483478883093L;
 
         private final int errorCode;
         private final transient TruffleString msg;
+        /*
+         * Windows APIs expose both POSIX errno and a native Win32/Winsock error code. Store the
+         * native code as java.lang.Integer rather than int because most PosixErrnoException
+         * instances are not backed by a Windows error, so this field can be null.
+         */
+        private final Integer winerror;
 
-        public PosixException(int errorCode, TruffleString message) {
-            this.errorCode = errorCode;
-            msg = message;
+        public PosixErrnoException(int errorCode, TruffleString message) {
+            this(errorCode, message, null);
         }
 
-        public final TruffleString getMessageAsTruffleString() {
+        public PosixErrnoException(int errorCode, TruffleString message, Integer winerror) {
+            this.errorCode = errorCode;
+            msg = message;
+            this.winerror = winerror;
+        }
+
+        public TruffleString getMessageAsTruffleString() {
             return msg;
         }
 
@@ -994,10 +1103,8 @@ public abstract class PosixSupportLibrary extends Library {
             return errorCode;
         }
 
-        @SuppressWarnings("sync-override")
-        @Override
-        public final Throwable fillInStackTrace() {
-            return this;
+        public Integer getWinerror() {
+            return winerror;
         }
     }
 
@@ -1045,18 +1152,12 @@ public abstract class PosixSupportLibrary extends Library {
      * certain feature is supported or not, but even then this exception may be thrown for other
      * features.
      */
-    public static class UnsupportedPosixFeatureException extends RuntimeException {
+    public static class UnsupportedPosixFeatureException extends PosixException {
 
         private static final long serialVersionUID = 1846254827094902593L;
 
         public UnsupportedPosixFeatureException(String message) {
             super(message);
-        }
-
-        @Override
-        @SuppressWarnings("sync-override")
-        public final Throwable fillInStackTrace() {
-            return this;
         }
     }
 

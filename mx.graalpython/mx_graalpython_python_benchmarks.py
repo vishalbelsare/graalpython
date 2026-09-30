@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,21 +36,18 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
-import mx
-import mx_benchmark
-
 import glob
 import json
 import math
 import os
 import re
 import shutil
-import subprocess
 import sys
+import tempfile
+from os.path import join, abspath
 
-from os.path import join, abspath, exists
-
+import mx
+import mx_benchmark
 
 SUITE = None
 python_vm_registry = None
@@ -72,10 +69,93 @@ DEFAULT_NUMPY_BENCHMARKS = [
     # "bench_ufunc",
 ]
 
+SKIPPED_NUMPY_BENCHMARKS = [
+    "bench_core.CountNonzero.time_count_nonzero(1, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero(2, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero(3, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero(1, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero(2, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero(3, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_axis(1, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_axis(2, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_axis(3, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_axis(1, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_axis(2, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_axis(3, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_multi_axis(1, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_multi_axis(2, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_multi_axis(3, 1000000, <class 'str'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_multi_axis(1, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_multi_axis(2, 1000000, <class 'object'>)",  # Times out
+    "bench_core.CountNonzero.time_count_nonzero_multi_axis(3, 1000000, <class 'object'>)",  # Times out
+    "bench_linalg.LinalgSmallArrays.time_det_small_array",  # TODO fails with numpy.linalg.LinAlgError
+    "bench_indexing.IndexingSeparate.time_mmap_fancy_indexing",  # Hangs in periodic job GR-73912
+    "bench_indexing.IndexingStructured0D.time_array_slice",  # Hangs in periodic job GR-73912
+]
+
+SKIPPED_NUMPY_BENCHMARK_PATTERNS = [
+    # These patterns match ASV's expanded benchmark names. They keep the small
+    # cases while dropping large Cartesian-product outliers that dominate the
+    # periodic job runtime.
+    r"bench_core\.CorrConv\.time_(?:correlate|convolve)\((?:100000,|[^)]*, (?:1000|10000), )",
+    r"bench_core\.CountNonzero\.time_count_nonzero(?:_axis|_multi_axis)?\([1-3], (?:10000|1000000), ",
+    r"bench_core\.Nonzero\.time_nonzero(?:_sparse|_dense)?\([^)]*, \((?:1000000,|1000, 1000)\)\)",
+    r"bench_core\.StatsMethods\.time_(?:max|mean|min|prod|std|sum|var)\('[^']+', 10000\)",
+    r"bench_indexing\.Indexing\.time_op\('(?:complex64|complex128|object|O,i)'",
+    r"bench_indexing\.Indexing\.time_op\('[^']+', 'indexes_rand_'",
+    r"bench_indexing\.Indexing\.time_op\('[^']+', '[^']+', 'np\.ix_\(I, I\)'",
+    r"bench_indexing\.IndexingWith1DArr\.time_(?:getitem|setitem)_ordered\(\((?:1000, 2|2, 1000, 1|1000, 3)\), ",
+    r"bench_linalg\.LinAlgTransposeVdot\.time_(?:transpose|vdot)\(\(64, 64\), ",
+    r"bench_linalg\.MatmulStrided\.time_matmul\('matmul_m(?:150|400)_",
+]
+
 DEFAULT_PANDAS_BENCHMARKS = [
     "reshape",
     "replace"
 ]
+
+SKIPPED_PANDAS_BENCHMARKS = [
+    "replace.ReplaceDict.time_replace_series",  # Times out
+    "replace.ReplaceList.time_replace_list",  # OOM, WIP msimacek
+    "replace.ReplaceList.time_replace_list_one_match",  # OOM, WIP msimacek
+    "reshape.Crosstab.time_crosstab_normalize_margins",  # Times out
+    "reshape.Cut.peakmem_cut_interval",  # Times out
+    "reshape.Cut.time_cut_interval",  # Times out
+    "reshape.GetDummies.time_get_dummies_1d_sparse",  # Times out
+    "reshape.PivotTable.time_pivot_table_categorical",  # Hangs in periodic job GR-74045
+    "reshape.PivotTable.time_pivot_table_margins",  # Times out
+    "reshape.WideToLong.time_wide_to_long_big",  # Times out
+    "reshape.Cut.time_qcut_datetime",  # Transient failure GR-61245, exit code -11
+    "reshape.Explode.time_explode",  # Transient failure GR-61245, exit code -11
+]
+
+SETUPTOOLS_PIN = "77.0.1"
+
+
+def add_cpython_build_env(env=None):
+    if python3_home := os.environ.get("PYTHON3_HOME"):
+        checkout_include = join(python3_home, "Include")
+        installed_includes = sorted(glob.glob(join(python3_home, os.pardir, "include", "python*")))
+        include_dir = next(
+            (path for path in [checkout_include, *installed_includes] if os.path.exists(join(path, "Python.h"))),
+            None,
+        )
+        if include_dir:
+            env = env.copy() if env is not None else os.environ.copy()
+            include_dirs = [include_dir]
+            if include_dir == checkout_include:
+                include_dirs.append(python3_home)
+            python_includes = os.pathsep.join(include_dirs)
+            include_flags = " ".join(f"-I{path}" for path in python_includes.split(os.pathsep))
+            env["CPATH"] = python_includes + (os.pathsep + env["CPATH"] if env.get("CPATH") else "")
+            for key in ["CFLAGS", "CPPFLAGS", "CXXFLAGS"]:
+                env[key] = include_flags + (" " + env[key] if env.get(key) else "")
+            lib_dir = join(python3_home, os.pardir, "lib")
+            if not os.path.isdir(lib_dir):
+                lib_dir = python3_home
+            env["LIBRARY_PATH"] = lib_dir + (os.pathsep + env["LIBRARY_PATH"] if env.get("LIBRARY_PATH") else "")
+    return env
+
 
 DEFAULT_PYPERFORMANCE_BENCHMARKS = [
     # "2to3",
@@ -91,7 +171,7 @@ DEFAULT_PYPERFORMANCE_BENCHMARKS = [
     # "html5lib",
     "json_dumps",
     "json_loads",
-    "logging",
+    # "logging",
     # "mako",
     "meteor_contest",
     "nbody",
@@ -171,6 +251,50 @@ DEFAULT_PYPY_BENCHMARKS = [
     # "twisted_pb",
     # "twisted_tcp",
 ]
+
+
+def create_asv_benchmark_selection(benchmarks, skipped=(), skipped_patterns=()):
+    regex = '|'.join(benchmarks)
+    negative_lookaheads = [re.escape(skip) + (r'\b' if not skip.endswith(')') else '') for skip in skipped]
+    negative_lookaheads.extend(skipped_patterns)
+    if not negative_lookaheads:
+        return regex
+    return '^(?!' + '|'.join(negative_lookaheads) + ')(' + regex + ')'
+
+
+def patch_asv_for_cpython_312(workdir, vm_venv):
+    pattern = join(workdir, vm_venv, "lib", "python*", "site-packages", "asv", "plugins", "virtualenv.py")
+    candidates = glob.glob(pattern)
+    if not candidates:
+        mx.abort(f"Could not find ASV virtualenv plugin to patch: {pattern}")
+
+    if len(candidates) != 1:
+        mx.abort(f"Found multiple ASV virtualenv plugins to patch: {candidates}")
+
+    virtualenv_py = candidates[0]
+    with open(virtualenv_py) as f:
+        content = f.read()
+
+    patched_import = "from packaging.version import parse as LooseVersion"
+    if patched_import in content:
+        mx.log(f"ASV virtualenv plugin already patched: {virtualenv_py}")
+        return
+
+    distutils_import = "from distutils.version import LooseVersion"
+    if distutils_import not in content:
+        mx.abort(f"Unexpected ASV virtualenv plugin contents, cannot patch: {virtualenv_py}")
+
+    content = content.replace(
+        distutils_import,
+        "try:\n"
+        "    from packaging.version import parse as LooseVersion\n"
+        "except Exception:\n"
+        "    from distutils.version import LooseVersion",
+        1,
+    )
+    with open(virtualenv_py, "w") as f:
+        f.write(content)
+    mx.log(f"Patched ASV virtualenv plugin for CPython 3.12+: {virtualenv_py}")
 
 
 class PyPerfJsonRule(mx_benchmark.Rule):
@@ -340,121 +464,6 @@ class PyPyJsonRule(mx_benchmark.Rule, mx_benchmark.AveragingBenchmarkMixin):
         return r
 
 
-class GraalPyVm(mx_benchmark.GuestVm):
-    def __init__(self, config_name, options, host_vm=None):
-        super(GraalPyVm, self).__init__(host_vm=host_vm)
-        self._config_name = config_name
-        self._options = options
-
-    def name(self):
-        return "graalpython"
-
-    def config_name(self):
-        return self._config_name
-
-    def hosting_registry(self):
-        return mx_benchmark.java_vm_registry
-
-    def with_host_vm(self, host_vm):
-        return self.__class__(self.config_name(), self._options, host_vm)
-
-    def run(self, cwd, args):
-        for arg in args:
-            if "--vm.Xmx" in arg:
-                mx.log(f"Setting Xmx from {arg}")
-                break
-        else:
-            xmxArg = "--vm.Xmx8G"
-            mx.log(f"Setting Xmx as {xmxArg}")
-            args.insert(0, xmxArg)
-        try:
-            old_gp_arg = os.environ.get("GRAAL_PYTHON_ARGS")
-            if old_gp_arg:
-                os.environ["GRAAL_PYTHON_ARGS"] = old_gp_arg + " " + xmxArg
-            else:
-                os.environ["GRAAL_PYTHON_ARGS"] = xmxArg
-            old_java_opts = os.environ.get("JAVA_OPTS")
-            if old_java_opts:
-                os.environ["JAVA_OPTS"] = old_java_opts + " " + xmxArg.replace("--vm", "-")
-            else:
-                os.environ["JAVA_OPTS"] = xmxArg.replace("--vm.", "-")
-            mx.log("Running with `JAVA_OPTS={JAVA_OPTS}` and `GRAAL_PYTHON_ARGS={GRAAL_PYTHON_ARGS}`".format(**os.environ))
-            return self.host_vm().run_launcher("graalpy", self._options + args, cwd)
-        finally:
-            if old_java_opts:
-                os.environ["JAVA_OPTS"] = old_java_opts
-            else:
-                del os.environ["JAVA_OPTS"]
-            if old_gp_arg:
-                os.environ["GRAAL_PYTHON_ARGS"] = old_gp_arg
-            else:
-                del os.environ["GRAAL_PYTHON_ARGS"]
-
-
-class PyPyVm(mx_benchmark.Vm):
-    def config_name(self):
-        return "launcher"
-
-    def name(self):
-        return "pypy"
-
-    def interpreter(self):
-        home = mx.get_env("PYPY_HOME")
-        if not home:
-            try:
-                return (
-                    subprocess.check_output("which pypy3", shell=True).decode().strip()
-                )
-            except OSError:
-                mx.abort("{} is not set!".format("PYPY_HOME"))
-        return join(home, "bin", "pypy3")
-
-    def run(self, cwd, args):
-        env = os.environ.copy()
-        xmxArg = re.compile("--vm.Xmx([0-9]+)([kKgGmM])")
-        pypyGcMax = "8GB"
-        for idx, arg in enumerate(args):
-            if m := xmxArg.search(arg):
-                args = args[:idx] + args[idx + 1 :]
-                pypyGcMax = f"{m.group(1)}{m.group(2).upper()}B"
-                mx.log(f"Setting PYPY_GC_MAX={pypyGcMax} via {arg}")
-                break
-        else:
-            mx.log(
-                f"Setting PYPY_GC_MAX={pypyGcMax}, use --vm.Xmx argument to override it"
-            )
-        env["PYPY_GC_MAX"] = pypyGcMax
-        return mx.run([self.interpreter()] + args, cwd=cwd, env=env)
-
-
-class Python3Vm(mx_benchmark.Vm):
-    def config_name(self):
-        return "launcher"
-
-    def name(self):
-        return "cpython"
-
-    def interpreter(self):
-        home = mx.get_env("PYTHON3_HOME")
-        if not home:
-            return sys.executable
-        if exists(exe := join(home, "bin", "python3")):
-            return exe
-        elif exists(exe := join(home, "python3")):
-            return exe
-        elif exists(exe := join(home, "python")):
-            return exe
-        return join(home, "bin", "python")
-
-    def run(self, cwd, args):
-        for idx, arg in enumerate(args):
-            if "--vm.Xmx" in arg:
-                mx.warn(f"Ignoring {arg}, cannot restrict memory on CPython.")
-                args = args[:idx] + args[idx + 1 :]
-                break
-        return mx.run([self.interpreter()] + args, cwd=cwd)
-
-
 class WildcardList:
     """It is not easy to track for external suites which benchmarks are
     available, so we just return a wildcard list and assume the caller knows
@@ -477,23 +486,11 @@ class WildcardList:
 
 
 class PySuite(mx_benchmark.TemporaryWorkdirMixin, mx_benchmark.VmBenchmarkSuite):
-    def runAndReturnStdOut(self, benchmarks, bmSuiteArgs):
-        ret_code, out, dims = super().runAndReturnStdOut(benchmarks, bmSuiteArgs)
-
-        def _replace_host_vm(old, new):
-            host_vm = dims.get("host-vm")
-            if host_vm and old in host_vm:
-                dims['host-vm'] = host_vm.replace(old, new)
-                mx.logv(f"[DEBUG] replace 'host-vm': '{host_vm}' -> '{dims['host-vm']}'")
-
-        _replace_host_vm('graalvm-ce-python', 'graalvm-ce')
-        _replace_host_vm('graalvm-ee-python', 'graalvm-ee')
-
-        return ret_code, out, dims
+    pass
 
 
 class PyPerformanceSuite(PySuite):
-    VERSION = "1.0.6"
+    VERSION = "1.14.0"
 
     def name(self):
         return "pyperformance-suite"
@@ -519,6 +516,7 @@ class PyPerformanceSuite(PySuite):
     def _vmRun(self, vm, workdir, command, benchmarks, bmSuiteArgs):
         workdir = abspath(workdir)
         vm_venv = f"{self.name()}-{vm.name()}-{vm.config_name()}"
+        _, _, vm_dims = vm.run(workdir, ["--version"])
 
         if not hasattr(self, "prepared"):
             self.prepared = True
@@ -536,42 +534,43 @@ class PyPerformanceSuite(PySuite):
             bms = ["-b", ",".join(benchmarks)]
         else:
             bms = ["-b", ",".join(DEFAULT_PYPERFORMANCE_BENCHMARKS)]
-        json_file = f"{vm_venv}.json"
-        retcode = mx.run(
-            [
-                join(vm_venv, "bin", "pyperformance"),
-                "run",
-                "--inherit-environ",
-                "PIP_INDEX_URL,PIP_TRUSTED_HOST,PIP_TIMEOUT,PIP_RETRIES,LD_LIBRARY_PATH,LIBRARY_PATH,CPATH,PATH,PYPY_GC_MAX,JAVA_OPTS,GRAAL_PYTHON_ARGS",
-                "-o",
-                json_file,
-                *bms,
-            ],
-            cwd=workdir,
-            nonZeroIsFatal=False,
-        )
-        mx.log(f"Return code of benchmark harness: {retcode}")
-        # run again in single shot mode for memory measurements
-        json_file_memory = f"{vm_venv}_memory.json"
-        retcode = mx.run(
-            [
-                join(vm_venv, "bin", "pyperformance"),
-                "run",
-                "--debug-single-value",
-                "--track-memory",
-                "--inherit-environ",
-                "PIP_INDEX_URL,PIP_TRUSTED_HOST,PIP_TIMEOUT,PIP_RETRIES,LD_LIBRARY_PATH,LIBRARY_PATH,CPATH,PATH,PYPY_GC_MAX,JAVA_OPTS,GRAAL_PYTHON_ARGS",
-                "-o",
-                json_file_memory,
-                *bms,
-            ],
-            cwd=workdir,
-            nonZeroIsFatal=False,
-        )
-        mx.log(f"Return code of benchmark harness: {retcode}")
+        with vm.run_environment():
+            json_file = f"{vm_venv}.json"
+            retcode = mx.run(
+                [
+                    join(vm_venv, "bin", "pyperformance"),
+                    "run",
+                    "--inherit-environ",
+                    "PIP_INDEX_URL,PIP_EXTRA_INDEX_URL,PIP_TRUSTED_HOST,PIP_TIMEOUT,PIP_RETRIES,LD_LIBRARY_PATH,LIBRARY_PATH,CPATH,PATH,PYPY_GC_MAX,JAVA_OPTS,GRAAL_PYTHON_ARGS,GRAAL_PYTHON_VM_ARGS",
+                    "-o",
+                    json_file,
+                    *bms,
+                ],
+                cwd=workdir,
+                nonZeroIsFatal=False,
+            )
+            mx.log(f"Return code of benchmark harness: {retcode}")
+            # run again in single shot mode for memory measurements
+            json_file_memory = f"{vm_venv}_memory.json"
+            retcode = mx.run(
+                [
+                    join(vm_venv, "bin", "pyperformance"),
+                    "run",
+                    "--debug-single-value",
+                    "--track-memory",
+                    "--inherit-environ",
+                    "PIP_INDEX_URL,PIP_EXTRA_INDEX_URL,PIP_TRUSTED_HOST,PIP_TIMEOUT,PIP_RETRIES,LD_LIBRARY_PATH,LIBRARY_PATH,CPATH,PATH,PYPY_GC_MAX,JAVA_OPTS,GRAAL_PYTHON_ARGS,GRAAL_PYTHON_VM_ARGS",
+                    "-o",
+                    json_file_memory,
+                    *bms,
+                ],
+                cwd=workdir,
+                nonZeroIsFatal=False,
+            )
+            mx.log(f"Return code of benchmark harness: {retcode}")
         shutil.copy(join(workdir, json_file), join(SUITE.dir, "raw_results.json"))
         shutil.copy(join(workdir, json_file_memory), join(SUITE.dir, "raw_results_memory.json"))
-        return 0, ",".join([join(workdir, json_file), join(workdir, json_file_memory)])
+        return retcode, ",".join([join(workdir, json_file), join(workdir, json_file_memory)]), vm_dims
 
 
 class PyPySuite(PySuite):
@@ -601,6 +600,7 @@ class PyPySuite(PySuite):
     def _vmRun(self, vm, workdir, command, benchmarks, bmSuiteArgs):
         workdir = abspath(workdir)
         vm_venv = f"{self.name()}-{vm.name()}-{vm.config_name()}"
+        _, _, vm_dims = vm.run(workdir, ["--version"])
 
         if not hasattr(self, "prepared"):
             self.prepared = True
@@ -638,40 +638,39 @@ class PyPySuite(PySuite):
             bms = ["-b", ",".join(benchmarks)]
         else:
             bms = ["-b", ",".join(DEFAULT_PYPY_BENCHMARKS)]
-        retcode = mx.run(
-            [
-                sys.executable,
-                join(workdir, "benchmarks", "run_local.py"),
-                f"{vm_venv}/bin/python",
-                "-o",
-                join(workdir, json_file),
-                *bms,
-            ],
-            cwd=workdir,
-            nonZeroIsFatal=False,
-        )
+        with vm.run_environment():
+            retcode = mx.run(
+                [
+                    sys.executable,
+                    join(workdir, "benchmarks", "run_local.py"),
+                    f"{vm_venv}/bin/python",
+                    "-o",
+                    join(workdir, json_file),
+                    *bms,
+                ],
+                cwd=workdir,
+                nonZeroIsFatal=False,
+            )
         shutil.copy(join(workdir, json_file), join(SUITE.dir, "raw_results.json"))
         mx.log(f"Return code of benchmark harness: {retcode}")
-        return 0, join(workdir, json_file)
+        return retcode, join(workdir, json_file), vm_dims
 
 
 class NumPySuite(PySuite):
-    VERSION = "v1.23.5"
+    VERSION = "2.4.4"
 
-    PREREQUISITES = """
-    setuptools==63.1.0
-    wheel==0.37.1
-    """
-
-    BENCHMARK_REQ = f"""
-    asv==0.5.1
-    distlib==0.3.6
-    filelock==3.8.0
-    platformdirs==2.5.2
-    six==1.16.0
-    virtualenv==20.16.3
-    numpy=={VERSION}
-    """
+    BENCHMARK_REQ = [
+        "asv==0.5.1",
+        "asv-runner==0.2.1",
+        f"setuptools=={SETUPTOOLS_PIN}",
+        "distlib==0.3.6",
+        "filelock==3.8.0",
+        "platformdirs==2.5.2",
+        "six==1.16.0",
+        "virtualenv==20.16.3",
+        "packaging==24.0",
+        f"numpy=={VERSION}",
+    ]
 
     def name(self):
         return "numpy-suite"
@@ -698,6 +697,7 @@ class NumPySuite(PySuite):
         workdir = abspath(workdir)
         benchdir = join(workdir, "numpy", "benchmarks")
         vm_venv = f"{self.name()}-{vm.name()}-{vm.config_name()}"
+        _, _, vm_dims = vm.run(workdir, ["--version"])
 
         if not hasattr(self, "prepared"):
             self.prepared = True
@@ -706,15 +706,16 @@ class NumPySuite(PySuite):
                 shutil.copytree(artifact, npdir)
             else:
                 mx.warn("NUMPY_BENCHMARKS_DIR is not set, cloning numpy repository")
+                repo_url = os.environ.get("NUMPY_REPO_URL", "https://github.com/numpy/numpy.git")
                 mx.run(
                     [
                         "git",
                         "clone",
                         "--depth",
                         "1",
-                        "https://github.com/numpy/numpy.git",
+                        repo_url,
                         "--branch",
-                        self.VERSION,
+                        f"v{self.VERSION}",
                         "--single-branch",
                     ],
                     cwd=workdir,
@@ -724,72 +725,69 @@ class NumPySuite(PySuite):
             mx.run(["git", "config", "user.email", "you@example.com"], cwd=npdir)
             mx.run(["git", "config", "user.name", "YourName"], cwd=npdir)
             mx.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=npdir)
-            mx.run(["git", "branch", self.VERSION], cwd=npdir)
+            mx.run(["git", "branch", f"v{self.VERSION}"], cwd=npdir)
             mx.run(["git", "branch", "main"], cwd=npdir, nonZeroIsFatal=False)
             mx.run(["git", "branch", "master"], cwd=npdir, nonZeroIsFatal=False)
 
             vm.run(workdir, ["-m", "venv", join(workdir, vm_venv)])
             pip = join(workdir, vm_venv, "bin", "pip")
-            requirements_txt = join(workdir, "requirements.txt")
-            with open(requirements_txt, "w") as f:
-                f.write(self.PREREQUISITES)
-            mx.run([pip, "install", "-r", requirements_txt], cwd=workdir)
-            with open(requirements_txt, "w") as f:
-                f.write(self.BENCHMARK_REQ)
-            mx.run([pip, "install", "-r", requirements_txt], cwd=workdir)
+            env = add_cpython_build_env() if vm.name() == "cpython" else None
+            mx.run([pip, "install", *self.BENCHMARK_REQ], cwd=workdir, env=env)
+            if vm.name() == "cpython":
+                patch_asv_for_cpython_312(workdir, vm_venv)
             mx.run(
                 [join(workdir, vm_venv, "bin", "asv"), "machine", "--yes"], cwd=benchdir
             )
 
-        if benchmarks:
-            bms = ["-b", "|".join(benchmarks)]
-        else:
-            bms = ["-b", "|".join(DEFAULT_NUMPY_BENCHMARKS)]
-        retcode = mx.run(
-            [
-                join(workdir, vm_venv, "bin", "asv"),
-                "run",
-                "--record-samples",
-                "-e",
-                "--python=same",
-                "--set-commit-hash",
-                self.VERSION,
-                *bms,
-            ],
-            cwd=benchdir,
-            nonZeroIsFatal=False,
-        )
+        if not benchmarks:
+            benchmarks = DEFAULT_NUMPY_BENCHMARKS
+        with vm.run_environment():
+            retcode = mx.run(
+                [
+                    join(workdir, vm_venv, "bin", "asv"),
+                    "run",
+                    "--strict",
+                    "--record-samples",
+                    "-e",
+                    "--python=same",
+                    "--set-commit-hash",
+                    f"v{self.VERSION}",
+                    "-b", create_asv_benchmark_selection(
+                        benchmarks, skipped=SKIPPED_NUMPY_BENCHMARKS, skipped_patterns=SKIPPED_NUMPY_BENCHMARK_PATTERNS
+                    ),
+                ],
+                cwd=benchdir,
+                nonZeroIsFatal=False,
+            )
 
         json_file = glob.glob(join(benchdir, "results", "*", "*numpy*.json"))
         mx.log(f"Return code of benchmark harness: {retcode}")
         if json_file:
             json_file = json_file[0]
             shutil.copy(json_file, join(SUITE.dir, "raw_results.json"))
-            return 0, json_file
+            return retcode, json_file, vm_dims
         else:
-            return -1, ""
+            return -1, "", vm_dims
 
 
 class PandasSuite(PySuite):
-    VERSION = "1.5.2"
+    VERSION = "3.0.2"
     VERSION_TAG = "v" + VERSION
 
-    PREREQUISITES = """
-    setuptools==63.1.0
-    wheel==0.37.1
-    """
-
-    BENCHMARK_REQ = f"""
-    asv==0.5.1
-    distlib==0.3.6
-    filelock==3.8.0
-    platformdirs==2.5.2
-    six==1.16.0
-    virtualenv==20.16.3
-    jinja2
-    numpy==1.23.5
-    pandas=={VERSION}
-    """
+    BENCHMARK_REQ = [
+        "asv==0.5.1",
+        f"setuptools=={SETUPTOOLS_PIN}",
+        "distlib==0.3.6",
+        "filelock==3.8.0",
+        "platformdirs==2.5.2",
+        "six==1.16.0",
+        "virtualenv==20.16.3",
+        "packaging==24.0",
+        "jinja2",
+        "tzdata==2026.2",
+        f"numpy=={NumPySuite.VERSION}",
+        f"pandas=={VERSION}",
+    ]
 
     def name(self):
         return "pandas-suite"
@@ -819,6 +817,7 @@ class PandasSuite(PySuite):
         workdir = abspath(workdir)
         benchdir = join(workdir, "pandas", "asv_bench")
         vm_venv = f"{self.name()}-{vm.name()}-{vm.config_name()}"
+        _, _, vm_dims = vm.run(workdir, ["--version"])
 
         if not hasattr(self, "prepared"):
             self.prepared = True
@@ -869,44 +868,51 @@ class PandasSuite(PySuite):
 
             vm.run(workdir, ["-m", "venv", join(workdir, vm_venv)])
             pip = join(workdir, vm_venv, "bin", "pip")
-            requirements_txt = join(workdir, "requirements.txt")
-            with open(requirements_txt, "w") as f:
-                f.write(self.PREREQUISITES)
-            mx.run([pip, "install", "-r", requirements_txt], cwd=workdir)
-            with open(requirements_txt, "w") as f:
-                f.write(self.BENCHMARK_REQ)
-            mx.run([pip, "install", "-r", requirements_txt], cwd=workdir)
+            with tempfile.NamedTemporaryFile('w') as constraints:
+                constraints.write(f"setuptools=={SETUPTOOLS_PIN}\n")
+                # pandas' isolated build must use the same NumPy C ABI as the
+                # runtime. An older build-time NumPy uses different offsets
+                # for datetime dtype metadata and segfaults at runtime.
+                constraints.write(f"numpy=={NumPySuite.VERSION}\n")
+                constraints.flush()
+                env = os.environ.copy()
+                env['PIP_CONSTRAINT'] = constraints.name
+                if vm.name() == "cpython":
+                    env = add_cpython_build_env(env)
+                mx.run([pip, "install", *self.BENCHMARK_REQ], cwd=workdir, env=env)
+            if vm.name() == "cpython":
+                patch_asv_for_cpython_312(workdir, vm_venv)
             mx.run(
                 [join(workdir, vm_venv, "bin", "asv"), "machine", "--yes"], cwd=benchdir
             )
 
-        if benchmarks:
-            bms = ["-b", "|".join(benchmarks)]
-        else:
-            bms = ["-b", "|".join(DEFAULT_PANDAS_BENCHMARKS)]
-        retcode = mx.run(
-            [
-                join(workdir, vm_venv, "bin", "asv"),
-                "run",
-                "--record-samples",
-                "-e",
-                "--python=same",
-                "--set-commit-hash",
-                self.VERSION_TAG,
-                *bms,
-            ],
-            cwd=benchdir,
-            nonZeroIsFatal=False,
-        )
+        if not benchmarks:
+            benchmarks = DEFAULT_PANDAS_BENCHMARKS
+        with vm.run_environment():
+            retcode = mx.run(
+                [
+                    join(workdir, vm_venv, "bin", "asv"),
+                    "run",
+                    "--strict",
+                    "--record-samples",
+                    "-e",
+                    "--python=same",
+                    "--set-commit-hash",
+                    self.VERSION_TAG,
+                    "-b", create_asv_benchmark_selection(benchmarks, skipped=SKIPPED_PANDAS_BENCHMARKS),
+                ],
+                cwd=benchdir,
+                nonZeroIsFatal=False,
+            )
 
         json_file = glob.glob(join(benchdir, "results", "*", "*pandas*.json"))
         mx.log(f"Return code of benchmark harness: {retcode}")
         if json_file:
             json_file = json_file[0]
             shutil.copy(json_file, join(SUITE.dir, "raw_results.json"))
-            return 0, json_file
+            return retcode, json_file, vm_dims
         else:
-            return -1, ""
+            return -1, "", vm_dims
 
 
 def register_python_benchmarks():
@@ -915,15 +921,7 @@ def register_python_benchmarks():
     from mx_graalpython_benchmark import python_vm_registry as vm_registry
 
     python_vm_registry = vm_registry
-
     SUITE = mx.suite("graalpython")
-
-    python_vm_registry.add_vm(PyPyVm())
-    python_vm_registry.add_vm(Python3Vm())
-    for config_name, options, priority in [
-        ("launcher", [], 5),
-    ]:
-        python_vm_registry.add_vm(GraalPyVm(config_name, options), SUITE, priority)
 
     mx_benchmark.add_bm_suite(PyPerformanceSuite())
     mx_benchmark.add_bm_suite(PyPySuite())

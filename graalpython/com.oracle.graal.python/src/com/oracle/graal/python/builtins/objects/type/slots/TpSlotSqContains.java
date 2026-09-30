@@ -1,0 +1,184 @@
+/*
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * The Universal Permissive License (UPL), Version 1.0
+ *
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
+ *
+ * (a) the Software, and
+ *
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+package com.oracle.graal.python.builtins.objects.type.slots;
+
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CONTAINS__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___CONTAINS__;
+
+import java.lang.ref.Reference;
+
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PExternalFunctionWrapper;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.type.slots.PythonDispatchers.BinaryPythonSlotDispatcherNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotCExtNative;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotPythonSingle;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryFunc.TpSlotBinaryFuncBuiltin;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotInquiry.CheckInquiryResultNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSqContainsFactory.CallSlotSqContainsNodeGen;
+import com.oracle.graal.python.lib.PyObjectIsTrueNode;
+import com.oracle.graal.python.lib.PySequenceIterSearchNode;
+import com.oracle.graal.python.lib.PySequenceIterSearchNode.LazyPySequenceIterSeachNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.PythonContext.GetThreadStateNode;
+import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NodeFactory;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.Node;
+
+public final class TpSlotSqContains {
+    private TpSlotSqContains() {
+    }
+
+    public abstract static class TpSlotSqContainsBuiltin<T extends SqContainsBuiltinNode> extends TpSlotBinaryFuncBuiltin<T> {
+
+        protected TpSlotSqContainsBuiltin(NodeFactory<T> nodeFactory) {
+            super(nodeFactory, PExternalFunctionWrapper.OBJOBJPROC, J___CONTAINS__);
+        }
+
+        final SqContainsBuiltinNode createOpSlotNode() {
+            return createNode();
+        }
+    }
+
+    @GenerateInline(value = false, inherit = true)
+    public abstract static class SqContainsBuiltinNode extends PythonBinaryBuiltinNode {
+        public abstract boolean executeBoolean(VirtualFrame frame, Object obj, Object value);
+
+        @Override
+        public final Object execute(VirtualFrame frame, Object obj, Object value) {
+            return executeBoolean(frame, obj, value);
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    public abstract static class CallSlotSqContainsNode extends Node {
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, "sq_contains");
+
+        public abstract boolean execute(VirtualFrame frame, Node inliningTarget, TpSlot slot, Object self, Object arg);
+
+        @TruffleBoundary
+        public static boolean executeUncached(TpSlot slot, Object self, Object arg) {
+            return CallSlotSqContainsNodeGen.getUncached().execute(null, null, slot, self, arg);
+        }
+
+        @Specialization(guards = "cachedSlot == slot", limit = "3")
+        static boolean callCachedBuiltin(VirtualFrame frame, @SuppressWarnings("unused") TpSlotSqContainsBuiltin<?> slot, Object self, Object arg,
+                        @SuppressWarnings("unused") @Cached("slot") TpSlotSqContainsBuiltin<?> cachedSlot,
+                        @Cached("cachedSlot.createOpSlotNode()") SqContainsBuiltinNode slotNode) {
+            return slotNode.executeBoolean(frame, self, arg);
+        }
+
+        @Specialization
+        static boolean callPython(VirtualFrame frame, Node inliningTarget, TpSlotPythonSingle slot, Object self, Object arg,
+                        @Cached BinaryPythonSlotDispatcherNode dispatcherNode,
+                        @Cached PyObjectIsTrueNode isTrueNode,
+                        @Cached PRaiseNode raiseNode,
+                        @Cached LazyPySequenceIterSeachNode iterSearch) {
+            Object callable = slot.getCallable();
+            if (callable == null) {
+                return iterSearch.get(inliningTarget).executeCached(frame, self, arg, PySequenceIterSearchNode.PY_ITERSEARCH_CONTAINS) == 1;
+            }
+            if (callable == PNone.NONE) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.IS_NOT_A_CONTAINER, self);
+            }
+            Object result = dispatcherNode.execute(frame, inliningTarget, callable, slot.getType(), self, arg);
+            return isTrueNode.execute(frame, result);
+        }
+
+        @Specialization
+        static boolean callNative(VirtualFrame frame, Node inliningTarget, TpSlotCExtNative slot, Object self, Object arg,
+                        @Cached GetThreadStateNode getThreadStateNode,
+                        @Cached EnsurePythonObjectNode ensurePythonObjectNode,
+                        @Cached PythonToNativeInternalNode selfToNativeNode,
+                        @Cached PythonToNativeInternalNode argToNativeNode,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached CheckInquiryResultNode checkResultNode) {
+            PythonContext ctx = PythonContext.get(inliningTarget);
+            PythonThreadState state = getThreadStateNode.execute(inliningTarget, ctx);
+            Object promotedSelf = ensurePythonObjectNode.execute(ctx, self, false);
+            Object promotedArg = ensurePythonObjectNode.execute(ctx, arg, false);
+            try {
+                int iresult = ExternalFunctionInvoker.invokeOBJOBJPROC(frame, C_API_TIMING, ctx.ensureNativeContext(), boundaryCallData, state, slot.callable,
+                                selfToNativeNode.execute(inliningTarget, promotedSelf),
+                                argToNativeNode.execute(inliningTarget, promotedArg));
+                return checkResultNode.executeBool(inliningTarget, state, T___CONTAINS__, iresult);
+            } finally {
+                Reference.reachabilityFence(promotedSelf);
+                Reference.reachabilityFence(promotedArg);
+            }
+        }
+
+        @Specialization(replaces = "callCachedBuiltin")
+        @InliningCutoff
+        static boolean callGenericComplexBuiltin(VirtualFrame frame, Node inliningTarget, TpSlotBinaryFuncBuiltin<?> slot, Object self, Object arg,
+                        @Cached CallDispatchers.SimpleIndirectInvokeNode invoke) {
+            Object[] arguments = PArguments.create(2);
+            PArguments.setArgument(arguments, 0, self);
+            PArguments.setArgument(arguments, 1, arg);
+            RootCallTarget callTarget = PythonLanguage.get(inliningTarget).getBuiltinSlotCallTarget(slot.callTargetIndex);
+            return (boolean) invoke.execute(frame, inliningTarget, callTarget, arguments);
+        }
+    }
+}

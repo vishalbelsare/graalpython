@@ -1,4 +1,4 @@
-# Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -61,12 +61,11 @@ import urllib
 import urllib.request
 import tarfile
 import zipfile
-import glob
 
 assert sys.pycache_prefix is None
 
-# Prefix and filelist match the defaults in org.graalvm.python.embedding.utils.VirtualFileSystem
-VFS_PREFIX = "vfs"
+# Prefix and filelist match the defaults in org.graalvm.python.embedding.VirtualFileSystemImpl
+VFS_PREFIX = "org.graalvm.python.vfs"
 FILES_LIST_NAME = "fileslist.txt"
 FILES_LIST_PATH = VFS_PREFIX + "/" + FILES_LIST_NAME
 
@@ -74,20 +73,21 @@ FILES_LIST_PATH = VFS_PREFIX + "/" + FILES_LIST_NAME
 VFS_HOME = "home"
 VFS_HOME_PREFIX = f"{VFS_PREFIX}/{VFS_HOME}"
 VFS_VENV_PREFIX = VFS_PREFIX + "/venv"
-VFS_PROJ_PREFIX = VFS_PREFIX + "/proj"
+VFS_SRC_PREFIX = VFS_PREFIX + "/src"
 
 NATIVE_EXEC_LAUNCHER = "Py2BinLauncher"
 NATIVE_EXEC_LAUNCHER_FILE = f"{NATIVE_EXEC_LAUNCHER}.java"
 NATIVE_EXEC_LAUNCHER_TEMPLATE_PATH = f"resources/{NATIVE_EXEC_LAUNCHER_FILE}"
 
-NATIVE_IMAGE_RESOURCES_FILE = "native-image-resources.json"
+NATIVE_IMAGE_RESOURCES_FILE = "resource-config.json"
 NATIVE_IMAGE_RESOURCES_PATH = f"resources/{NATIVE_IMAGE_RESOURCES_FILE}"
 
 GRAALVM_URL_BASE = "https://download.oracle.com/graalvm/"
 
 MVN_REPOSITORY = os.getenv("MVN_REPOSITORY")
 MVN_GRAALPY_VERSION = os.getenv("MVN_GRAALPY_VERSION") if os.getenv("MVN_GRAALPY_VERSION") else __graalpython__.get_graalvm_version()
- 
+LEGACY_EMBEDDING_VERSION = '24.2.2'
+
 CMD_NATIVE_EXECUTABLE = "native"
 CMD_JAVA_PYTHON_APP = "polyglot_app"
 ATTR_STANDALONE_CMD = "command"
@@ -117,18 +117,12 @@ def create_polyglot_app(parsed_args):
         )
         exit(1)
 
-    if os.path.exists(os.path.abspath(parsed_args.output_directory)):
-        print(
-            "Output directory already exists.",
-            sep="\n",
-        )
-        exit(1)
-
     target_dir = parsed_args.output_directory if parsed_args.output_directory else os.getcwd()
     if parsed_args.verbose:
         print(f"Creating polyglot java python application in directory {target_dir}")
 
-    cmd = ["mvn", "archetype:generate", "-DarchetypeGroupId=org.graalvm.python", "-DarchetypeArtifactId=graalpy-archetype-polyglot-app"]
+    cmd = ["mvn", "archetype:generate", "-B", "-DarchetypeGroupId=org.graalvm.python", "-DarchetypeArtifactId=graalpy-archetype-polyglot-app"]
+    cmd += [f"-DarchetypeVersion={MVN_GRAALPY_VERSION}"]
     cmd += [f"-DgroupId={parsed_args.group_id}"]
     cmd += [f"-DartifactId={parsed_args.artifact_id}"]
     cmd += ["-Dversion=1.0-SNAPSHOT" if parsed_args.version else f"-Dversion={parsed_args.version}"]
@@ -146,13 +140,12 @@ def create_polyglot_app(parsed_args):
         exit(1)
 
 
-def get_download_dir(parsed_args):
-    subdir = "downloaded_standalone_resources"
-    mp = os.path.join(__graalpython__.home, subdir)  
+def get_download_dir(parsed_args, subdir = "downloaded_standalone_resources"):
+    mp = os.path.join(__graalpython__.home, subdir)
     try:
         if not os.path.exists(mp):
             os.mkdir(mp)
-        Pathlib(mp).touch() # Ensure if we can write to that location
+        pathlib.Path(mp).touch() # Ensure if we can write to that location
         parsed_args.keep_temp = True # Keep this location
         return mp
     except Exception as e:
@@ -166,33 +159,36 @@ def get_download_dir(parsed_args):
 
 
 def create_native_exec(parsed_args):
-    artifacts = ["org.graalvm.python.python-embedding"]
-    if parsed_args.ce:
-        artifacts.append("org.graalvm.polyglot.python-community")
-    else:
-        artifacts.append("org.graalvm.polyglot.python")
-
-    target_dir = get_download_dir(parsed_args)
+    target_dir = tempfile.mkdtemp()
     try:
         ni, jc = get_tools(target_dir, parsed_args)
-                
-        modules_path = target_dir
-        for artifact in artifacts:
-            download_maven_artifact(modules_path, artifact, parsed_args)
-        
-        launcher_file = os.path.join(target_dir, NATIVE_EXEC_LAUNCHER_FILE)    
+        if parsed_args.ce:
+            artifact = "org.graalvm.polyglot.python-community"
+        else:
+            artifact = "org.graalvm.polyglot.python"
+
+        modules_path = get_download_dir(parsed_args)
+        legacy_embedding_path = None
+        if not download_maven_artifact(modules_path, "org.graalvm.python.python-embedding", parsed_args, version=MVN_GRAALPY_VERSION, fail_if_not_found=False):
+            legacy_embedding_dir = get_download_dir(parsed_args, subdir='downloaded_standalone_resources_legacy')
+            download_maven_artifact(legacy_embedding_dir, "org.graalvm.python.python-embedding", parsed_args, version=LEGACY_EMBEDDING_VERSION)
+            legacy_embedding_path = os.path.join(legacy_embedding_dir, f"org.graalvm.python-python-embedding-{LEGACY_EMBEDDING_VERSION}.jar")
+
+        download_maven_artifact(modules_path, artifact, parsed_args, version=MVN_GRAALPY_VERSION)
+
+        launcher_file = os.path.join(target_dir, NATIVE_EXEC_LAUNCHER_FILE)
         create_target_directory(target_dir, launcher_file, parsed_args)
-        
+
         index_vfs(target_dir)
-        build_binary(target_dir, ni, jc, modules_path, launcher_file, parsed_args)
+        build_binary(target_dir, ni, jc, modules_path, legacy_embedding_path, launcher_file, parsed_args)
     finally:
         if not parsed_args.keep_temp:
             shutil.rmtree(target_dir)
 
 
-def index_vfs(target_dir):   
+def index_vfs(target_dir):
     files_list_path = os.path.join(target_dir, FILES_LIST_PATH)
-    dir_to_list = os.path.join(target_dir, VFS_PREFIX)        
+    dir_to_list = os.path.join(target_dir, VFS_PREFIX)
     target_dir_len = len(target_dir)
     with open(files_list_path, "w") as files_list:
         def f(dir_path, names, line_end):
@@ -200,24 +196,10 @@ def index_vfs(target_dir):
             for name in names:
                 vfs_path = os.path.join(rel_path, name).replace(os.sep, '/')
                 files_list.write(f"{vfs_path}{line_end}")
-        w = os.walk(dir_to_list)            
+        w = os.walk(dir_to_list)
         for (dir_path, dir_names, file_names) in w:
             f(dir_path, dir_names, "/\n")
             f(dir_path, file_names, "\n")
-
-
-def create_launcher_file(template, launcher):
-    lines = open(template, 'r').readlines()
-    with open(launcher, 'w') as f:
-        for line in lines:
-            if "{vfs-home-prefix}" in line:
-                line = line.replace("{vfs-home-prefix}", VFS_HOME_PREFIX)
-            if "{vfs-venv-prefix}" in line:
-                line = line.replace("{vfs-venv-prefix}", VFS_VENV_PREFIX)
-            if "{vfs-proj-prefix}" in line:
-                line = line.replace("{vfs-proj-prefix}", VFS_PROJ_PREFIX)
-            f.write(line)
-
 
 def create_target_directory(target_dir, launcher_file, parsed_args):
     if parsed_args.verbose:
@@ -230,7 +212,7 @@ def create_target_directory(target_dir, launcher_file, parsed_args):
     )
 
     os.makedirs(os.path.dirname(launcher_file), exist_ok=True)
-    create_launcher_file(get_file(NATIVE_EXEC_LAUNCHER_TEMPLATE_PATH), launcher_file)
+    shutil.copy(get_file(NATIVE_EXEC_LAUNCHER_TEMPLATE_PATH), launcher_file)
 
     shutil.copy(get_file(NATIVE_IMAGE_RESOURCES_PATH), os.path.join(target_dir, NATIVE_IMAGE_RESOURCES_FILE))
 
@@ -242,7 +224,7 @@ def bundle_python_resources(target_dir, project, venv=None):
 
     os.makedirs(os.path.dirname(target_dir), exist_ok=True)
 
-    lib_source = __graalpython__.capi_home
+    lib_source = __graalpython__.core_home
     copy_folder_to_target(
         target_dir,
         lib_source,
@@ -264,10 +246,9 @@ def bundle_python_resources(target_dir, project, venv=None):
                     "ensurepip",
                     "tkinter",
                     "turtledemo",
-                    "sulong",
                     "llvm-toolchain",
                 ]
-            )
+    )
             or (file and file.split(".")[-1] in ["so", "dll", "dylib"])
         ),
     )
@@ -276,12 +257,12 @@ def bundle_python_resources(target_dir, project, venv=None):
         copy_folder_to_target(target_dir, venv, VFS_VENV_PREFIX)
 
     if project and os.path.isdir(project):
-        copy_folder_to_target(target_dir, project, VFS_PROJ_PREFIX)
+        copy_folder_to_target(target_dir, project, VFS_SRC_PREFIX)
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
             name = os.path.join(tmpdir, "__main__.py")
             shutil.copy(project, name)
-            copy_folder_to_target(target_dir, tmpdir, VFS_PROJ_PREFIX)
+            copy_folder_to_target(target_dir, tmpdir, VFS_SRC_PREFIX)
             os.unlink(name)
 
 
@@ -350,10 +331,15 @@ def get_tools(target_dir, parsed_args):
         if platform.system() == 'Darwin' or platform.system() == 'Linux':
             with tarfile.open(graalvm_file) as tar_file:
                 first_member = tar_file.next().path
-                tar_file.extractall(vm_path)
+                try:
+                    tar_file.extractall(vm_path, filter="data")
+                except TypeError:
+                    # older Python versions do not support filter, but the risk does not warrant a fallback implementation
+                    tar_file.extractall(vm_path)
         else:
             with zipfile.ZipFile(graalvm_file) as zip_file:
                 first_member = zip_file.namelist()[0]
+                # zipfile.extractall normalizes absolute paths and ".." components.
                 zip_file.extractall(vm_path)
 
         graalvm_dir = os.path.join(vm_path, first_member[:first_member.index("/")])
@@ -381,10 +367,16 @@ def get_tools(target_dir, parsed_args):
             print(f"GraalVM downloaded from {graalvm_url} has no native image or javac")
         sys.exit(1)
 
+    # When building with a CE native image, we need to use community options
+    if "GraalVM CE" in subprocess.check_output([ni, "--version"], text=True):
+        if parsed_args.verbose and not parsed_args.ce:
+            print("Using GraalVM CE, disabling Oracle GraalVM-specific options")
+        parsed_args.ce = True
+
     return ni, jc
 
 
-def download_maven_artifact(modules_path, artifact, parsed_args):
+def download_maven_artifact(modules_path, artifact, parsed_args, version=MVN_GRAALPY_VERSION, fail_if_not_found=True):
     mvnd = get_executable(os.path.join(__graalpython__.home, "libexec", "graalpy-polyglot-get"))
     cmd = [mvnd]
 
@@ -392,10 +384,11 @@ def download_maven_artifact(modules_path, artifact, parsed_args):
         cmd += ["-r", MVN_REPOSITORY]
     cmd += ["-a", artifact.rsplit(".", 1)[1]]
     cmd += ["-g", artifact.rsplit(".", 1)[0]]
-    cmd += ["-v", MVN_GRAALPY_VERSION]
+    cmd += ["-v", version]
     cmd += ["-o", modules_path]
+
     if parsed_args.verbose:
-        print(f"downloading graalpython maven artefacts: {' '.join(cmd)}")
+        print(f"downloading graalpython maven artifacts: {' '.join(cmd)}")
 
     if parsed_args.verbose:
         p = subprocess.run(cmd)
@@ -403,19 +396,28 @@ def download_maven_artifact(modules_path, artifact, parsed_args):
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     if p.returncode != 0:
-        if not parsed_args.verbose:
+        if fail_if_not_found and not parsed_args.verbose:
             print(p.stdout.decode())
             print(p.stderr.decode())
-        exit(1)
+        if fail_if_not_found:
+            exit(1)
+        return False
+    return True
 
 
-def build_binary(target_dir, ni, jc, modules_path, launcher_file, parsed_args):
+def build_binary(target_dir, ni, jc, modules_path, legacy_embedding_path, launcher_file, parsed_args):
     cwd = os.getcwd()
     output = os.path.abspath(parsed_args.output)
     os.chdir(target_dir)
 
-    try:        
-        cmd = [jc, "-cp", f"{modules_path}/*", launcher_file]
+    try:
+        legacy_embedding_cp = ''
+        legacy_embedding_modules = []
+        if legacy_embedding_path:
+            legacy_embedding_cp = f"{os.pathsep}{legacy_embedding_path}"
+            legacy_embedding_modules = [legacy_embedding_path]
+
+        cmd = [jc, "-cp", f"{modules_path}/*{legacy_embedding_cp}", launcher_file]
         if parsed_args.verbose:
             print(f"Compiling code for Python standalone entry point: {' '.join(cmd)}")
         p = subprocess.run(cmd, cwd=target_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -424,7 +426,7 @@ def build_binary(target_dir, ni, jc, modules_path, launcher_file, parsed_args):
             print(p.stderr.decode())
             exit(1)
 
-        ni_modules = os.pathsep.join([os.path.join(modules_path, f) for f in os.listdir(modules_path) if f.endswith(".jar")] + [target_dir])
+        ni_modules = os.pathsep.join([os.path.join(modules_path, f) for f in os.listdir(modules_path) if f.endswith(".jar")] + legacy_embedding_modules + [target_dir])
         cmd = [ni, "-cp", ni_modules] + parsed_args.ni_args[:]
 
         if parsed_args.Os:
@@ -432,14 +434,10 @@ def build_binary(target_dir, ni, jc, modules_path, launcher_file, parsed_args):
                 "-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime",
                 "-Dpolyglot.engine.WarnInterpreterOnly=false",
             ]
-            # Remove once GR-48563 is fixed
-            if "Oracle GraalVM" in subprocess.check_output([ni, "--version"], text=True):
-                cmd.append("-H:-OptConditionalMoves")
         cmd += [
             "--no-fallback",
             "-H:-CopyLanguageResources",
-            "-H:+UnlockExperimentalVMOptions",
-            f"-H:ResourceConfigurationFiles={target_dir}/{NATIVE_IMAGE_RESOURCES_FILE}",
+            f"-H:ConfigurationFileDirectories={target_dir}",
             "-o",
             output,
             f"{NATIVE_EXEC_LAUNCHER}",
@@ -484,34 +482,34 @@ def main(args):
         default=[],
     )
     parser_bin.add_argument(
-        "-ce", action="store_true", help="Use GraalPy Community Edition instead of Oracle GraalPy"
+        "-ce", action="store_true", help="Use only fully open source bits from GraalPy Community Edition"
     )
 
     parser_app = subparsers.add_parser(
         CMD_JAVA_PYTHON_APP,
         help="Create a polyglot Java-Python maven project skeleton preconfigured to build native binaries.",
-    )    
-    
+    )
+
     parser_app.add_argument(
         "-g",
         "--group-id",
         help="The created maven project group id.",
         required=True,
     )
-    
+
     parser_app.add_argument(
         "-a",
         "--artifact-id",
         help="The created maven project artifact id.",
         required=True,
     )
-    
+
     parser_app.add_argument(
         "-v",
         "--version",
         help="The created maven project version.",
     )
-    
+
     parser_app.add_argument(
         "-o",
         "--output-directory",

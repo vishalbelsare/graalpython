@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,93 +41,69 @@
 package com.oracle.graal.python.builtins.objects.set;
 
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageDelItem;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
-import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.bytecode.OperationProxy;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleStringIterator;
 
 public abstract class SetNodes {
 
     @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 116 -> 98
+    @GenerateInline(false)       // footprint reduction 116 -> 98
     public abstract static class ConstructSetNode extends PNodeWithContext {
-        public abstract PSet execute(Frame frame, Object cls, Object value);
+        public abstract PSet execute(Frame frame, Object value);
 
-        public final PSet executeWith(Frame frame, Object value) {
-            return this.execute(frame, PythonBuiltinClassType.PSet, value);
-        }
-
-        @Specialization
-        static PSet setString(VirtualFrame frame, Object cls, TruffleString arg,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached PythonObjectFactory factory,
-                        @Exclusive @Cached HashingCollectionNodes.SetItemNode setItemNode,
-                        @Cached TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
-                        @Cached TruffleStringIterator.NextNode nextNode,
-                        @Cached TruffleString.FromCodePointNode fromCodePointNode) {
-            PSet set = factory.createSet(cls);
-            TruffleStringIterator it = createCodePointIteratorNode.execute(arg, TS_ENCODING);
-            while (it.hasNext()) {
-                int cp = nextNode.execute(it);
-                TruffleString s = fromCodePointNode.execute(cp, TS_ENCODING, true);
-                setItemNode.execute(frame, inliningTarget, set, s, PNone.NONE);
-            }
-            return set;
-        }
-
-        @Specialization(guards = "emptyArguments(none)")
-        static PSet set(Object cls, @SuppressWarnings("unused") PNone none,
-                        @Exclusive @Cached PythonObjectFactory factory) {
-            return factory.createSet(cls);
+        @Specialization(guards = "isNoValue(none)")
+        static PSet set(@SuppressWarnings("unused") PNone none,
+                        @Bind PythonLanguage language) {
+            return PFactory.createSet(language);
         }
 
         @Specialization(guards = "!isNoValue(iterable)")
-        static PSet setIterable(VirtualFrame frame, Object cls, Object iterable,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached PythonObjectFactory factory,
+        static PSet setIterable(VirtualFrame frame, Object iterable,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Exclusive @Cached HashingCollectionNodes.SetItemNode setItemNode,
                         @Cached PyObjectGetIter getIter,
-                        @Cached GetNextNode nextNode,
-                        @Cached IsBuiltinObjectProfile errorProfile) {
-            PSet set = factory.createSet(cls);
+                        @Cached PyIterNextNode nextNode) {
+            PSet set = PFactory.createSet(language);
             Object iterator = getIter.execute(frame, inliningTarget, iterable);
             while (true) {
+                Object next;
                 try {
-                    setItemNode.execute(frame, inliningTarget, set, nextNode.execute(frame, iterator), PNone.NONE);
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, errorProfile);
+                    next = nextNode.execute(frame, inliningTarget, iterator);
+                } catch (IteratorExhausted e) {
                     return set;
                 }
+                setItemNode.execute(frame, inliningTarget, set, next, PNone.NONE);
             }
         }
 
         @Fallback
-        static PSet setObject(@SuppressWarnings("unused") Object cls, Object value,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.OBJ_NOT_ITERABLE, value);
+        static PSet setObject(Object value,
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.OBJ_NOT_ITERABLE, value);
         }
 
         @NeverDefault
@@ -141,13 +117,14 @@ public abstract class SetNodes {
     }
 
     @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 92 -> 73
+    @OperationProxy.Proxyable(storeBytecodeIndex = true, allowUncached = true)
+    @GenerateInline(false)       // footprint reduction 92 -> 73
     public abstract static class AddNode extends PNodeWithContext {
         public abstract void execute(Frame frame, PSet self, Object o);
 
         @Specialization
         public static void add(VirtualFrame frame, PSet self, Object o,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached HashingCollectionNodes.SetItemNode setItemNode) {
             setItemNode.execute(frame, inliningTarget, self, o, PNone.NONE);
         }
@@ -168,12 +145,11 @@ public abstract class SetNodes {
 
         @Specialization
         boolean discard(VirtualFrame frame, PSet self, Object key,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached BaseSetBuiltins.ConvertKeyNode conv,
                         @Cached HashingStorageDelItem delItem) {
             Object checkedKey = conv.execute(inliningTarget, key);
-            Object found = delItem.executePop(frame, inliningTarget, self.getDictStorage(), checkedKey, self);
-            return found != null;
+            return delItem.execute(frame, inliningTarget, self.getDictStorage(), checkedKey, self);
         }
     }
 }

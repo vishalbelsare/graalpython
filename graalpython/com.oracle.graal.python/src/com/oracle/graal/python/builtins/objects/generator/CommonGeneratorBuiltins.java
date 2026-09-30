@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.graal.python.builtins.objects.generator;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.DeprecationWarning;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.GeneratorExit;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.StopAsyncIteration;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.RuntimeError;
@@ -50,10 +51,11 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueErr
 import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.exception.ExceptionNodes;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
@@ -61,26 +63,30 @@ import com.oracle.graal.python.builtins.objects.exception.PrepareExceptionNode;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.traceback.PTraceback;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.IteratorExhausted;
 import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.bytecode.FrameInfo;
-import com.oracle.graal.python.nodes.bytecode.GeneratorReturnException;
-import com.oracle.graal.python.nodes.bytecode.GeneratorYieldResult;
-import com.oracle.graal.python.nodes.call.CallTargetInvokeNode;
-import com.oracle.graal.python.nodes.call.GenericInvokeNode;
+import com.oracle.graal.python.nodes.PRootNode;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLFrameInfo;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonQuaternaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
+import com.oracle.graal.python.runtime.ExecutionContext;
+import com.oracle.graal.python.runtime.ExecutionContext.IndirectCalleeContext;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.graal.python.util.PythonUtils;
-import com.oracle.truffle.api.CallTarget;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.bytecode.ContinuationResult;
+import com.oracle.truffle.api.bytecode.ContinuationRootNode;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
@@ -93,162 +99,180 @@ import com.oracle.truffle.api.dsl.ReportPolymorphism.Megamorphic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PCoroutine, PythonBuiltinClassType.PGenerator})
 public final class CommonGeneratorBuiltins extends PythonBuiltins {
-    /**
-     * Creates a fresh copy of the generator arguments to be used for the next invocation of the
-     * generator. This is necessary to avoid persisting caller state. For example: If the generator
-     * is invoked using {@code next(g)} outside of any {@code except} handler but the generator
-     * requests the exception state, then the exception state will be written into the arguments. If
-     * we now use the same arguments array every time, the next invocation would think that there is
-     * not excepion but in fact, the a subsequent call ot {@code next} may have a different
-     * exception state.
-     *
-     * <pre>
-     *     g = my_generator()
-     *
-     *     # invoke without any exception context
-     *     next(g)
-     *
-     *     try:
-     *         raise ValueError
-     *     except ValueError:
-     *         # invoke with exception context
-     *         next(g)
-     * </pre>
-     *
-     * This is necessary for correct chaining of exceptions.
-     */
-    private static Object[] prepareArguments(PGenerator self) {
-        Object[] generatorArguments = self.getArguments();
-        Object[] arguments = new Object[generatorArguments.length];
-        PythonUtils.arraycopy(generatorArguments, 0, arguments, 0, arguments.length);
-        return arguments;
-    }
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return CommonGeneratorBuiltinsFactory.getFactories();
     }
 
-    private static void checkResumable(Node inliningTarget, PGenerator self, PRaiseNode.Lazy raiseNode) {
+    private static void checkResumable(Node inliningTarget, PGenerator self, PRaiseNode raiseNode) {
         if (self.isFinished()) {
             if (self.isAsyncGen()) {
-                throw raiseNode.get(inliningTarget).raise(StopAsyncIteration);
+                throw raiseNode.raise(inliningTarget, StopAsyncIteration);
             }
             if (self.isCoroutine()) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_CORO);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_CORO);
             }
-            throw raiseNode.get(inliningTarget).raiseStopIteration();
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.StopIteration);
         }
         if (self.isRunning()) {
-            throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
+            throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
         }
     }
 
     @GenerateInline
     @GenerateCached(false)
-    @ImportStatic({PGuards.class, PythonOptions.class})
+    @ImportStatic(PythonOptions.class)
     abstract static class ResumeGeneratorNode extends Node {
         public abstract Object execute(VirtualFrame frame, Node inliningTarget, PGenerator self, Object sendValue);
 
-        @Specialization(guards = "sameCallTarget(self.getCurrentCallTarget(), call.getCallTarget())", limit = "getCallSiteInlineCacheMaxDepth()")
-        static Object cached(VirtualFrame frame, Node inliningTarget, PGenerator self, Object sendValue,
-                        @Cached(value = "createDirectCall(self.getCurrentCallTarget())", inline = false) CallTargetInvokeNode call,
+        @Specialization(guards = "self.getBytecodeDSLContinuationRootNode() == continuationRootNode", limit = "getCallSiteInlineCacheMaxDepth()")
+        static Object cachedBytecodeDSL(VirtualFrame frame, Node inliningTarget, PGenerator self, Object sendValue,
+                        @Cached("self.getBytecodeDSLContinuationRootNode()") ContinuationRootNode continuationRootNode,
+                        @Cached(parameters = "self.getCurrentCallTarget()") DirectCallNode callNode,
+                        @Exclusive @Cached ExecutionContext.CallContext callContext,
                         @Exclusive @Cached InlinedBranchProfile returnProfile,
                         @Exclusive @Cached IsBuiltinObjectProfile errorProfile,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             self.setRunning(true);
-            Object[] arguments = prepareArguments(self);
-            if (sendValue != null) {
-                PArguments.setSpecialArgument(arguments, sendValue);
-            }
-            GeneratorYieldResult result;
+            Object generatorResult;
             try {
-                result = (GeneratorYieldResult) call.execute(frame, null, null, null, arguments);
-            } catch (PException e) {
-                throw handleException(self, inliningTarget, errorProfile, raiseNode, e);
-            } catch (GeneratorReturnException e) {
-                returnProfile.enter(inliningTarget);
-                throw handleReturn(self, e, raiseNode.get(inliningTarget));
-            } finally {
-                self.setRunning(false);
-            }
-            return handleResult(inliningTarget, self, result);
-        }
-
-        @Specialization(replaces = "cached")
-        @Megamorphic
-        static Object generic(VirtualFrame frame, Node inliningTarget, PGenerator self, Object sendValue,
-                        @Cached InlinedConditionProfile hasFrameProfile,
-                        @Cached(inline = false) GenericInvokeNode call,
-                        @Exclusive @Cached InlinedBranchProfile returnProfile,
-                        @Exclusive @Cached IsBuiltinObjectProfile errorProfile,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            self.setRunning(true);
-            Object[] arguments = prepareArguments(self);
-            if (sendValue != null) {
-                PArguments.setSpecialArgument(arguments, sendValue);
-            }
-            GeneratorYieldResult result;
-            try {
-                if (hasFrameProfile.profile(inliningTarget, frame != null)) {
-                    result = (GeneratorYieldResult) call.execute(frame, self.getCurrentCallTarget(), arguments);
+                Object[] generatorArguments = self.prepareResume();
+                PRootNode rootNode = PGenerator.unwrapContinuationRoot(continuationRootNode);
+                /*
+                 * When resuming a generator/coroutine, the call target is a ContinuationRoot with a
+                 * different calling convention from regular PRootNodes. The first argument is a
+                 * materialized frame, which will be used for the execution itself. We will, e.g.,
+                 * lookup the exception state in that frame's arguments.
+                 *
+                 * So for Bytecode DSL generators, we update the arguments array of that
+                 * materialized frame instead of the arguments array that will be used for the
+                 * actual Truffle call to the ContinuationRoot, which is not accessible to us in the
+                 * generator root.
+                 */
+                MaterializedFrame generatorFrame = self.getGeneratorFrame();
+                Object[] callArguments = new Object[]{generatorFrame, sendValue};
+                if (frame == null) {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
+                    Object state = IndirectCalleeContext.enter(threadState, generatorArguments);
+                    PFrame.Reference ref = PArguments.getCurrentFrameInfo(generatorArguments);
+                    ref.setCallerInfo(PArguments.getCallerFrameInfo(generatorArguments));
+                    try {
+                        generatorResult = callNode.call(callArguments);
+                    } finally {
+                        IndirectCalleeContext.exit(threadState, state);
+                        ref.setCallerInfo(PFrame.Reference.EMPTY);
+                    }
                 } else {
-                    result = (GeneratorYieldResult) call.execute(self.getCurrentCallTarget(), arguments);
+                    callContext.executePrepareCall(frame, generatorArguments, rootNode.getCallerFlags());
+                    PFrame.Reference ref = PArguments.getCurrentFrameInfo(generatorArguments);
+                    ref.setCallerInfo(PArguments.getCallerFrameInfo(generatorArguments));
+                    try {
+                        generatorResult = callNode.call(callArguments);
+                    } finally {
+                        ref.setCallerInfo(PFrame.Reference.EMPTY);
+                    }
                 }
             } catch (PException e) {
                 throw handleException(self, inliningTarget, errorProfile, raiseNode, e);
-            } catch (GeneratorReturnException e) {
-                returnProfile.enter(inliningTarget);
-                throw handleReturn(self, e, raiseNode.get(inliningTarget));
             } finally {
                 self.setRunning(false);
             }
-            return handleResult(inliningTarget, self, result);
+            if (generatorResult instanceof ContinuationResult continuation) {
+                return self.handleResult(continuation);
+            } else {
+                returnProfile.enter(inliningTarget);
+                throw handleReturn(inliningTarget, self, generatorResult);
+            }
+
         }
 
-        private static PException handleException(PGenerator self, Node inliningTarget, IsBuiltinObjectProfile profile, PRaiseNode.Lazy raiseNode, PException e) {
+        @Specialization(replaces = "cachedBytecodeDSL")
+        @Megamorphic
+        static Object genericBytecodeDSL(VirtualFrame frame, Node inliningTarget, PGenerator self, Object sendValue,
+                        @Exclusive @Cached ExecutionContext.CallContext callContext,
+                        @Exclusive @Cached IndirectCallNode callNode,
+                        @Exclusive @Cached InlinedBranchProfile returnProfile,
+                        @Exclusive @Cached IsBuiltinObjectProfile errorProfile,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
+            self.setRunning(true);
+            Object generatorResult;
+            try {
+                Object[] generatorArguments = self.prepareResume();
+                RootCallTarget callTarget = self.getCurrentCallTarget();
+                // See the cached specialization for notes about the arguments handling
+                PRootNode rootNode = PGenerator.unwrapContinuationRoot((ContinuationRootNode) callTarget.getRootNode());
+                MaterializedFrame generatorFrame = self.getGeneratorFrame();
+                Object[] callArguments = new Object[]{generatorFrame, sendValue};
+                if (frame == null) {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
+                    Object state = IndirectCalleeContext.enter(threadState, generatorArguments);
+                    PFrame.Reference ref = PArguments.getCurrentFrameInfo(generatorArguments);
+                    ref.setCallerInfo(PArguments.getCallerFrameInfo(generatorArguments));
+                    try {
+                        generatorResult = callNode.call(callTarget, callArguments);
+                    } finally {
+                        IndirectCalleeContext.exit(threadState, state);
+                        ref.setCallerInfo(PFrame.Reference.EMPTY);
+                    }
+                } else {
+                    callContext.executePrepareCall(frame, generatorArguments, rootNode.getCallerFlags());
+                    PFrame.Reference ref = PArguments.getCurrentFrameInfo(generatorArguments);
+                    ref.setCallerInfo(PArguments.getCallerFrameInfo(generatorArguments));
+                    try {
+                        generatorResult = callNode.call(callTarget, callArguments);
+                    } finally {
+                        ref.setCallerInfo(PFrame.Reference.EMPTY);
+                    }
+                }
+            } catch (PException e) {
+                throw handleException(self, inliningTarget, errorProfile, raiseNode, e);
+            } finally {
+                self.setRunning(false);
+            }
+            if (generatorResult instanceof ContinuationResult continuation) {
+                return self.handleResult(continuation);
+            } else {
+                returnProfile.enter(inliningTarget);
+                throw handleReturn(inliningTarget, self, generatorResult);
+            }
+        }
+
+        private static PException handleException(PGenerator self, Node inliningTarget, IsBuiltinObjectProfile profile, PRaiseNode raiseNode, PException e) {
             self.markAsFinished();
             if (self.isAsyncGen()) {
                 // Async generators need to wrap StopAsyncIteration in a runtime error
                 if (profile.profileException(inliningTarget, e, StopAsyncIteration)) {
-                    throw raiseNode.get(inliningTarget).raiseWithCause(RuntimeError, e.getEscapedException(), ErrorMessages.ASYNCGEN_RAISED_ASYNCSTOPITER);
+                    throw raiseNode.raiseWithCause(inliningTarget, RuntimeError, e, ErrorMessages.ASYNCGEN_RAISED_ASYNCSTOPITER);
                 }
             }
             // PEP 479 - StopIteration raised from generator body needs to be wrapped in
             // RuntimeError
             e.expectStopIteration(inliningTarget, profile);
-            throw raiseNode.get(inliningTarget).raiseWithCause(RuntimeError, e.getEscapedException(), ErrorMessages.GENERATOR_RAISED_STOPITER);
+            throw raiseNode.raiseWithCause(inliningTarget, RuntimeError, e, ErrorMessages.GENERATOR_RAISED_STOPITER);
         }
 
-        private static Object handleResult(Node node, PGenerator self, GeneratorYieldResult result) {
-            self.handleResult(PythonLanguage.get(node), result);
-            return result.yieldValue;
-        }
-
-        private static PException handleReturn(PGenerator self, GeneratorReturnException e, PRaiseNode raiseNode) {
+        private static PException handleReturn(Node inliningTarget, PGenerator self, Object returnValue) {
             self.markAsFinished();
             if (self.isAsyncGen()) {
-                throw raiseNode.raise(StopAsyncIteration);
+                throw PRaiseNode.raiseStatic(inliningTarget, StopAsyncIteration);
             }
-            if (e.value != PNone.NONE) {
-                throw raiseNode.raise(StopIteration, new Object[]{e.value});
+            if (returnValue != PNone.NONE) {
+                throw PRaiseNode.raiseStatic(inliningTarget, StopIteration, new Object[]{returnValue});
             } else {
-                throw raiseNode.raise(StopIteration);
+                throw TpIterNextBuiltin.iteratorExhausted();
             }
-        }
-
-        protected static CallTargetInvokeNode createDirectCall(CallTarget target) {
-            return CallTargetInvokeNode.create(target, false, true);
-        }
-
-        protected static boolean sameCallTarget(RootCallTarget target1, CallTarget target2) {
-            return target1 == target2;
         }
     }
 
@@ -258,16 +282,20 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object send(VirtualFrame frame, PGenerator self, Object value,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ResumeGeneratorNode resumeGeneratorNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             // even though this isn't a builtin for async generators, SendNode is used on async
             // generators by PAsyncGenSend
             checkResumable(inliningTarget, self, raiseNode);
             if (!self.isStarted() && value != PNone.NONE) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.SEND_NON_NONE_TO_UNSTARTED_GENERATOR);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.SEND_NON_NONE_TO_UNSTARTED_GENERATOR);
             }
-            return resumeGeneratorNode.execute(frame, inliningTarget, self, value);
+            try {
+                return resumeGeneratorNode.execute(frame, inliningTarget, self, value);
+            } catch (IteratorExhausted e) {
+                throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.StopIteration);
+            }
         }
     }
 
@@ -278,8 +306,9 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object sendThrow(VirtualFrame frame, PGenerator self, Object typ, Object val, Object tb,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedConditionProfile hasTbProfile,
+                        @Cached InlinedConditionProfile hasValProfile,
                         @Cached InlinedConditionProfile startedProfile,
                         @Cached InlinedBranchProfile invalidTbProfile,
                         @Cached InlinedBranchProfile runningProfile,
@@ -287,48 +316,58 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
                         @Cached ResumeGeneratorNode resumeGeneratorNode,
                         @Cached ExceptionNodes.GetTracebackNode getTracebackNode,
                         @Cached ExceptionNodes.SetTracebackNode setTracebackNode,
-                        @Cached ExceptionNodes.SetContextNode setContextNode,
-                        @Cached PythonObjectFactory.Lazy factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached WarningsModuleBuiltins.WarnNode warnNode,
+                        @Cached PRaiseNode raiseNode) {
             boolean hasTb = hasTbProfile.profile(inliningTarget, !(tb instanceof PNone));
+            boolean hasVal = hasValProfile.profile(inliningTarget, !(val instanceof PNone));
+            if (hasVal || hasTb) {
+                warnNode.warnEx(frame, DeprecationWarning, ErrorMessages.TYPE_EXC_TB_OF_THROW_IS_DEPRECATED, 1);
+            }
             if (hasTb && !(tb instanceof PTraceback)) {
                 invalidTbProfile.enter(inliningTarget);
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.THROW_THIRD_ARG_MUST_BE_TRACEBACK);
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.THROW_THIRD_ARG_MUST_BE_TRACEBACK);
             }
             if (self.isRunning()) {
                 runningProfile.enter(inliningTarget);
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
             }
             Object instance = prepareExceptionNode.execute(frame, typ, val);
             if (hasTb) {
                 setTracebackNode.execute(inliningTarget, instance, tb);
             }
             PythonLanguage language = PythonLanguage.get(inliningTarget);
-            setContextNode.execute(inliningTarget, instance, PNone.NONE); // Will be filled when
-                                                                          // caught
             if (self.isCoroutine() && self.isFinished()) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_CORO);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_CORO);
+            }
+            if (self.isFinished()) {
+                throw PException.fromObject(instance, inliningTarget, PythonOptions.isPExceptionWithJavaStacktrace(language));
             }
             if (startedProfile.profile(inliningTarget, self.isStarted() && !self.isFinished())) {
                 // Pass it to the generator where it will be thrown by the last yield, the location
                 // will be filled there
-                return resumeGeneratorNode.execute(frame, inliningTarget, self, new ThrowData(instance, PythonOptions.isPExceptionWithJavaStacktrace(language)));
+                try {
+                    return resumeGeneratorNode.execute(frame, inliningTarget, self, new ThrowData(instance, PythonOptions.isPExceptionWithJavaStacktrace(language)));
+                } catch (IteratorExhausted e) {
+                    throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.StopIteration);
+                }
             } else {
                 // Unstarted generator, we cannot pass the exception into the generator as there is
                 // nothing that would handle it.
                 // Instead, we throw the exception here and fake entering the generator by adding
                 // its frame to the traceback manually.
-                self.markAsFinished();
-                Node location = self.getCurrentCallTarget().getRootNode();
-                MaterializedFrame generatorFrame = PArguments.getGeneratorFrame(self.getArguments());
-                PFrame pFrame = MaterializeFrameNode.materializeGeneratorFrame(location, generatorFrame, PFrame.Reference.EMPTY, factory.get(inliningTarget));
-                FrameInfo info = (FrameInfo) generatorFrame.getFrameDescriptor().getInfo();
-                pFrame.setLine(info.getRootNode().getFirstLineno());
+                RootNode rootNode = self.getCurrentCallTarget().getRootNode();
+                BytecodeNode bytecodeNode = ((PBytecodeDSLRootNode) self.getRootNode()).getBytecodeNode();
+                MaterializedFrame generatorFrame = self.getGeneratorFrame();
+                PFrame.Reference ref = new PFrame.Reference(rootNode, PFrame.Reference.EMPTY);
+                PFrame pFrame = MaterializeFrameNode.materializeGeneratorFrame(PythonLanguage.get(inliningTarget), bytecodeNode, generatorFrame, self.getGeneratorFunction(), self.getGlobals(), ref);
+                BytecodeDSLFrameInfo info = (BytecodeDSLFrameInfo) generatorFrame.getFrameDescriptor().getInfo();
+                pFrame.setLine(info.getFirstLineNumber());
                 Object existingTracebackObj = getTracebackNode.execute(inliningTarget, instance);
-                PTraceback newTraceback = factory.get(inliningTarget).createTraceback(pFrame, pFrame.getLine(),
+                PTraceback newTraceback = PFactory.createTraceback(language, pFrame, pFrame.getLine(),
                                 (existingTracebackObj instanceof PTraceback existingTraceback) ? existingTraceback : null);
                 setTracebackNode.execute(inliningTarget, instance, newTraceback);
-                throw PException.fromObject(instance, location, PythonOptions.isPExceptionWithJavaStacktrace(language));
+                self.markAsFinished();
+                throw PException.fromObject(instance, inliningTarget, PythonOptions.isPExceptionWithJavaStacktrace(language));
             }
         }
     }
@@ -338,23 +377,25 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
     public abstract static class CloseNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object close(VirtualFrame frame, PGenerator self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached IsBuiltinObjectProfile isGeneratorExit,
                         @Cached IsBuiltinObjectProfile isStopIteration,
                         @Cached ResumeGeneratorNode resumeGeneratorNode,
                         @Cached InlinedConditionProfile isStartedPorfile,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             if (self.isRunning()) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
             }
             if (isStartedPorfile.profile(inliningTarget, self.isStarted() && !self.isFinished())) {
-                PBaseException pythonException = factory.createBaseException(GeneratorExit);
+                PBaseException pythonException = PFactory.createBaseException(PythonLanguage.get(inliningTarget), GeneratorExit);
                 // Pass it to the generator where it will be thrown by the last yield, the location
                 // will be filled there
                 boolean withJavaStacktrace = PythonOptions.isPExceptionWithJavaStacktrace(PythonLanguage.get(inliningTarget));
                 try {
                     resumeGeneratorNode.execute(frame, inliningTarget, self, new ThrowData(pythonException, withJavaStacktrace));
+                } catch (IteratorExhausted e) {
+                    // This is the "success" path
+                    return PNone.NONE;
                 } catch (PException pe) {
                     if (isGeneratorExit.profileException(inliningTarget, pe, GeneratorExit) || isStopIteration.profileException(inliningTarget, pe, StopIteration)) {
                         // This is the "success" path
@@ -364,7 +405,7 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
                 } finally {
                     self.markAsFinished();
                 }
-                throw raiseNode.get(inliningTarget).raise(RuntimeError, ErrorMessages.GENERATOR_IGNORED_EXIT);
+                throw raiseNode.raise(inliningTarget, RuntimeError, ErrorMessages.GENERATOR_IGNORED_EXIT);
             } else {
                 self.markAsFinished();
                 return PNone.NONE;

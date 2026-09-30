@@ -1,81 +1,77 @@
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_binding
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_circular_from_import
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_crossreference1
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_crossreference2
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_direct
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_indirect
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_rebinding
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_subpackage
-*graalpython.lib-python.3.test.test_import.__init__.CircularImportTests.test_unwritable_module
-*graalpython.lib-python.3.test.test_import.__init__.FilePermissionTests.test_cached_mode_issue_2051
-*graalpython.lib-python.3.test.test_import.__init__.FilePermissionTests.test_cached_readonly
-*graalpython.lib-python.3.test.test_import.__init__.FilePermissionTests.test_creation_mode
-*graalpython.lib-python.3.test.test_import.__init__.FilePermissionTests.test_pyc_always_writable
-*graalpython.lib-python.3.test.test_import.__init__.GetSourcefileTests.test_get_sourcefile
-*graalpython.lib-python.3.test.test_import.__init__.GetSourcefileTests.test_get_sourcefile_bad_ext
-*graalpython.lib-python.3.test.test_import.__init__.GetSourcefileTests.test_get_sourcefile_no_source
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_bogus_fromlist
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_case_sensitivity
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_delete_builtins_import
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_dll_dependency_import
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_double_const
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_failing_import_sticks
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_failing_reload
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_file_to_source
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_AttributeError
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_message_for_existing_module
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_message_for_nonexistent_module
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_missing_attr_has_name
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_missing_attr_has_name_and_path
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_missing_attr_has_name_and_so_path
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_missing_attr_path_is_canonical
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_missing_attr_raises_ImportError
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_missing_module_raises_ModuleNotFoundError
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_from_import_star_invalid_type
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_import
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_import_by_filename
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_import_in_del_does_not_crash
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_import_name_binding
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_import_raises_ModuleNotFoundError
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_issue31286
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_issue31492
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_module_with_large_stack
-*graalpython.lib-python.3.test.test_import.__init__.ImportTests.test_timestamp_overflow
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_broken_from
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_broken_parent
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_broken_parent_from
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_broken_submodule
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_exec_failure
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_exec_failure_nested
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_import_bug
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_nonexistent_module
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_nonexistent_module_nested
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_syntax_error
-*graalpython.lib-python.3.test.test_import.__init__.ImportTracebackTests.test_unencodable_filename
-*graalpython.lib-python.3.test.test_import.__init__.ImportlibBootstrapTests.test_frozen_importlib
-*graalpython.lib-python.3.test.test_import.__init__.ImportlibBootstrapTests.test_frozen_importlib_external_is_bootstrap_external
-*graalpython.lib-python.3.test.test_import.__init__.ImportlibBootstrapTests.test_frozen_importlib_is_bootstrap
-*graalpython.lib-python.3.test.test_import.__init__.ImportlibBootstrapTests.test_there_can_be_only_one
-*graalpython.lib-python.3.test.test_import.__init__.OverridingImportBuiltinTests.test_override_builtin
-*graalpython.lib-python.3.test.test_import.__init__.PathsTests.test_UNC_path
-*graalpython.lib-python.3.test.test_import.__init__.PathsTests.test_trailing_slash
-*graalpython.lib-python.3.test.test_import.__init__.PycRewritingTests.test_basics
-*graalpython.lib-python.3.test.test_import.__init__.PycRewritingTests.test_foreign_code
-*graalpython.lib-python.3.test.test_import.__init__.PycRewritingTests.test_incorrect_code_name
-*graalpython.lib-python.3.test.test_import.__init__.PycRewritingTests.test_module_without_source
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test___cached__
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test___cached___legacy_pyc
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_import_pyc_path
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_missing_source
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_missing_source_legacy
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_package___cached__
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_package___cached___from_pyc
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_recompute_pyc_same_second
-*graalpython.lib-python.3.test.test_import.__init__.PycacheTests.test_unwritable_directory
-*graalpython.lib-python.3.test.test_import.__init__.RelativeImportTests.test_absolute_import_without_future
-*graalpython.lib-python.3.test.test_import.__init__.RelativeImportTests.test_import_from_non_package
-*graalpython.lib-python.3.test.test_import.__init__.RelativeImportTests.test_import_from_unloaded_package
-*graalpython.lib-python.3.test.test_import.__init__.RelativeImportTests.test_issue3221
-*graalpython.lib-python.3.test.test_import.__init__.RelativeImportTests.test_parentless_import_shadowed_by_global
-*graalpython.lib-python.3.test.test_import.__init__.RelativeImportTests.test_relimport_star
-*graalpython.lib-python.3.test.test_import.__init__.TestSymbolicallyLinkedPackage.test_symlinked_dir_importable
+test.test_import.CircularImportTests.test_binding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_circular_from_import @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_circular_import @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_crossreference1 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_crossreference2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_direct @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_indirect @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_rebinding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_subpackage @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.CircularImportTests.test_unwritable_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.FilePermissionTests.test_cached_mode_issue_2051 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_import.FilePermissionTests.test_cached_readonly @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_import.FilePermissionTests.test_creation_mode @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_import.FilePermissionTests.test_pyc_always_writable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_bogus_fromlist @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_case_sensitivity @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+# Temporarily disabled due to transient failures (GR-30641)
+!test.test_import.ImportTests.test_concurrency
+test.test_import.ImportTests.test_double_const @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_failing_import_sticks @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_failing_reload @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_file_to_source @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_AttributeError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_message_for_existing_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_message_for_nonexistent_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_missing_attr_has_name @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_missing_attr_has_name_and_path @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_missing_attr_path_is_canonical @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_missing_attr_raises_ImportError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_missing_module_raises_ModuleNotFoundError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_from_import_star_invalid_type @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_frozen_module_from_import_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_import @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_import_by_filename @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_import_in_del_does_not_crash @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_import.ImportTests.test_import_name_binding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_import_null_byte_in_name_raises_ModuleNotFoundError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_import_raises_ModuleNotFoundError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_issue31286 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_module_with_large_stack @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_non_module_from_import_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_script_maybe_not_shadowing_third_party @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTests.test_script_shadowing_stdlib_cwd_failure @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_import.ImportTests.test_timestamp_overflow @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_broken_from @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_broken_parent @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_broken_parent_from @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_broken_submodule @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_exec_failure @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_exec_failure_nested @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_nonexistent_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_nonexistent_module_nested @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_syntax_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.ImportTracebackTests.test_unencodable_filename @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.OverridingImportBuiltinTests.test_override_builtin @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PathsTests.test_trailing_slash @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycRewritingTests.test_basics @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycRewritingTests.test_incorrect_code_name @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycRewritingTests.test_module_without_source @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test___cached__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test___cached___legacy_pyc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_import_pyc_path @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_missing_source @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_missing_source_legacy @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_package___cached__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_package___cached___from_pyc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_recompute_pyc_same_second @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.PycacheTests.test_unwritable_directory @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_import.RelativeImportTests.test_absolute_import_without_future @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_import_from_non_package @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_import_from_unloaded_package @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_issue3221 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_parentless_import_shadowed_by_global @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_rebinding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_rebinding2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.RelativeImportTests.test_relimport_star @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_import.TestSymbolicallyLinkedPackage.test_symlinked_dir_importable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github

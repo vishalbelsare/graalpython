@@ -1,4 +1,4 @@
-/* Copyright (c) 2020, 2022, Oracle and/or its affiliates.
+/* Copyright (c) 2020, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -19,5 +19,3 @@ typedef PyObject * (*Py_OpenCodeHookFunction)(PyObject *, void *);
 PyAPI_FUNC(PyObject *) PyFile_OpenCode(const char *utf8path);
 PyAPI_FUNC(PyObject *) PyFile_OpenCodeObject(PyObject *path);
 PyAPI_FUNC(int) PyFile_SetOpenCodeHook(Py_OpenCodeHookFunction hook, void *userData);
-
-PyAPI_FUNC(int) _PyLong_FileDescriptor_Converter(PyObject *, void *);

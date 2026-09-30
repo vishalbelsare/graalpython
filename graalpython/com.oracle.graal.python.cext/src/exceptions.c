@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,19 +40,21 @@
  */
 #include "capi.h"
 
+#include <pycore_pyerrors.h>
 #include <pyerrors.h>
 
 #define EXCEPTION(NAME) PyObject* PyExc_##NAME = NULL;
 PY_EXCEPTIONS
 #undef EXCEPTION
 
-void initialize_exceptions() {
-#define EXCEPTION(NAME) PyExc_##NAME = (PyObject*) GraalPyTruffle_Type(#NAME);
+Py_LOCAL_SYMBOL void initialize_exceptions() {
+#define EXCEPTION(NAME) PyExc_##NAME = (PyObject*) GraalPyPrivate_Type(#NAME);
 	PY_EXCEPTIONS
 #undef EXCEPTION
 }
 
-PyObject* exception_subtype_new(PyTypeObject *type, PyObject *args) {
+GraalPy_CAPI_HELPER_SYMBOL PyObject *
+GraalPyPrivate_Exception_SubtypeNew(PyTypeObject *type, PyObject *args) {
     PyBaseExceptionObject *self;
 
     self = (PyBaseExceptionObject *)type->tp_alloc(type, 0);
@@ -65,4 +67,12 @@ PyObject* exception_subtype_new(PyTypeObject *type, PyObject *args) {
     self->args = args;
     Py_INCREF(args);
     return (PyObject *)self;
+}
+
+
+PyObject *
+_PyErr_NoMemory(PyThreadState *tstate)
+{
+    _PyErr_SetNone(tstate, PyExc_MemoryError);
+    return NULL;
 }

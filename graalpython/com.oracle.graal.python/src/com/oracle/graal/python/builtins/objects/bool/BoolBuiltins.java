@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -25,31 +25,29 @@
  */
 package com.oracle.graal.python.builtins.objects.bool;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___AND__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RAND__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ROR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RXOR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___XOR__;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_BOOL;
 import static com.oracle.graal.python.nodes.StringLiterals.T_FALSE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_TRUE;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.ints.IntBuiltins;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
-import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
+import com.oracle.graal.python.lib.PyObjectIsTrueNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
+import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.truffle.PythonIntegerTypes;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -60,15 +58,33 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = PythonBuiltinClassType.Boolean)
 public final class BoolBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = BoolBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return BoolBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_BOOL, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    abstract static class StrNode extends PythonBuiltinNode {
+    public abstract static class BoolNode extends PythonBinaryBuiltinNode {
+        @Specialization
+        public static boolean bool(VirtualFrame frame, @SuppressWarnings("unused") Object cls, Object obj,
+                        @Cached PyObjectIsTrueNode isTrue) {
+            return isTrue.execute(frame, obj);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
+    @TypeSystemReference(PythonIntegerTypes.class)
+    @GenerateNodeFactory
+    abstract static class StrNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static TruffleString doBoolean(boolean self) {
+            return self ? T_TRUE : T_FALSE;
+        }
+
         @Specialization
         public static TruffleString doLong(long self) {
             return self == 1 ? T_TRUE : T_FALSE;
@@ -80,62 +96,45 @@ public final class BoolBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.nb_and, isComplex = true)
     @GenerateNodeFactory
-    abstract static class RepNode extends StrNode {
-    }
-
-    abstract static class BaseBoolBinaryNode extends PythonBinaryBuiltinNode {
-        static boolean atLeastOneIsNotBoolean(Object self, Object other) {
-            return !PGuards.isBoolean(self) || !PGuards.isBoolean(other);
-        }
-    }
-
-    @Builtin(name = J___AND__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___RAND__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
-    @GenerateNodeFactory
-    abstract static class AndNode extends BaseBoolBinaryNode {
+    abstract static class AndNode extends BinaryOpBuiltinNode {
         @Specialization
         static Object doBool(boolean self, boolean other) {
             return self && other;
         }
 
-        @Specialization(guards = "atLeastOneIsNotBoolean(self, other)")
+        @Fallback
         static Object doOther(VirtualFrame frame, Object self, Object other,
                         @Cached IntBuiltins.AndNode andNode) {
             return andNode.execute(frame, self, other);
         }
     }
 
-    @Builtin(name = J___OR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___ROR__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.nb_or, isComplex = true)
     @GenerateNodeFactory
-    abstract static class OrNode extends BaseBoolBinaryNode {
+    abstract static class OrNode extends BinaryOpBuiltinNode {
         @Specialization
         static Object doBool(boolean self, boolean other) {
             return self || other;
         }
 
-        @Specialization(guards = "atLeastOneIsNotBoolean(self, other)")
+        @Fallback
         static Object doOther(VirtualFrame frame, Object self, Object other,
                         @Cached IntBuiltins.OrNode orNode) {
             return orNode.execute(frame, self, other);
         }
     }
 
-    @Builtin(name = J___XOR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___RXOR__, minNumOfPositionalArgs = 2)
-    @TypeSystemReference(PythonArithmeticTypes.class)
+    @Slot(value = SlotKind.nb_xor, isComplex = true)
     @GenerateNodeFactory
-    abstract static class XorNode extends BaseBoolBinaryNode {
+    abstract static class XorNode extends BinaryOpBuiltinNode {
         @Specialization
         static Object doBool(boolean self, boolean other) {
             return self ^ other;
         }
 
-        @Specialization(guards = "atLeastOneIsNotBoolean(self, other)")
+        @Fallback
         static Object doOther(VirtualFrame frame, Object self, Object other,
                         @Cached IntBuiltins.XorNode xorNode) {
             return xorNode.execute(frame, self, other);

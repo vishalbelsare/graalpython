@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,34 +36,116 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
+import struct
 import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+
+from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, CPyExtType, unhandled_error_compare
+
+int_bits = struct.calcsize('i') * 8
+max_int = 2 ** (int_bits - 1) - 1
+min_int = -2 ** (int_bits - 1)
+long_bits = struct.calcsize('l') * 8
+max_long = 2 ** (long_bits - 1) - 1
+min_long = -2 ** (long_bits - 1)
+max_ulong = 2 ** long_bits
+longlong_bits = struct.calcsize('q') * 8
+max_longlong = 2 ** (longlong_bits - 1) - 1
+min_longlong = -2 ** (longlong_bits - 1)
+ulonglong_bits = struct.calcsize('Q') * 8
+max_ulonglong = 2 ** ulonglong_bits
+size_t_bits = struct.calcsize('P') * 8
+max_size_t = 2 ** size_t_bits
+ssize_t_bits = struct.calcsize('n') * 8
+max_ssize_t = 2 ** (ssize_t_bits - 1) - 1
+min_ssize_t = -2 ** (ssize_t_bits - 1)
 
 
-def _reference_aslong(args):
-    # We cannot be sure if we are on 32-bit or 64-bit architecture. So, assume the smaller one.
-    n = int(args[0])
-    if n > 0x7fffffff:
-        raise OverflowError
+def _reference_as_index(n):
+    if not isinstance(n, int):
+        if hasattr(n, '__index__'):
+            n = n.__index__()
+            assert type(n) is int
+        else:
+            raise TypeError(f"{type(n)} object cannot be interpreted as an integer")
+    return n
+
+
+def _reference_as_long(args):
+    n = _reference_as_index(args[0])
+    if n > max_long or n < min_long:
+        raise OverflowError("Python int too large to convert to C long")
+    return n
+
+
+def _reference_as_longlong(args):
+    n = _reference_as_index(args[0])
+    if n > max_longlong or n < min_longlong:
+        raise OverflowError("Python int too large to convert to C long")
+    return n
+
+
+def _reference_as_int(args):
+    n = _reference_as_index(args[0])
+    if n > max_int or n < min_int:
+        raise OverflowError("Python int too large to convert to C int")
     return n
 
 
 def _reference_as_unsigned_long(args):
-    # We cannot be sure if we are on 32-bit or 64-bit architecture. So, assume the smaller one.
     n = args[0]
-    if n > 0xffffffff or n < 0:
-        raise OverflowError
-    return int(n)
+    if not isinstance(n, int):
+        raise TypeError("an integer is required")
+    if n < 0:
+        raise OverflowError("can't convert negative value to unsigned int")
+    if n >= max_ulong:
+        raise OverflowError("Python int too large to convert to C unsigned long")
+    return n
 
 
-def _reference_aslong_overflow(args):
-    # We cannot be sure if we are on 32-bit or 64-bit architecture. So, assume the smaller one.
+def _reference_as_unsigned_longlong(args):
     n = args[0]
-    if n > 0x7fffffff:
-        raise OverflowError
-    return (int(n), 0)
+    if not isinstance(n, int):
+        raise TypeError("an integer is required")
+    if n < 0:
+        raise OverflowError("can't convert negative value to unsigned int")
+    if n >= max_ulonglong:
+        raise OverflowError("Python int too large to convert to C unsigned long")
+    return n
+
+
+def _reference_as_unsigned_long_mask(args):
+    return _reference_as_index(args[0]) & (max_ulong - 1)
+
+
+def _reference_as_unsigned_longlong_mask(args):
+    return _reference_as_index(args[0]) & (max_ulonglong - 1)
+
+
+def _reference_as_long_and_overflow(args):
+    n = _reference_as_index(args[0])
+    if n > max_long:
+        return -1, 1
+    elif n < min_long:
+        return -1, -1
+    return n, 0
+
+
+def _reference_as_longlong_and_overflow(args):
+    n = _reference_as_index(args[0])
+    if n > max_longlong:
+        return -1, 1
+    elif n < min_longlong:
+        return -1, -1
+    return n, 0
+
+
+def _reference_as_ssize_t(args):
+    n = args[0]
+    if not isinstance(n, int):
+        raise TypeError("an integer is required")
+    if n > max_ssize_t or n < min_ssize_t:
+        raise OverflowError("Python int too large to convert to C ssize_t")
+    return n
 
 
 def _reference_fromvoidptr(args):
@@ -73,9 +155,52 @@ def _reference_fromvoidptr(args):
     return n
 
 
+def _reference_asvoidptr_roundtrip(args):
+    n = args[0]
+    if n < min_long or n >= max_ulonglong:
+        raise OverflowError("Python int too large to convert")
+    if n < 0:
+        return _reference_fromvoidptr(args)
+    return n
+
+
+def _reference_from_native_bytes(args):
+    data, flags = args
+    if flags == -1 or flags & 2:
+        byteorder = sys.byteorder
+    else:
+        byteorder = 'little' if flags & 1 else 'big'
+    signed = flags == -1 or not flags & 4
+    return int.from_bytes(data, byteorder, signed=signed)
+
+
+def _reference_from_unsigned_native_bytes(args):
+    data, flags = args
+    if flags == -1 or flags & 2:
+        byteorder = sys.byteorder
+    else:
+        byteorder = 'little' if flags & 1 else 'big'
+    return int.from_bytes(data, byteorder, signed=False)
+
+
+def _reference_as_native_bytes(args):
+    value, size, flags, expected_size = args
+    if flags == -1 or flags & 2:
+        byteorder = sys.byteorder
+    else:
+        byteorder = 'little' if flags & 1 else 'big'
+    if size:
+        value %= 1 << (size * 8)
+        data = value.to_bytes(size, byteorder)
+    else:
+        data = b''
+    return expected_size, data + b'\xa5'
+
+
 def _reference_fromlong(args):
     n = args[0]
     return n
+
 
 def _reference_sign(args):
     n = args[0]
@@ -86,61 +211,132 @@ def _reference_sign(args):
     else:
         return 1
 
+def _reference_is_compact(args):
+    n = args[0]
+    # the range is impl. specific, but let's assume it's at least int32
+    return 1 if -2147483648 <= n <= 2147483647 else 0
+
+
+def _reference_long_from_string(args):
+    num, base = args
+    if not num.strip():
+        return ValueError, len(num)
+    try:
+        return int(num, base), len(num)
+    except Exception as e:
+        for i in range(len(num)):
+            try:
+                int(num[:i + 1], base)
+            except Exception:
+                if num[0] == '0' and base == 0:
+                    i = len(num)
+                return type(e), i
+
+
 class DummyNonInt():
     pass
 
 
 class DummyIndexable:
 
+    def __init__(self, value=0xBEEF):
+        self.value = value
+
     def __index__(self):
-        return 0xBEEF
+        return self.value
+
+
+def _int_examples():
+    return [
+        (0,),
+        (1,),
+        (-1,),
+        (-2,),
+        (True,),
+        (False,),
+        (0x7fffffff,),
+        (0xffffffff,),
+        (-0xffffffff,),
+        (max_longlong,),
+        (max_longlong + 1,),
+        (min_longlong,),
+        (min_longlong - 1,),
+        (max_ulonglong - 1,),
+        (max_ulonglong,),
+        (0x7fffffffffffffffffffffffffffffff,),
+        (0xffffffffffffffffffffffffffffffff,),
+        (-0xffffffffffffffffffffffffffffffff,),
+        (0xffffffffffffffffffffffffffffffffff,),
+        (-0xffffffffffffffffffffffffffffffffff,),
+        (0.3,),
+        (DummyNonInt(),),
+        (DummyIndexable(),),
+        (DummyIndexable(max_longlong + 1),),
+        (DummyIndexable(min_longlong - 1),),
+    ]
 
 
 class TestPyLong(CPyExtTestCase):
+    test_PyLong_GetInfo = CPyExtFunction(
+        lambda args: sys.int_info,
+        lambda: ((),),
+        resultspec="O",
+        argspec="",
+        arguments=[],
+    )
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyLong, self).compile_module(name)
+    def test_native_long_subtype_has_native_layout(self):
+        NativeLongWithMember = CPyExtType(
+            "NativeLongWithMember",
+            """
+            static void NativeLongWithMember_dealloc(NativeLongWithMemberObject *self) {
+                Py_XDECREF(self->member);
+                Py_TYPE(self)->tp_free((PyObject *)self);
+            }
+            """,
+            ready_code="NativeLongWithMemberType.tp_new = PyLong_Type.tp_new;",
+            tp_base="&PyLong_Type",
+            struct_base="PyLongObject base;",
+            cmembers="PyObject *member;",
+            tp_dealloc="(destructor)NativeLongWithMember_dealloc",
+            tp_members='{"member", T_OBJECT_EX, offsetof(NativeLongWithMemberObject, member), 0, NULL}',
+        )
+
+        obj = NativeLongWithMember(10)
+        assert obj == 10
+        obj.member = "foo"
+        assert obj.member == "foo"
 
     test_PyLong_AsLong = CPyExtFunction(
-        lambda args: True,
-        lambda: (
-            (0, 0),
-            (-1, -1),
-            (0x7fffffff, 0x7fffffff),
-            (0xffffffffffffffffffffffffffffffff, -1),
-            (DummyNonInt(), -1),
-            (DummyIndexable(), 0xBEEF if sys.version_info >= (3, 8, 0) else 0xDEAD),
-        ),
-        code='''int wrap_PyLong_AsLong(PyObject* obj, long expected) {
-            long res = PyLong_AsLong(obj);
-            PyErr_Clear();
-            if (res == expected) {
-                return 1;
-            } else {
-                if (expected != -1 && PyErr_Occurred()) {
-                    PyErr_Print();
-                } else {
-                    fprintf(stderr, "expected: %ld\\nactual: %ld\\n", expected, res);
-                    fflush(stderr);
-                }
-                return 0;
-            }
-        }''',
+        _reference_as_long,
+        _int_examples,
         resultspec="l",
-        argspec='Ol',
-        arguments=["PyObject* obj", "long expected"],
-        callfunction="wrap_PyLong_AsLong",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_AsLongLong = CPyExtFunction(
+        _reference_as_longlong,
+        _int_examples,
+        resultspec="L",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_AsInt = CPyExtFunction(
+        _reference_as_int,
+        _int_examples,
+        resultspec="l",
+        argspec='O',
+        arguments=["PyObject* obj"],
         cmpfunc=unhandled_error_compare
     )
 
     test_PyLong_AsLongAndOverflow = CPyExtFunctionOutVars(
-        _reference_aslong_overflow,
-        lambda: (
-            (0,),
-            (-1,),
-            (0x7fffffff,),
-        ),
+        _reference_as_long_and_overflow,
+        _int_examples,
         resultspec="li",
         argspec='O',
         arguments=["PyObject* obj"],
@@ -149,31 +345,56 @@ class TestPyLong(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
+    test_PyLong_AsLongLongAndOverflow = CPyExtFunctionOutVars(
+        _reference_as_longlong_and_overflow,
+        _int_examples,
+        resultspec="Li",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        resulttype="long long",
+        resultvars=["int overflow"],
+        cmpfunc=unhandled_error_compare
+    )
+
     test_PyLong_AsUnsignedLong = CPyExtFunction(
         _reference_as_unsigned_long,
-        lambda: (
-            (0,),
-            (-1,),
-            (-2,),
-            (True,),
-            (False,),
-            (0x7fffffff,),
-            (0xffffffff,),
-            # we could use larger values on 64-bit systems but how should we know?
-        ),
+        _int_examples,
         resultspec="k",
         argspec='O',
         arguments=["PyObject* obj"],
         cmpfunc=unhandled_error_compare
     )
 
+    test_PyLong_AsUnsignedLongLong = CPyExtFunction(
+        _reference_as_unsigned_longlong,
+        _int_examples,
+        resultspec="K",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_AsUnsignedLongMask = CPyExtFunction(
+        _reference_as_unsigned_long_mask,
+        _int_examples,
+        resultspec="k",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_AsUnsignedLongLongMask = CPyExtFunction(
+        _reference_as_unsigned_longlong_mask,
+        _int_examples,
+        resultspec="K",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        cmpfunc=unhandled_error_compare
+    )
+
     test_PyLong_AsSsize_t = CPyExtFunction(
-        lambda args: int(args[0]),
-        lambda: (
-            (0,),
-            (-1,),
-            (0x7fffffff,),
-        ),
+        _reference_as_ssize_t,
+        _int_examples,
         resultspec="n",
         argspec='O',
         arguments=["PyObject* obj"],
@@ -194,16 +415,90 @@ class TestPyLong(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
-    test_PyLong_FromSize_t = CPyExtFunction(
-        lambda args: int(args[0]),
-        lambda: (
-            (0,),
-            (1,),
-            (0xffffffff,),
-        ),
+    test_PyLong_FromUnsignedLong = CPyExtFunction(
+        lambda args: (0, 1, max_ulong - 1),
+        lambda: ((),),
+        code="""
+        PyObject* wrap_PyLong_FromUnsignedLong() {
+            PyObject* small = PyLong_FromUnsignedLong(0);
+            PyObject* one = PyLong_FromUnsignedLong(1);
+            PyObject* large = PyLong_FromUnsignedLong(ULONG_MAX);
+            PyObject* result;
+            if (small == NULL || one == NULL || large == NULL) {
+                Py_XDECREF(small);
+                Py_XDECREF(one);
+                Py_XDECREF(large);
+                return NULL;
+            }
+            result = PyTuple_Pack(3, small, one, large);
+            Py_DECREF(small);
+            Py_DECREF(one);
+            Py_DECREF(large);
+            return result;
+        }
+        """,
         resultspec="O",
-        argspec='n',
-        arguments=["size_t n"],
+        argspec='',
+        arguments=[],
+        callfunction="wrap_PyLong_FromUnsignedLong",
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_FromUnsignedLongLong = CPyExtFunction(
+        lambda args: (0, 1, max_ulonglong - 1),
+        lambda: ((),),
+        code="""
+        PyObject* wrap_PyLong_FromUnsignedLongLong() {
+            PyObject* small = PyLong_FromUnsignedLongLong(0);
+            PyObject* one = PyLong_FromUnsignedLongLong(1);
+            PyObject* large = PyLong_FromUnsignedLongLong(ULLONG_MAX);
+            PyObject* result;
+            if (small == NULL || one == NULL || large == NULL) {
+                Py_XDECREF(small);
+                Py_XDECREF(one);
+                Py_XDECREF(large);
+                return NULL;
+            }
+            result = PyTuple_Pack(3, small, one, large);
+            Py_DECREF(small);
+            Py_DECREF(one);
+            Py_DECREF(large);
+            return result;
+        }
+        """,
+        resultspec="O",
+        argspec='',
+        arguments=[],
+        callfunction="wrap_PyLong_FromUnsignedLongLong",
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_FromSize_t = CPyExtFunction(
+        lambda args: (0, 1, max_size_t - 1),
+        lambda: ((),),
+        code="""
+        PyObject* wrap_PyLong_FromSize_t() {
+            PyObject* small = PyLong_FromSize_t(0);
+            PyObject* one = PyLong_FromSize_t(1);
+            PyObject* large = PyLong_FromSize_t((size_t)-1);
+            PyObject* result;
+            if (small == NULL || one == NULL || large == NULL) {
+                Py_XDECREF(small);
+                Py_XDECREF(one);
+                Py_XDECREF(large);
+                return NULL;
+            }
+            result = PyTuple_Pack(3, small, one, large);
+            Py_DECREF(small);
+            Py_DECREF(one);
+            Py_DECREF(large);
+            return result;
+        }
+        """,
+        resultspec="O",
+        argspec='',
+        arguments=[],
+        callfunction="wrap_PyLong_FromSize_t",
         cmpfunc=unhandled_error_compare
     )
 
@@ -213,6 +508,7 @@ class TestPyLong(CPyExtTestCase):
             (0.0,),
             (-1.0,),
             (-11.123456789123456789,),
+            (1.0e100,),
         ),
         resultspec="O",
         argspec='d',
@@ -232,6 +528,31 @@ class TestPyLong(CPyExtTestCase):
         resultspec="O",
         argspec='n',
         arguments=["void* ptr"],
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyLong_AsVoidPtr = CPyExtFunction(
+        _reference_asvoidptr_roundtrip,
+        lambda: (
+            (0,),
+            (42,),
+            (-1,),
+            (0xffffffff,),
+            (0xffffffffffffffff,),
+            (0x10000000000000000,),
+        ),
+        code="""PyObject* wrap_PyLong_AsVoidPtr(PyObject* obj) {
+            void* ptr = PyLong_AsVoidPtr(obj);
+            if (ptr == NULL && PyErr_Occurred()) {
+                return NULL;
+            }
+            return PyLong_FromVoidPtr(ptr);
+        }
+        """,
+        resultspec="O",
+        argspec='O',
+        arguments=["PyObject* obj"],
+        callfunction="wrap_PyLong_AsVoidPtr",
         cmpfunc=unhandled_error_compare
     )
 
@@ -272,7 +593,6 @@ class TestPyLong(CPyExtTestCase):
         lambda args: True,
         lambda: ((None,),),
         code="""PyObject* PyLong_FromAndToVoidPtrAllocated(PyObject* none) {
-            unsigned long l = 0;
             void* unwrappedPtr;
             PyObject* result;
             void* dummyPtr = malloc(sizeof(size_t));
@@ -281,7 +601,7 @@ class TestPyLong(CPyExtTestCase):
             if (r < 0) {
                 return Py_None;
             }
-            l = PyLong_AsUnsignedLong(obj);
+            unsigned long long l = PyLong_AsUnsignedLongLong(obj);
             unwrappedPtr = (void*)l;
             result = unwrappedPtr == dummyPtr ? Py_True : Py_False;
             free(dummyPtr);
@@ -327,8 +647,11 @@ class TestPyLong(CPyExtTestCase):
     )
 
     test_PyLong_FromString = CPyExtFunction(
-        lambda args: int(args[0], args[1]),
+        _reference_long_from_string,
         lambda: (
+            ("00", 0),
+            ("03", 0),
+            ("0003", 0),
             ("  12 ", 10),
             ("  12abg13 ", 22),
             ("12", 0),
@@ -336,10 +659,27 @@ class TestPyLong(CPyExtTestCase):
             ("0x132f1", 0),
             ("0x132132ff213213213231", 0),
             ("13123441234123423412341234123412341234124312341234213213213213213231", 0),
+            ("1312344123412342341234123412341234123x4124312341234213213213213213231", 0),
+            ("", 0),
+            (" ", 0),
+            ("123 ", 0),
+            ("-123 ", 0),
+            ("123 x", 0),
+            ("x", 0),
+            ("_1", 0),
+            ("1_", 0),
+            ("1_1", 0),
+            ("1__1", 0),
         ),
         code='''PyObject* wrap_PyLong_FromString(const char* str, int base) {
             char* pend;
-            return PyLong_FromString(str, &pend, base);
+            PyObject* val = PyLong_FromString(str, &pend, base);
+            if (!val) {
+                PyObject* exc = PyErr_GetRaisedException();
+                val = Py_NewRef(Py_TYPE(exc));
+                Py_DECREF(exc);
+            }
+            return Py_BuildValue("OL", val, pend - str);
         }''',
         callfunction="wrap_PyLong_FromString",
         resultspec="O",
@@ -372,7 +712,7 @@ class TestPyLong(CPyExtTestCase):
             memset(buf, 0x33, n + 1);
             PyObject* result;
             Py_INCREF(object);
-            if (_PyLong_AsByteArray((PyLongObject*) object, buf, n, little_endian, is_signed)) {
+            if (_PyLong_AsByteArray((PyLongObject*) object, buf, n, little_endian, is_signed, 1)) {
                 Py_DECREF(object);
                 return NULL;
             }
@@ -390,7 +730,25 @@ class TestPyLong(CPyExtTestCase):
         argspec="OniiO",
         arguments=["PyObject* object", "Py_ssize_t n", "int little_endian", "int is_signed", "PyObject* unused"],
     )
-    
+
+    test_PyUnstable_Long_IsCompact = CPyExtFunction(
+        _reference_is_compact,
+        # for CPython the range is different, so we test only obvious values
+        lambda: ((0,),  (-1,), (1,), (9223372036854775807 * 10,)),
+        resultspec="i",
+        argspec='O',
+        arguments=["PyLongObject* o"],
+    )
+
+    test_PyUnstable_Long_CompactValue = CPyExtFunction(
+        lambda x: x[0],
+        # for CPython the range is different, so we test only obvious values
+        lambda: ((0,),  (-1,), (1,)),
+        resultspec="l",
+        argspec='O',
+        arguments=["PyLongObject* o"],
+    )
+
     test__PyLong_Sign = CPyExtFunction(
         _reference_sign,
         lambda: (
@@ -420,5 +778,122 @@ class TestPyLong(CPyExtTestCase):
         resultspec="O",
         argspec="Oi",
         arguments=["PyObject* n", "int base"],
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test__PyLong_FromByteArray = CPyExtFunction(
+        lambda args: int.from_bytes(args[0], 'little' if args[1] else 'big', signed=args[2]),
+        lambda: (
+            (b'', 1, 1),
+            (b'\x00\x0009', 0, 1),
+            (b'90\x00\x00\x00\x00\x00\x00', 1, 1),
+            (b'\xff\xff\xcf\xc7', 0, 1),
+            (b'\xff\xff\xff\xff\xff\xff\xff\xab', 0, 0),
+            (b'\xab\xff\xff\xff\xff\xff\xff\xff', 1, 0),
+            (b'\xff\xff\xff\xff\xff\xff\xff\xff', 0, 1),
+            (b'\xff\xff\xff\xff\xff\xff\xff\xff', 1, 1),
+        ),
+        resultspec="O",
+        argspec="y#ii",
+        arguments=["const char* bytes", "Py_ssize_t size", "int little_endian", "int is_signed"],
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test_PyLong_FromNativeBytes = CPyExtFunction(
+        _reference_from_native_bytes,
+        lambda: (
+            (b'', 0),
+            (b'\x00', 0),
+            (b'\xff', 0),
+            (b'\xff', 4),
+            (b'\x80\x00', 0),
+            (b'\x80\x00', 1),
+            (b'\x00\x80', 1),
+            (b'\xff\x00', -1),
+            (b'\xff\x00', 2),
+            (b'\xff\x00', 3),
+            (b'\x01\x23\x45\x67\x89\xab\xcd\xef\x01', 0),
+        ),
+        resultspec="O",
+        argspec="y#i",
+        arguments=["const char* buffer", "Py_ssize_t size", "int flags"],
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test_PyLong_FromUnsignedNativeBytes = CPyExtFunction(
+        _reference_from_unsigned_native_bytes,
+        lambda: (
+            (b'', 0),
+            (b'\x00', 0),
+            (b'\xff', 0),
+            (b'\xff', 4),
+            (b'\x80\x00', 0),
+            (b'\x80\x00', 1),
+            (b'\x00\x80', 1),
+            (b'\xff\x00', 2),
+            (b'\xff\x00', 3),
+            (b'\x01\x23\x45\x67\x89\xab\xcd\xef\x01', 0),
+        ),
+        resultspec="O",
+        argspec="y#i",
+        arguments=["const char* buffer", "Py_ssize_t size", "int flags"],
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test_PyLong_AsNativeBytes = CPyExtFunction(
+        _reference_as_native_bytes,
+        lambda: (
+            (0, 0, -1, struct.calcsize('n')),
+            (4, 2, 0, 2),
+            (4, 2, 1, 2),
+            (-42, 2, 0, 2),
+            (-42, 2, 1, 2),
+            (255, 1, 0, 2),
+            (255, 1, 4, 1),
+            (256, 1, 0, struct.calcsize('n')),
+            (-256, 1, 0, struct.calcsize('n')),
+            (2**63, 8, 0, 9),
+            (2**63, 8, 4, 8),
+            (-2**63, 8, 0, 8),
+            (2**255, 32, 0, 33),
+            (-(2**255), 32, 0, 32),
+            (0x123456, 3, -1, 3),
+            (0x123456, 3, 2, 3),
+        ),
+        code='''PyObject* wrap_PyLong_AsNativeBytes(PyObject* value, Py_ssize_t size, int flags, int unused) {
+            unsigned char* buffer = PyMem_Malloc(size + 1);
+            if (buffer == NULL) {
+                return PyErr_NoMemory();
+            }
+            memset(buffer, 0xa5, size + 1);
+            Py_ssize_t result = PyLong_AsNativeBytes(value, buffer, size, flags);
+            if (result < 0) {
+                PyMem_Free(buffer);
+                return NULL;
+            }
+            PyObject* bytes = PyBytes_FromStringAndSize((const char*)buffer, size + 1);
+            PyMem_Free(buffer);
+            if (bytes == NULL) {
+                return NULL;
+            }
+            return Py_BuildValue("nN", result, bytes);
+        }''',
+        callfunction="wrap_PyLong_AsNativeBytes",
+        resultspec="O",
+        argspec="Onii",
+        arguments=["PyObject* value", "Py_ssize_t size", "int flags", "int unused"],
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test__PyLong_NumBits = CPyExtFunction(
+        lambda args: args[0].bit_length(),
+        lambda: (
+            (1,),
+            (1230948701328090743,),
+            (-1230948701328090743,),
+        ),
+        resultspec="n",
+        argspec="O",
+        arguments=["PyObject* obj"],
         cmpfunc=unhandled_error_compare,
     )

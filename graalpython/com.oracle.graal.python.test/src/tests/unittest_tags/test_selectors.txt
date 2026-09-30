@@ -1,113 +1,57 @@
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_close
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_context_manager
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_empty_select
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_fileno
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_get_key
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_get_map
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_modify
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_modify_unregister
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_register
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_select
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_select_interrupt_noraise
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_selector
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_timeout
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_unregister
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_unregister_after_fd_close
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_unregister_after_fd_close_and_reuse
-*graalpython.lib-python.3.test.test_selectors.DefaultSelectorTestCase.test_unregister_after_socket_close
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_above_fd_setsize
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_close
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_context_manager
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_empty_select
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_fileno
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_get_key
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_get_map
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_modify
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_modify_unregister
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_register
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_select
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_select_interrupt_exc
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_select_interrupt_noraise
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_selector
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_timeout
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_unregister
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_unregister_after_fd_close
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_unregister_after_fd_close_and_reuse
-*graalpython.lib-python.3.test.test_selectors.DevpollSelectorTestCase.test_unregister_after_socket_close
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_above_fd_setsize
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_close
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_context_manager
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_empty_select
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_fileno
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_get_key
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_get_map
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_modify
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_modify_unregister
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_register
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_register_file
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_select
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_select_interrupt_exc
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_select_interrupt_noraise
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_selector
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_timeout
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_unregister
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_unregister_after_fd_close
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_unregister_after_fd_close_and_reuse
-*graalpython.lib-python.3.test.test_selectors.EpollSelectorTestCase.test_unregister_after_socket_close
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_above_fd_setsize
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_close
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_context_manager
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_empty_select
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_empty_select_timeout
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_fileno
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_get_key
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_get_map
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_modify
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_modify_unregister
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_register
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_register_bad_fd
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_select
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_select_interrupt_exc
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_select_interrupt_noraise
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_selector
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_timeout
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_unregister
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_unregister_after_fd_close
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_unregister_after_fd_close_and_reuse
-*graalpython.lib-python.3.test.test_selectors.KqueueSelectorTestCase.test_unregister_after_socket_close
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_above_fd_setsize
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_close
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_context_manager
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_empty_select
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_fileno
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_get_key
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_get_map
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_modify
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_modify_unregister
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_register
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_select
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_select_interrupt_exc
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_select_interrupt_noraise
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_selector
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_timeout
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_unregister
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_unregister_after_fd_close
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_unregister_after_fd_close_and_reuse
-*graalpython.lib-python.3.test.test_selectors.PollSelectorTestCase.test_unregister_after_socket_close
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_close
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_context_manager
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_empty_select
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_fileno
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_get_key
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_get_map
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_modify
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_modify_unregister
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_register
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_select
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_select_interrupt_noraise
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_selector
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_timeout
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_unregister
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_unregister_after_fd_close
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_unregister_after_fd_close_and_reuse
-*graalpython.lib-python.3.test.test_selectors.SelectSelectorTestCase.test_unregister_after_socket_close
+test.test_selectors.DefaultSelectorTestCase.test_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_context_manager @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_empty_select @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.DefaultSelectorTestCase.test_fileno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_get_key @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_get_map @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_modify @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_modify_unregister @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.DefaultSelectorTestCase.test_register @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_select @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_select_interrupt_noraise @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.DefaultSelectorTestCase.test_select_read_write @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+# Darwin arm64 kqueue intermittently misses the read event
+!test.test_selectors.DefaultSelectorTestCase.test_select_read_write @ darwin-arm64
+test.test_selectors.DefaultSelectorTestCase.test_selector @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_unregister @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_unregister_after_fd_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.DefaultSelectorTestCase.test_unregister_after_fd_close_and_reuse @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.DefaultSelectorTestCase.test_unregister_after_socket_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.PollSelectorTestCase.test_close @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_context_manager @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_empty_select @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_fileno @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_get_key @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_get_map @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_modify @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_modify_unregister @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_register @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_select @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_select_interrupt_noraise @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_select_read_write @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_selector @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_timeout @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_unregister @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_unregister_after_fd_close @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_unregister_after_fd_close_and_reuse @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.PollSelectorTestCase.test_unregister_after_socket_close @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.SelectSelectorTestCase.test_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_context_manager @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_empty_select @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.SelectSelectorTestCase.test_fileno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_get_key @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_get_map @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_modify @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_register @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_select @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_select_interrupt_noraise @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.SelectSelectorTestCase.test_select_read_write @ linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+# Darwin arm64 kqueue intermittently misses the read event
+!test.test_selectors.SelectSelectorTestCase.test_select_read_write @ darwin-arm64
+test.test_selectors.SelectSelectorTestCase.test_selector @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_unregister @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_unregister_after_fd_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_selectors.SelectSelectorTestCase.test_unregister_after_fd_close_and_reuse @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_selectors.SelectSelectorTestCase.test_unregister_after_socket_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

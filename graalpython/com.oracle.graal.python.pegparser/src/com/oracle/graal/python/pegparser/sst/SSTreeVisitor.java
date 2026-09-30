@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -78,6 +78,8 @@ public interface SSTreeVisitor<T> {
 
     T visit(StmtTy.Assign node);
 
+    T visit(StmtTy.TypeAlias node);
+
     T visit(StmtTy.AugAssign node);
 
     T visit(StmtTy.AnnAssign node);
@@ -99,6 +101,8 @@ public interface SSTreeVisitor<T> {
     T visit(StmtTy.Raise node);
 
     T visit(StmtTy.Try node);
+
+    T visit(StmtTy.TryStar node);
 
     T visit(StmtTy.Assert node);
 
@@ -205,4 +209,10 @@ public interface SSTreeVisitor<T> {
     T visit(PatternTy.MatchOr node);
 
     T visit(TypeIgnoreTy.TypeIgnore node);
+
+    T visit(TypeParamTy.TypeVar node);
+
+    T visit(TypeParamTy.ParamSpec node);
+
+    T visit(TypeParamTy.TypeVarTuple node);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,30 +42,28 @@ package com.oracle.graal.python.nodes.bytecode;
 
 import static com.oracle.graal.python.nodes.ErrorMessages.ASYNC_FOR_NO_AITER;
 import static com.oracle.graal.python.nodes.ErrorMessages.ASYNC_FOR_NO_ANEXT_INITIAL;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___ANEXT__;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
-import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotUnaryFunc.CallSlotUnaryNode;
+import com.oracle.graal.python.lib.PyAIterCheckNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.LookupInheritedAttributeNode;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.truffle.api.bytecode.OperationProxy.Proxyable;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
+@Proxyable(storeBytecodeIndex = true, allowUncached = true)
 @GenerateUncached
-@ImportStatic(SpecialMethodSlot.class)
 @GenerateInline(false) // used in bytecode root node
 public abstract class GetAIterNode extends PNodeWithContext {
     public abstract Object execute(Frame frame, Object receiver);
@@ -74,32 +72,28 @@ public abstract class GetAIterNode extends PNodeWithContext {
         return GetAIterNodeGen.getUncached();
     }
 
+    @NeverDefault
     public static GetAIterNode create() {
         return GetAIterNodeGen.create();
     }
 
     @Specialization
-    Object doGeneric(Frame frame, Object receiver,
-                    @Bind("this") Node inliningTarget,
-                    @Cached(parameters = "AIter") LookupSpecialMethodSlotNode getAIter,
+    public static Object doGeneric(VirtualFrame frame, Object receiver,
+                    @Bind Node inliningTarget,
                     @Cached GetClassNode getAsyncIterType,
-                    @Cached PRaiseNode.Lazy raiseNoAIter,
-                    @Cached TypeNodes.GetNameNode getName,
-                    @Cached InlinedBranchProfile errorProfile,
-                    @Cached CallUnaryMethodNode callAIter,
-                    @Cached LookupInheritedAttributeNode.Dynamic lookupANext) {
-
+                    @Cached GetCachedTpSlotsNode getSlots,
+                    @Cached CallSlotUnaryNode callSlot,
+                    @Cached PRaiseNode raiseNoAIter,
+                    @Cached PRaiseNode raiseNoANext,
+                    @Cached PyAIterCheckNode checkNode) {
         Object type = getAsyncIterType.execute(inliningTarget, receiver);
-        Object getter = getAIter.execute(frame, type, receiver);
-        if (getter == PNone.NO_VALUE) {
-            errorProfile.enter(this);
-            throw raiseNoAIter.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ASYNC_FOR_NO_AITER, getName.execute(inliningTarget, type));
+        TpSlots slots = getSlots.execute(inliningTarget, type);
+        if (slots.am_aiter() == null) {
+            throw raiseNoAIter.raise(inliningTarget, PythonBuiltinClassType.TypeError, ASYNC_FOR_NO_AITER, type);
         }
-        Object asyncIterator = callAIter.executeObject(frame, getter, receiver);
-        Object anext = lookupANext.execute(inliningTarget, asyncIterator, T___ANEXT__);
-        if (anext == PNone.NO_VALUE) {
-            errorProfile.enter(this);
-            throw raiseNoAIter.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ASYNC_FOR_NO_ANEXT_INITIAL, getName.execute(inliningTarget, type));
+        Object asyncIterator = callSlot.execute(frame, inliningTarget, slots.am_aiter(), receiver);
+        if (!checkNode.execute(inliningTarget, asyncIterator)) {
+            throw raiseNoANext.raise(inliningTarget, PythonBuiltinClassType.TypeError, ASYNC_FOR_NO_ANEXT_INITIAL, asyncIterator);
         }
         return asyncIterator;
     }

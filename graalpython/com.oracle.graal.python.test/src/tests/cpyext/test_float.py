@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,11 +37,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import math
+import unittest
 
 from . import CPyExtType, CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, \
     is_native_object
-
-__dir__ = __file__.rpartition("/")[0]
 
 
 def _float_compare(x, y):
@@ -90,11 +89,6 @@ NativeFloatSubclass = CPyExtType(
 
 
 class TestPyFloat(CPyExtTestCase):
-
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyFloat, self).compile_module(name)
-
     test_PyFloat_AsDouble = CPyExtFunctionOutVars(
         lambda args: True,
         lambda: (
@@ -152,6 +146,8 @@ class TestPyFloat(CPyExtTestCase):
             ("nan",),
             ("-inf",),
             ("not-a-float",),
+            (b"1",),
+            (memoryview(b"1"),),
         ),
         resultspec="O",
         argspec='O',
@@ -198,7 +194,7 @@ class TestPyFloat(CPyExtTestCase):
     )
 
 
-class TestPyOSDouble:
+class TestPyOSDouble(unittest.TestCase):
     def test_PyOS_double_to_string(self):
         TestPyOS_Double_To_String = CPyExtType(
             "TestPyOS_Double_To_String",
@@ -238,7 +234,7 @@ class TestPyOSDouble:
         assert tester.PyOS_string_to_double_test('150.604459') == float(150.604459)
 
 
-class TestNativeFloatSubclass:
+class TestNativeFloatSubclass(unittest.TestCase):
     def test_create(self):
         f = NativeFloatSubclass(1.0)
         assert is_native_object(f)
@@ -248,6 +244,25 @@ class TestNativeFloatSubclass:
 
         f = ManagedSubclass(1.0)
         assert is_native_object(f)
+
+    def test_alloc_failure(self):
+        """A native float subtype must propagate tp_alloc failure instead of crashing on NULL."""
+        FailingAllocFloatSubclass = CPyExtType(
+            'FailingAllocFloatSubclass',
+            r'''
+            static PyObject* fail_alloc(PyTypeObject *type, Py_ssize_t nitems) {
+                PyErr_NoMemory();
+                return NULL;
+            }
+            ''',
+            struct_base='PyFloatObject base;',
+            tp_base='&PyFloat_Type',
+            tp_new='0',
+            tp_alloc='fail_alloc',
+            tp_free='0',
+        )
+        with self.assertRaises(MemoryError):
+            FailingAllocFloatSubclass(1.0)
 
     def test_methods(self):
         f = NativeFloatSubclass(1.1)

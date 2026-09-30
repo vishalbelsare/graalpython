@@ -1,40 +1,61 @@
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_crcrcrlf
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_crcrcrlf2
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_crcrlf
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_crlf
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_default_coding
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_double_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_double_coding_same_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_first_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_first_non_utf8_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_second_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_second_non_utf8_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_third_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_utf8_bom
-*graalpython.lib-python.3.test.test_source_encoding.BytesSourceEncodingTest.test_utf8_bom_and_utf8_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_crcrcrlf
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_crcrcrlf2
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_crcrlf
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_crlf
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_default_coding
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_double_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_double_coding_same_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_first_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_first_non_utf8_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_second_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_second_non_utf8_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_third_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_utf8_bom
-*graalpython.lib-python.3.test.test_source_encoding.FileSourceEncodingTest.test_utf8_bom_and_utf8_coding_line
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_20731
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_bad_coding
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_bad_coding2
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_compilestring
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_error_message
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_exec_valid_coding
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_file_parse
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_issue2301
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_issue3297
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_issue4626
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_issue7820
-*graalpython.lib-python.3.test.test_source_encoding.MiscSourceEncodingTest.test_pep263
+test.test_source_encoding.BytesSourceEncodingTest.test_crcrcrlf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_crcrcrlf2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_crcrlf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_crlf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_default_coding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_double_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_double_coding_same_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_double_coding_utf8 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_first_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_first_non_utf8_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_long_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_long_first_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_long_first_utf8_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_long_second_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_long_second_utf8_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_nul_in_first_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_nul_in_second_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_second_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_second_coding_line_empty_first_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_second_non_utf8_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_third_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_utf8_bom @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_utf8_bom_and_utf8_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_utf8_bom_utf8_comments @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.BytesSourceEncodingTest.test_utf8_non_utf8_comment_line_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_crcrcrlf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_crcrcrlf2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_crcrlf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_crlf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_default_coding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_double_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_double_coding_same_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_double_coding_utf8 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_first_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_first_non_utf8_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_long_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_long_coding_name @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_long_first_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_long_first_utf8_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_long_second_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_long_second_utf8_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_second_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_second_coding_line_empty_first_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_second_non_utf8_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_third_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_utf8_bom @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_utf8_bom_and_utf8_coding_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.FileSourceEncodingTest.test_utf8_bom_utf8_comments @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_20731 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_bad_coding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_bad_coding2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_compilestring @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_error_message @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_exec_valid_coding @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_file_parse @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_import_encoded_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_issue2301 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_issue3297 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_issue4626 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_issue7820 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_source_encoding.MiscSourceEncodingTest.test_truncated_utf8_at_eof @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

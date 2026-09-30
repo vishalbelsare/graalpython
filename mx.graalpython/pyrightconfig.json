@@ -1,0 +1,8 @@
+{
+    "extraPaths": [
+        "../../mx/src/",
+        "../../graal/truffle/mx.truffle/",
+        "../../graal/sdk/mx.sdk/",
+    ],
+    "pythonPlatform": "All",
+}

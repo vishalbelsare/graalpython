@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,9 +42,6 @@ package com.oracle.graal.python.util;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PString;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
-import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DOC__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___NEW__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
 
@@ -65,50 +62,55 @@ import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
 import javax.management.ReflectionException;
 
-import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.VMRuntime;
 import org.graalvm.polyglot.io.ByteSequence;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.Builtin;
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage;
+import com.oracle.graal.python.builtins.objects.common.HashingStorage;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageSetItem;
 import com.oracle.graal.python.builtins.objects.ellipsis.PEllipsis;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
-import com.oracle.graal.python.builtins.objects.getsetdescriptor.GetSetDescriptor;
-import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.str.PString;
+import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
-import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.function.BuiltinFunctionRootNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.pegparser.scope.ScopeEnvironment;
 import com.oracle.graal.python.pegparser.sst.ConstantValue;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.graal.python.runtime.object.PythonObjectSlowPathFactory;
+import com.oracle.graal.python.pegparser.tokenizer.CodePoints;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleOptions;
+import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.dsl.NodeFactory;
-import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.frame.MaterializedFrame;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.memory.ByteArraySupport;
+import com.oracle.truffle.api.nodes.InvalidAssumptionException;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.object.Property;
+import com.oracle.truffle.api.object.PropertyGetter;
+import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.profiles.ConditionProfile;
-import com.oracle.truffle.api.profiles.ValueProfile;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleString.Encoding;
+import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
+import com.oracle.truffle.api.strings.TruffleStringIterator;
 
 import sun.misc.Unsafe;
 
@@ -133,6 +135,17 @@ public final class PythonUtils {
      * Encoding of all {@link TruffleString} instances.
      */
     public static final TruffleString.Encoding TS_ENCODING = TruffleString.Encoding.UTF_32;
+    public static final TruffleString.CodePointSet SURROGATE_CODE_POINT_SET = TruffleString.CodePointSet.fromRanges(new int[]{
+                    Character.MIN_SURROGATE, Character.MAX_SURROGATE,
+    }, TS_ENCODING);
+    /**
+     * Encoding for {@link TruffleString}-representations of bytes-like objects.
+     */
+    public static final TruffleString.Encoding TS_ENCODING_BINARY = TruffleString.Encoding.ISO_8859_1;
+
+    public static TruffleStringBuilderUTF32 createStringBuilder() {
+        return TruffleStringBuilder.createUTF32();
+    }
 
     public static final String[] EMPTY_STRING_ARRAY = new String[0];
     public static final TruffleString[] EMPTY_TRUFFLESTRING_ARRAY = new TruffleString[0];
@@ -140,9 +153,14 @@ public final class PythonUtils {
     public static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
     public static final int[] EMPTY_INT_ARRAY = new int[0];
     public static final long[] EMPTY_LONG_ARRAY = new long[0];
+    public static final short[] EMPTY_SHORT_ARRAY = new short[0];
+    public static final boolean[] EMPTY_BOOLEAN_ARRAY = new boolean[0];
     public static final double[] EMPTY_DOUBLE_ARRAY = new double[0];
     public static final char[] EMPTY_CHAR_ARRAY = new char[0];
+    public static final Assumption[] EMPTY_ASSUMPTION_ARRAY = new Assumption[0];
     public static final ByteSequence EMPTY_BYTE_SEQUENCE = ByteSequence.create(EMPTY_BYTE_ARRAY);
+
+    private static final ConcurrentWeakSet<TruffleString> TRUFFLE_STRING_INTERNING_CACHE = new ConcurrentWeakSet<>();
 
     /**
      * Returns an estimate for the initial capacity of a
@@ -157,9 +175,41 @@ public final class PythonUtils {
     }
 
     /**
+     * Intern the given string, returning a TruffleString in the cache. It is correct if the passed
+     * string is a lazy substring, because it will be copied before it is added to the map.
+     */
+    @TruffleBoundary
+    public static TruffleString internString(TruffleString string) {
+        assert string.isCompatibleToUncached(TS_ENCODING);
+
+        TruffleString interned = TRUFFLE_STRING_INTERNING_CACHE.intern(string, s -> {
+            // Use materializeSubstringUncached() to ensure the TruffleString in the cache does not
+            // hold onto more bytes than necessary
+            return s.asManagedTruffleStringUncached(TS_ENCODING).materializeSubstringUncached(TS_ENCODING);
+        });
+        assert interned.equals(string);
+        return interned;
+    }
+
+    @TruffleBoundary
+    public static boolean isInterned(TruffleString string) {
+        return TRUFFLE_STRING_INTERNING_CACHE.isInterned(string);
+    }
+
+    @TruffleBoundary
+    public static boolean isInterned(TruffleString[] strings) {
+        for (TruffleString string : strings) {
+            if (!isInterned(string)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Uncached conversion of {@link String} to {@link TruffleString}. The intended use of this
      * method is in static initializers where the argument is a string literal (or a static final
-     * constant).
+     * constant). Consider using {@link #tsInternedLiteral(String)}.
      */
     @TruffleBoundary
     public static TruffleString tsLiteral(String s) {
@@ -167,14 +217,25 @@ public final class PythonUtils {
         return TruffleString.fromConstant(s, TS_ENCODING);
     }
 
+    @TruffleBoundary
+    public static TruffleString tsInternedLiteral(String s) {
+        return internString(tsLiteral(s));
+    }
+
     /**
-     * Uncached conversion of {@link String} to {@link TruffleString}. The intended use of this
-     * method is in slow-path where the argument is a variable as a shortcut for
+     * Consider using {@link #toInternedTruffleStringUncached(String)}. Uncached conversion of
+     * {@link String} to {@link TruffleString}. The intended use of this method is in slow-path
+     * where the argument is a variable as a shortcut for
      * {@link TruffleString#fromJavaStringUncached(String, Encoding)}.
      */
     @TruffleBoundary
     public static TruffleString toTruffleStringUncached(String s) {
         return s == null ? null : TruffleString.fromJavaStringUncached(s, TS_ENCODING);
+    }
+
+    @TruffleBoundary
+    public static TruffleString toInternedTruffleStringUncached(String s) {
+        return s == null ? null : internString(toTruffleStringUncached(s));
     }
 
     public static PString toPString(TruffleString name) {
@@ -197,7 +258,8 @@ public final class PythonUtils {
 
     /**
      * Creates an array of {@link TruffleString}s using uncached conversion. The intended use of
-     * this method is in slow-path where the argument is a variable.
+     * this method is in slow-path where the argument is a variable. Consider using
+     * {@link #toInternedTruffleStringArrayUncached}.
      */
     @TruffleBoundary
     public static TruffleString[] toTruffleStringArrayUncached(String[] s) {
@@ -214,9 +276,24 @@ public final class PythonUtils {
         return result;
     }
 
+    @TruffleBoundary
+    public static TruffleString[] toInternedTruffleStringArrayUncached(String[] s) {
+        if (s == null) {
+            return null;
+        }
+        if (s.length == 0) {
+            return EMPTY_TRUFFLESTRING_ARRAY;
+        }
+        TruffleString[] result = new TruffleString[s.length];
+        for (int i = 0; i < result.length; ++i) {
+            result[i] = toInternedTruffleStringUncached(s[i]);
+        }
+        return result;
+    }
+
     /**
      * Creates an array of {@link Object}'s. The intended use of this method is in slow-path in
-     * calls to methods like {@link PythonObjectFactory#createTuple(Object[])}.
+     * calls to methods like {@link PFactory#createTuple}.
      */
     public static Object[] convertToObjectArray(TruffleString[] src) {
         if (src == null) {
@@ -230,6 +307,31 @@ public final class PythonUtils {
             result[i] = src[i];
         }
         return result;
+    }
+
+    /**
+     * Consider using {@link #codePointsToInternedTruffleString(CodePoints)} instead.
+     */
+    @TruffleBoundary
+    public static TruffleString codePointsToTruffleString(CodePoints cp) {
+        return TruffleString.fromIntArrayUTF32Uncached(cp.getBuffer(), cp.getOffset(), cp.getLength()).switchEncodingUncached(TS_ENCODING);
+    }
+
+    @TruffleBoundary
+    public static TruffleString codePointsToInternedTruffleString(CodePoints cp) {
+        TruffleString ts = codePointsToTruffleString(cp);
+        return internString(ts);
+    }
+
+    @TruffleBoundary
+    public static CodePoints truffleStringToCodePoints(TruffleString ts) {
+        int[] buf = new int[ts.codePointLengthUncached(TS_ENCODING)];
+        TruffleStringIterator it = ts.createCodePointIteratorUncached(TS_ENCODING);
+        int i = 0;
+        while (it.hasNext()) {
+            buf[i++] = it.nextUncached(TS_ENCODING);
+        }
+        return CodePoints.fromBuffer(buf, 0, i);
     }
 
     // parser.c:_Py_Mangle
@@ -247,6 +349,19 @@ public final class PythonUtils {
      * Execute Arrays.fill and puts all exceptions on slow path.
      */
     public static void fill(byte[] array, int from, int to, byte value) {
+        try {
+            Arrays.fill(array, from, to, value);
+        } catch (Throwable t) {
+            // this is really unexpected and we want to break exception edges in compiled code
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            throw t;
+        }
+    }
+
+    /**
+     * Execute Arrays.fill and puts all exceptions on slow path.
+     */
+    public static void fill(Object[] array, int from, int to, Object value) {
         try {
             Arrays.fill(array, from, to, value);
         } catch (Throwable t) {
@@ -452,7 +567,7 @@ public final class PythonUtils {
         int r = (int) x;
         if (r != x) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw PRaiseNode.raiseUncached(null, SystemError, ErrorMessages.INTERNAL_INT_OVERFLOW);
+            throw PRaiseNode.raiseStatic(null, SystemError, ErrorMessages.INTERNAL_INT_OVERFLOW);
         }
         return r;
     }
@@ -494,7 +609,7 @@ public final class PythonUtils {
     private static final ObjectName OBJECT_NAME;
 
     static {
-        if (ImageInfo.inImageCode()) {
+        if (TruffleOptions.AOT) {
             OBJECT_NAME = null;
             SERVER = null;
         } else {
@@ -527,7 +642,7 @@ public final class PythonUtils {
 
     @TruffleBoundary
     public static void dumpHeap(String path) {
-        if (ImageInfo.inImageCode()) {
+        if (TruffleOptions.AOT) {
             try {
                 VMRuntime.dumpHeap(path, true);
             } catch (UnsupportedOperationException | IOException e) {
@@ -612,18 +727,8 @@ public final class PythonUtils {
     }
 
     @TruffleBoundary
-    public static boolean bufferHasRemaining(ByteBuffer buffer) {
-        return buffer.hasRemaining();
-    }
-
-    @TruffleBoundary
     public static boolean equals(Object a, Object b) {
         return a.equals(b);
-    }
-
-    @TruffleBoundary
-    public static <E> ArrayDeque<E> newDeque() {
-        return new ArrayDeque<>();
     }
 
     @TruffleBoundary
@@ -656,79 +761,24 @@ public final class PythonUtils {
         return list.toArray();
     }
 
-    /**
-     * Same as {@link Character#isBmpCodePoint(int)}.
-     */
-    public static boolean isBmpCodePoint(int codePoint) {
-        return codePoint >>> 16 == 0;
-        // Optimized form of:
-        // codePoint >= MIN_VALUE && codePoint <= MAX_VALUE
-        // We consistently use logical shift (>>>) to facilitate
-        // additional runtime optimizations.
-    }
-
-    public static ValueProfile createValueIdentityProfile() {
-        CompilerAsserts.neverPartOfCompilation();
-        return PythonLanguage.get(null).isSingleContext() ? ValueProfile.createIdentityProfile() : ValueProfile.createClassProfile();
-    }
-
     @TruffleBoundary
-    public static void createMember(PythonObjectSlowPathFactory factory, PythonLanguage language, Object klass, Class<?> nodeClass, TruffleString name, TruffleString doc, int idx,
-                    Function<PythonLanguage, RootNode> rootNodeSupplier) {
-        RootCallTarget callTarget = language.createCachedCallTarget(rootNodeSupplier, nodeClass, idx);
-        PBuiltinFunction getter = factory.createBuiltinFunction(name, klass, 0, 0, callTarget);
-        GetSetDescriptor callable = factory.createGetSetDescriptor(getter, null, name, klass, false);
-        if (doc != null) {
-            callable.setAttribute(T___DOC__, doc);
-        }
-        WriteAttributeToObjectNode.getUncached(true).execute(klass, name, callable);
-    }
-
-    @TruffleBoundary
-    public static PBuiltinFunction createMethod(PythonLanguage language, Object klass, Class<?> nodeClass, Object type, int numDefaults, Supplier<PythonBuiltinBaseNode> nodeSupplier,
-                    Object... callTargetCacheKeys) {
-        return createMethod(PythonObjectFactory.getUncached(), language, klass, nodeClass, type, numDefaults, nodeSupplier, callTargetCacheKeys);
-    }
-
-    @TruffleBoundary
-    public static PBuiltinFunction createMethod(PythonObjectFactory factory, PythonLanguage language, Object klass, Class<?> nodeClass, Object type, int numDefaults,
-                    Supplier<PythonBuiltinBaseNode> nodeSupplier,
-                    Object... callTargetCacheKeys) {
+    public static PBuiltinFunction createMethod(PythonLanguage language, Object klass, NodeFactory<? extends PythonBuiltinBaseNode> nodeFactory, Object type, int numDefaults) {
+        Class<? extends PythonBuiltinBaseNode> nodeClass = nodeFactory.getNodeClass();
         Builtin builtin = nodeClass.getAnnotation(Builtin.class);
-        RootCallTarget callTarget = language.createCachedCallTarget(l -> {
-            NodeFactory<PythonBuiltinBaseNode> nodeFactory = new BuiltinFunctionRootNode.StandaloneBuiltinFactory<>(nodeSupplier.get());
-            return new BuiltinFunctionRootNode(l, builtin, nodeFactory, true);
-        }, nodeClass, createCalltargetKeys(callTargetCacheKeys, nodeClass));
-        int flags = PBuiltinFunction.getFlags(builtin, callTarget);
-        TruffleString name = toTruffleStringUncached(builtin.name());
-        PBuiltinFunction function = factory.createBuiltinFunction(name, type, numDefaults, flags, callTarget);
+        BuiltinFunctionRootNode rootNode = language.createCachedRootNode(l -> new BuiltinFunctionRootNode(l, builtin, nodeFactory, true), nodeClass);
+        return createMethod(klass, builtin, rootNode, type, numDefaults);
+    }
+
+    @TruffleBoundary
+    public static PBuiltinFunction createMethod(Object klass, Builtin builtin, BuiltinFunctionRootNode rootNode, Object type, int numDefaults) {
+        assert rootNode.getBuiltin() == builtin : String.format("%s != %s, klass: %s", rootNode.getBuiltin(), builtin, klass);
+        int flags = PBuiltinFunction.getFlags(builtin, rootNode.getSignature());
+        TruffleString name = toInternedTruffleStringUncached(builtin.name());
+        PBuiltinFunction function = PFactory.createBuiltinFunction(PythonLanguage.get(null), name, type, numDefaults, flags, rootNode);
         if (klass != null) {
-            WriteAttributeToObjectNode.getUncached(true).execute(klass, name, function);
+            WriteAttributeToObjectNode.getUncached().execute(klass, name, function);
         }
         return function;
-    }
-
-    @TruffleBoundary
-    public static void createConstructor(PythonObjectSlowPathFactory factory, PythonLanguage language, Object klass, Class<?> nodeClass, Supplier<PythonBuiltinBaseNode> nodeSupplier,
-                    Object... callTargetCacheKeys) {
-        Builtin builtin = nodeClass.getAnnotation(Builtin.class);
-        assert J___NEW__.equals(builtin.name());
-        assert IsSubtypeNode.getUncached().execute(klass, PythonBuiltinClassType.PTuple);
-        RootCallTarget callTarget = language.createCachedCallTarget(l -> {
-            NodeFactory<PythonBuiltinBaseNode> nodeFactory = new BuiltinFunctionRootNode.StandaloneBuiltinFactory<>(nodeSupplier.get());
-            return new BuiltinFunctionRootNode(l, builtin, nodeFactory, false, PythonBuiltinClassType.PTuple);
-        }, nodeClass, createCalltargetKeys(callTargetCacheKeys, nodeClass));
-        int flags = PBuiltinFunction.getFlags(builtin, callTarget);
-        PBuiltinFunction function = factory.createBuiltinFunction(toTruffleStringUncached(builtin.name()), PythonBuiltinClassType.PTuple, 1, flags, callTarget);
-        PBuiltinMethod method = factory.createBuiltinMethod(PythonBuiltinClassType.PTuple, function);
-        WriteAttributeToObjectNode.getUncached(true).execute(klass, T___NEW__, method);
-    }
-
-    private static Object[] createCalltargetKeys(Object[] callTargetCacheKeys, Class<?> nodeClass) {
-        Object[] keys = new Object[callTargetCacheKeys.length + 1];
-        keys[0] = nodeClass;
-        arraycopy(callTargetCacheKeys, 0, keys, 1, callTargetCacheKeys.length);
-        return keys;
     }
 
     public static Unsafe initUnsafe() {
@@ -745,31 +795,13 @@ public final class PythonUtils {
         }
     }
 
-    public static void copyFrameSlot(Frame frameToSync, MaterializedFrame target, int slot) {
-        if (frameToSync.isObject(slot)) {
-            target.setObject(slot, frameToSync.getObject(slot));
-        } else if (frameToSync.isInt(slot)) {
-            target.setInt(slot, frameToSync.getInt(slot));
-        } else if (frameToSync.isLong(slot)) {
-            target.setLong(slot, frameToSync.getLong(slot));
-        } else if (frameToSync.isBoolean(slot)) {
-            target.setBoolean(slot, frameToSync.getBoolean(slot));
-        } else if (frameToSync.isDouble(slot)) {
-            target.setDouble(slot, frameToSync.getDouble(slot));
-        } else if (frameToSync.isFloat(slot)) {
-            target.setFloat(slot, frameToSync.getFloat(slot));
-        } else if (frameToSync.isByte(slot)) {
-            target.setByte(slot, frameToSync.getByte(slot));
-        }
-    }
-
     public static TruffleString[] objectArrayToTruffleStringArray(Node inliningTarget, Object[] array, CastToTruffleStringNode cast) {
         if (array.length == 0) {
             return EMPTY_TRUFFLESTRING_ARRAY;
         }
         TruffleString[] result = new TruffleString[array.length];
         for (int i = 0; i < array.length; i++) {
-            result[i] = cast.execute(inliningTarget, array[i]);
+            result[i] = PythonUtils.internString(cast.execute(inliningTarget, array[i]));
         }
         return result;
     }
@@ -780,7 +812,7 @@ public final class PythonUtils {
 
     @TruffleBoundary
     public static Source createFakeSource(TruffleString name) {
-        return Source.newBuilder(PythonLanguage.ID, EMPTY_BYTE_SEQUENCE, name.toJavaStringUncached()).build();
+        return Source.newBuilder(PythonLanguage.ID, "", name.toJavaStringUncached()).content(Source.CONTENT_NONE).build();
     }
 
     public static Object[] prependArgument(Object primary, Object[] arguments) {
@@ -788,6 +820,33 @@ public final class PythonUtils {
         result[0] = primary;
         arraycopy(arguments, 0, result, 1, arguments.length);
         return result;
+    }
+
+    public static boolean isAscii(TruffleString string, TruffleString.GetCodeRangeNode getCodeRangeNode) {
+        return getCodeRangeNode.execute(string, TS_ENCODING) == TruffleString.CodeRange.ASCII;
+    }
+
+    public static byte[] getAsciiBytes(TruffleString string, TruffleString.CopyToByteArrayNode copyToByteArrayNode, TruffleString.SwitchEncodingNode switchEncodingNode) {
+        assert string.getCodeRangeUncached(TS_ENCODING) == TruffleString.CodeRange.ASCII;
+        TruffleString ascii = switchEncodingNode.execute(string, Encoding.US_ASCII);
+        byte[] data = new byte[ascii.byteLength(Encoding.US_ASCII)];
+        copyToByteArrayNode.execute(ascii, 0, data, 0, data.length, Encoding.US_ASCII);
+        return data;
+    }
+
+    public static Object builtinClassToType(Object cls) {
+        if (cls instanceof PythonBuiltinClass builtinClass) {
+            return builtinClass.getType();
+        }
+        return cls;
+    }
+
+    public static boolean isPrimitive(Object value) {
+        return value instanceof Integer || value instanceof Long || value instanceof Boolean || value instanceof Double;
+    }
+
+    public static Object normalizeNone(ConditionProfile profile, Object o) {
+        return profile.profile(PGuards.isNone(o)) ? PNone.NO_VALUE : o;
     }
 
     public static final class NodeCounterWithLimit implements NodeVisitor {
@@ -816,7 +875,7 @@ public final class PythonUtils {
         }
     }
 
-    public static Object pythonObjectFromConstantValue(ConstantValue v, PythonObjectFactory factory) {
+    public static Object pythonObjectFromConstantValue(ConstantValue v) {
         switch (v.kind) {
             case BOOLEAN:
                 return v.getBoolean();
@@ -831,25 +890,33 @@ public final class PythonUtils {
                 return v.getDouble();
             case COMPLEX: {
                 double[] c = v.getComplex();
-                return factory.createComplex(c[0], c[1]);
+                return PFactory.createComplex(PythonLanguage.get(null), c[0], c[1]);
             }
             case NONE:
                 return PNone.NONE;
             case ELLIPSIS:
                 return PEllipsis.INSTANCE;
             case BIGINTEGER:
-                return factory.createInt(v.getBigInteger());
+                return PFactory.createInt(PythonLanguage.get(null), v.getBigInteger());
             case BYTES:
-                return factory.createBytes(v.getBytes());
-            case RAW:
-                return v.getRaw(TruffleString.class);
-            case TUPLE:
-            case FROZENSET:
-                // These cases cannot happen:
-                // - when called from Sst2ObjVisitor, the SST comes from the parser which never
-                // emits tuples or frozensets
-                // - when called from the compiler of pattern matching, the SST has been checked by
-                // Validator#validatePatternMatchValue() which rejects tuples and frozensets
+                return PFactory.createBytes(PythonLanguage.get(null), v.getBytes());
+            case CODEPOINTS:
+                return codePointsToInternedTruffleString(v.getCodePoints());
+            case TUPLE: {
+                ConstantValue[] elements = v.getTupleElements();
+                Object[] objects = new Object[elements.length];
+                for (int i = 0; i < objects.length; i++) {
+                    objects[i] = pythonObjectFromConstantValue(elements[i]);
+                }
+                return PFactory.createTuple(PythonLanguage.get(null), objects);
+            }
+            case FROZENSET: {
+                HashingStorage storage = EconomicMapStorage.create(v.getFrozensetElements().length);
+                for (ConstantValue element : v.getFrozensetElements()) {
+                    storage = HashingStorageSetItem.executeUncached(storage, pythonObjectFromConstantValue(element), PNone.NONE);
+                }
+                return PFactory.createFrozenSet(PythonLanguage.get(null), storage);
+            }
             default:
                 throw shouldNotReachHere();
         }
@@ -941,55 +1008,86 @@ public final class PythonUtils {
                     0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
     };
 
-    /**
-     * Use as a documentation and safety guard in specializations that are meant to be activated
-     * only in the uncached case. Those Specializations exist only to allow to generate an uncached
-     * variant of the node, but should never be activated in a regular cached case.
-     *
-     * Note that such specializations can take VirtualFrame and should forward it to other uncached
-     * (and cached) nodes. The uncached nodes may be executed during the uncached execution of the
-     * bytecode root node where it is allowed to pass the VirtualFrame around without materializing
-     * it.
-     */
-    public static void assertUncached() {
-        if (!TruffleOptions.AOT) {
-            // We cannot assert that it's never part of compilation, because then it would fail
-            // during native-image build since it cannot prove that this Specialization is never
-            // activated at runtime and includes this in runtime compiled methods.
-            CompilerAsserts.neverPartOfCompilation();
-        }
-        CompilerDirectives.transferToInterpreter();
-    }
-
-    public static boolean isBitSet(int state, int position) {
-        return ((state >>> position) & 0x1) != 0;
-    }
-
-    public static String formatPointer(Object pointer) {
+    public static String formatPointer(long pointer) {
         CompilerAsserts.neverPartOfCompilation();
-        InteropLibrary lib = InteropLibrary.getUncached();
-        if (lib.isPointer(pointer)) {
-            try {
-                return String.format("%s#0x%016x", pointer.getClass().getSimpleName(), lib.asPointer(pointer));
-            } catch (UnsupportedMessageException e) {
-                throw CompilerDirectives.shouldNotReachHere(e);
-            }
-        }
-        return String.valueOf(pointer);
+        return String.format("0x%016x", pointer);
     }
 
-    public static long coerceToLong(Object allocated, InteropLibrary lib) {
-        if (allocated instanceof Long) {
-            return (long) allocated;
-        } else {
-            if (!lib.isPointer(allocated)) {
-                lib.toNative(allocated);
+    /**
+     * Use this helper in PE code or behind Truffle boundary if the PE caller does not push
+     * encapsulating node (either directly or, e.g., via
+     * {@link com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext}).
+     * <p/>
+     * For boundary calls: if we know the encapsulating node was set, we can safely call directly
+     * the overload without the location parameter ({@link CallTarget#call(Object...)}).
+     * <p/>
+     * For PE calls: we may be in uncached interpreter (the {@code location} Node is not adoptable
+     * or {@code null}), in which case we must call the overload without the location parameter
+     * ({@link CallTarget#call(Object...)}), so that it uses the encapsulating node.
+     */
+    public static Object callCallTarget(CallTarget target, Node location, Object... args) {
+        return location != null && location.isAdoptable() ? target.call(location, args) : target.call(args);
+    }
+
+    /**
+     * Node factory that creates new instances of given node by cloning a prototype node instance
+     * passed in the constructor. We use cloning as opposed to a producer lambda, because this
+     * avoids the need for two arguments (node class and the producer factory).
+     */
+    public static final class PrototypeNodeFactory<T extends Node> implements NodeFactory<T> {
+        private final T node;
+
+        public PrototypeNodeFactory(T node) {
+            this.node = node;
+        }
+
+        @Override
+        public T createNode(Object... arguments) {
+            return NodeUtil.cloneNode(node);
+        }
+
+        @Override
+        public Class<T> getNodeClass() {
+            return determineNodeClass(node);
+        }
+
+        @SuppressWarnings("unchecked")
+        private static <T> Class<T> determineNodeClass(T node) {
+            CompilerAsserts.neverPartOfCompilation();
+            Class<T> nodeClass = (Class<T>) node.getClass();
+            GeneratedBy genBy = nodeClass.getAnnotation(GeneratedBy.class);
+            if (genBy != null) {
+                nodeClass = (Class<T>) genBy.value();
+                assert nodeClass.isAssignableFrom(node.getClass());
             }
-            try {
-                return lib.asPointer(allocated);
-            } catch (UnsupportedMessageException e) {
-                throw CompilerDirectives.shouldNotReachHere(e);
+            return nodeClass;
+        }
+
+        @Override
+        public List<List<Class<?>>> getNodeSignatures() {
+            throw new IllegalAccessError();
+        }
+
+        @Override
+        public List<Class<? extends Node>> getExecutionSignature() {
+            throw new IllegalAccessError();
+        }
+    }
+
+    public static PropertyGetter getPropertyGetterWithFinalAssumption(Shape shape, Object key) {
+        PropertyGetter getter = shape.makePropertyGetter(key);
+        if (getter != null) {
+            Property property = shape.getProperty(key);
+            if (property != null) {
+                property.getLocation().getFinalAssumption();
             }
+        }
+        return getter;
+    }
+
+    public static void checkAssumption(Assumption assumption) throws InvalidAssumptionException {
+        if (assumption != null) {
+            assumption.check();
         }
     }
 }

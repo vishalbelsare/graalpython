@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,13 +41,13 @@
 package com.oracle.graal.python.builtins.objects.cext.structs;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readLongArrayElements;
 import static com.oracle.graal.python.nodes.ErrorMessages.INTERNAL_INT_OVERFLOW;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
+import com.oracle.graal.python.annotations.CApiConstants;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.cext.capi.CApiCodeGen;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.PCallCapiFunction;
-import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -55,22 +55,27 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 
 /**
  * Helper enum to extract constants from the C space. Constants are limited to the range of "long"
- * values, but '-1' is not allowed at the moment. Run {@link CApiCodeGen} to regenerate the
- * necessary definitions on the C side.
+ * values.
  */
+@CApiConstants
 public enum CConstants {
     PYLONG_BITS_IN_DIGIT,
     READONLY,
-    CHAR_MIN;
+    CHAR_MIN,
+    _PY_NSMALLNEGINTS,
+    _PY_NSMALLPOSINTS;
 
     @CompilationFinal(dimensions = 1) public static final CConstants[] VALUES = values();
 
-    @CompilationFinal private long longValue = -1;
-    @CompilationFinal private int intValue = -1;
+    private static final long UNRESOLVED = Long.MIN_VALUE;
+    private static final int INT_OVERFLOW = Integer.MIN_VALUE;
+
+    @CompilationFinal private long longValue = UNRESOLVED;
+    @CompilationFinal private int intValue = INT_OVERFLOW;
 
     public long longValue() {
         long o = longValue;
-        if (o == -1) {
+        if (o == UNRESOLVED) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             resolve();
             return longValue;
@@ -84,11 +89,11 @@ public enum CConstants {
      */
     public int intValue() {
         int o = intValue;
-        if (o == -1) {
+        if (o == INT_OVERFLOW) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             resolve();
-            if (intValue == -1) {
-                throw PRaiseNode.raiseUncached(null, SystemError, INTERNAL_INT_OVERFLOW);
+            if (intValue == INT_OVERFLOW) {
+                throw PRaiseNode.raiseStatic(null, SystemError, INTERNAL_INT_OVERFLOW);
             }
             return intValue;
         }
@@ -97,15 +102,12 @@ public enum CConstants {
 
     private static void resolve() {
         CompilerAsserts.neverPartOfCompilation();
-        Object constantsPointer = PCallCapiFunction.callUncached(NativeCAPISymbol.FUN_PYTRUFFLE_CONSTANTS);
-        long[] constants = CStructAccessFactory.ReadI64NodeGen.getUncached().readLongArray(constantsPointer, VALUES.length);
+        long constantsPointer = CApiContext.getNativeCAPIMetadataPointer(null);
+        long[] constants = readLongArrayElements(constantsPointer, 0L, VALUES.length);
         for (CConstants constant : VALUES) {
             constant.longValue = constants[constant.ordinal()];
-            if (constant.longValue == -1) {
-                throw PRaiseNode.raiseUncached(null, SystemError, toTruffleStringUncached("internal limitation - cannot extract constants with value '-1'"));
-            }
             if ((constant.longValue & 0xFFFF0000L) == 0xDEAD0000L) {
-                throw PRaiseNode.raiseUncached(null, SystemError, toTruffleStringUncached("marker value reached, regenerate C code (mx python-capi)"));
+                throw PRaiseNode.raiseStatic(null, SystemError, toTruffleStringUncached("marker value reached, regenerate C code (mx python-capi)"));
             }
             if (constant.longValue == (int) constant.longValue) {
                 constant.intValue = (int) constant.longValue;

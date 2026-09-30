@@ -1,32 +1,36 @@
-*graalpython.lib-python.3.test.test_long.LongTest.test__format__
-*graalpython.lib-python.3.test.test_long.LongTest.test_access_to_nonexistent_digit_0
-*graalpython.lib-python.3.test.test_long.LongTest.test_as_integer_ratio
-*graalpython.lib-python.3.test.test_long.LongTest.test_bit_count
-*graalpython.lib-python.3.test.test_long.LongTest.test_bit_length
-*graalpython.lib-python.3.test.test_long.LongTest.test_bitop_identities
-*graalpython.lib-python.3.test.test_long.LongTest.test_conversion
-*graalpython.lib-python.3.test.test_long.LongTest.test_correctly_rounded_true_division
-*graalpython.lib-python.3.test.test_long.LongTest.test_division
-*graalpython.lib-python.3.test.test_long.LongTest.test_float_conversion
-*graalpython.lib-python.3.test.test_long.LongTest.test_float_overflow
-*graalpython.lib-python.3.test.test_long.LongTest.test_floordiv
-*graalpython.lib-python.3.test.test_long.LongTest.test_format
-*graalpython.lib-python.3.test.test_long.LongTest.test_from_bytes
-*graalpython.lib-python.3.test.test_long.LongTest.test_huge_lshift
-*graalpython.lib-python.3.test.test_long.LongTest.test_huge_lshift_of_zero
-*graalpython.lib-python.3.test.test_long.LongTest.test_huge_rshift
-*graalpython.lib-python.3.test.test_long.LongTest.test_huge_rshift_of_huge
-*graalpython.lib-python.3.test.test_long.LongTest.test_karatsuba
-*graalpython.lib-python.3.test.test_long.LongTest.test_logs
-*graalpython.lib-python.3.test.test_long.LongTest.test_long
-*graalpython.lib-python.3.test.test_long.LongTest.test_lshift_of_zero
-*graalpython.lib-python.3.test.test_long.LongTest.test_mixed_compares
-*graalpython.lib-python.3.test.test_long.LongTest.test_mod_division
-*graalpython.lib-python.3.test.test_long.LongTest.test_nan_inf
-*graalpython.lib-python.3.test.test_long.LongTest.test_negative_shift_count
-*graalpython.lib-python.3.test.test_long.LongTest.test_round
-*graalpython.lib-python.3.test.test_long.LongTest.test_shift_bool
-*graalpython.lib-python.3.test.test_long.LongTest.test_small_ints
-*graalpython.lib-python.3.test.test_long.LongTest.test_small_ints_in_huge_calculation
-*graalpython.lib-python.3.test.test_long.LongTest.test_to_bytes
-*graalpython.lib-python.3.test.test_long.LongTest.test_true_division
+test.test_long.LongTest.test__format__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_access_to_nonexistent_digit_0 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_as_integer_ratio @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_big_lshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_big_rshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_bit_count @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_bit_length @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_bitop_identities @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_conversion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_division @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_float_conversion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_float_overflow @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_floordiv @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_format @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_from_bytes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_hash @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_huge_rshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_is_integer @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_karatsuba @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_logs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_long @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_lshift_of_zero @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_medium_lshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_medium_rshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_mixed_compares @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_mod_division @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_nan_inf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_negative_shift_count @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_round @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_shift_bool @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_small_ints @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_small_lshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_small_rshift @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_square @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_to_bytes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_long.LongTest.test_true_division @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

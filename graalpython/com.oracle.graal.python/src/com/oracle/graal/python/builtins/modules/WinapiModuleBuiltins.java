@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,16 +42,67 @@ package com.oracle.graal.python.builtins.modules;
 
 import java.util.List;
 
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.PythonOS;
 import com.oracle.graal.python.builtins.CoreFunctions;
+import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.PythonOS;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.str.StringUtils;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Bind;
+import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
+import com.oracle.truffle.api.dsl.Specialization;
 
 @CoreFunctions(defineModule = "_winapi", os = PythonOS.PLATFORM_WIN32)
 public final class WinapiModuleBuiltins extends PythonBuiltins {
     @Override
-    protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
-        return List.of();
+    public void initialize(Python3Core core) {
+        super.initialize(core);
+        addBuiltinConstant("NULL", 0);
+        addBuiltinConstant("INFINITE", 0xFFFFFFFFL);
     }
+
+    @Override
+    protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
+        return WinapiModuleBuiltinsFactory.getFactories();
+    }
+
+    // Managed fallback for native kernel32.GetACP call so encodings work sandboxed
+    @Builtin(name = "GetACP", minNumOfPositionalArgs = 0)
+    @GenerateNodeFactory
+    abstract static class GetfullpathnameNode extends PythonBuiltinNode {
+        @TruffleBoundary
+        @Specialization
+        int getacp(@Bind PythonContext context) {
+            var ts = SysModuleBuiltins.GetFileSystemEncodingNode.getFileSystemEncoding();
+            var cp = StringUtils.toLowerCase(ts.toJavaStringUncached());
+            if (cp.startsWith("cp")) {
+                try {
+                    return Integer.valueOf(cp.substring(2));
+                } catch (Exception e) {
+                    // pass
+                }
+            }
+            return 0;
+        }
+    }
+
+    /*
+     * Managed fallback for contexts without native access. With native access, Python3Core loads
+     * modules/_winapi.py into this module and its CloseHandle definition replaces this builtin.
+     */
+    @Builtin(name = "CloseHandle", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class CloseHandleNode extends PythonBuiltinNode {
+        @Specialization
+        static PNone closeHandle(@SuppressWarnings("unused") Object handle) {
+            return PNone.NONE;
+        }
+    }
+
 }

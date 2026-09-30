@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,8 +38,9 @@
 # SOFTWARE.
 
 import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare
+
 
 ModuleType = type(sys)
 
@@ -80,6 +81,15 @@ def _reference_parse_tuple(args):
         raise TypeError
 
 
+def _reference_validate_keywords(args):
+    kwargs = args[0]
+    if not isinstance(kwargs, dict):
+        raise SystemError
+    if not all(isinstance(k, str) for k in kwargs):
+        raise TypeError
+    return 1
+
+
 class Indexable:
     def __int__(self):
         return 456
@@ -109,9 +119,6 @@ class BadSeq:
         raise IndexError
 
 class TestModsupport(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super().compile_module(name)
 
     testmod = type(sys)("foo")
 
@@ -718,4 +725,17 @@ class TestModsupport(CPyExtTestCase):
         argspec="O",
         arguments=["PyObject* a"],
         cmpfunc=compare_new_object
+    )
+
+    test_PyArg_ValidateKeywordArguments = CPyExtFunction(
+        _reference_validate_keywords,
+        lambda: (
+            ({'a': 1, 'b': 2},),
+            ({'a': 1, 1: 2},),
+            ("not-dict",),
+        ),
+        resultspec='i',
+        argspec='O',
+        arguments=["PyObject* kwds"],
+        cmpfunc=unhandled_error_compare,
     )

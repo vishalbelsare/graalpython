@@ -1,14 +1,11 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) -2016 Jython Developers
  *
  * Licensed under PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
  */
 package com.oracle.graal.python.runtime.formatting;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___INDEX__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___INT__;
-import static com.oracle.graal.python.runtime.exception.PythonErrorType.AttributeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.MemoryError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.OverflowError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
@@ -18,27 +15,31 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.MathContext;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins;
 import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
+import com.oracle.graal.python.lib.PyNumberCheckNode;
+import com.oracle.graal.python.lib.PyNumberIndexNode;
+import com.oracle.graal.python.lib.PyNumberLongNode;
 import com.oracle.graal.python.lib.PyObjectGetItem;
-import com.oracle.graal.python.lib.PyObjectSizeNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.LookupAttributeInMRONode;
 import com.oracle.graal.python.nodes.call.CallNode;
+import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodNode;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNodeGen;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaLongLossyNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.formatting.InternalFormat.Spec;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -58,17 +59,15 @@ abstract class FormatProcessor<T> {
     /** see {@link #getArg()} for the meaning of this value. */
     private int argIndex = -1;
     private Object args;
-    private final TupleBuiltins.GetItemNode getTupleItemNode;
 
     protected int index;
     protected final Python3Core core;
     protected final Node raisingNode;
     protected final FormattingBuffer buffer;
 
-    public FormatProcessor(Python3Core core, TupleBuiltins.GetItemNode getTupleItemNode, FormattingBuffer buffer, Node raisingNode) {
+    public FormatProcessor(Python3Core core, FormattingBuffer buffer, Node raisingNode) {
         this.core = core;
         this.raisingNode = raisingNode;
-        this.getTupleItemNode = getTupleItemNode;
         this.buffer = buffer;
         index = 0;
     }
@@ -94,15 +93,11 @@ abstract class FormatProcessor<T> {
     protected abstract boolean isMapping(Object obj);
 
     static Object lookupAttribute(Object owner, TruffleString name) {
-        return LookupAttributeInMRONode.Dynamic.getUncached().execute(GetClassNode.executeUncached(owner), name);
+        return LookupSpecialMethodNode.Dynamic.executeUncached(GetClassNode.executeUncached(owner), name, owner);
     }
 
     static Object call(Object callable, Object... args) {
-        return CallNode.getUncached().execute(null, callable, args, PKeyword.EMPTY_KEYWORDS);
-    }
-
-    Object getItem(Object arg, Object arg2) {
-        return PyObjectGetItem.executeUncached(arg, arg2);
+        return CallNode.executeUncached(callable, args, PKeyword.EMPTY_KEYWORDS);
     }
 
     Object getArg() {
@@ -121,14 +116,14 @@ abstract class FormatProcessor<T> {
                 // directly, so the only error can be IndexError, which we ignore and transform into
                 // the TypeError below.
                 try {
-                    ret = getTupleItemNode.execute(null, args, argIndex++);
+                    ret = PyTupleGetItem.executeUncached(args, argIndex++);
                 } catch (PException e) {
                     // fall through
                 }
                 break;
         }
         if (ret == null) {
-            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.NOT_ENOUGH_ARGS_FOR_FORMAT_STRING);
+            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.NOT_ENOUGH_ARGS_FOR_FORMAT_STRING);
         }
         return ret;
     }
@@ -140,11 +135,11 @@ abstract class FormatProcessor<T> {
             try {
                 long value = CastToJavaLongLossyNode.executeUncached(o);
                 if (value > Integer.MAX_VALUE || value < Integer.MIN_VALUE) {
-                    throw PRaiseNode.raiseUncached(raisingNode, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "size");
+                    throw PRaiseNode.raiseStatic(raisingNode, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "size");
                 }
                 return (int) value;
             } catch (CannotCastException e) {
-                throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.STAR_WANTS_INT);
+                throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.STAR_WANTS_INT);
             }
         } else {
             if (Character.isDigit(c)) {
@@ -156,7 +151,7 @@ abstract class FormatProcessor<T> {
                 try {
                     return parseNumber(numStart, index);
                 } catch (NumberFormatException e) {
-                    throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.TOO_MANY_DECIMAL_DIGITS_IN_FORMAT_STRING);
+                    throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.TOO_MANY_DECIMAL_DIGITS_IN_FORMAT_STRING);
                 }
             }
             index -= 1;
@@ -174,7 +169,7 @@ abstract class FormatProcessor<T> {
         return specType == 'x' || specType == 'X' || specType == 'o' || specType == 'c';
     }
 
-    protected final Object asNumber(Object arg, char specType) {
+    protected static Object asNumber(Object arg, char specType) {
         if (arg instanceof Integer || arg instanceof Long || arg instanceof PInt) {
             // arg is already acceptable
             return arg;
@@ -182,7 +177,7 @@ abstract class FormatProcessor<T> {
             if (allowsFloat(specType)) {
                 // Fast path for simple double values, instead of __int__
                 BigDecimal decimal = new BigDecimal((Double) arg, MathContext.UNLIMITED);
-                return core.factory().createInt(decimal.toBigInteger());
+                return PFactory.createInt(PythonLanguage.get(null), decimal.toBigInteger());
             } else {
                 // non-integer result indicates to the caller that it could not be converted
                 return arg;
@@ -190,20 +185,18 @@ abstract class FormatProcessor<T> {
         } else if (arg instanceof Boolean) {
             // Fast path for simple booleans
             return (Boolean) arg ? 1 : 0;
-        } else if (arg instanceof PythonAbstractObject) {
-            // Try again with arg.__int__() or __index__() depending on the spec type
+        } else if (PyNumberCheckNode.executeUncached(arg)) {
             try {
-                TruffleString magicName = useIndexMagicMethod(specType) ? T___INDEX__ : T___INT__;
-                Object attribute = lookupAttribute(arg, magicName);
-                if (!(attribute instanceof PNone)) {
-                    return call(attribute, arg);
+                if (useIndexMagicMethod(specType)) {
+                    return PyNumberIndexNode.executeUncached(arg);
+                } else {
+                    return PyNumberLongNode.executeUncached(arg);
                 }
             } catch (PException e) {
-                e.expectUncached(AttributeError);
-                // No __int__/__index__ defined (at Python level)
+                e.expectUncached(TypeError);
             }
         }
-        return arg;
+        return null;
     }
 
     protected double asFloat(Object arg) {
@@ -213,6 +206,10 @@ abstract class FormatProcessor<T> {
     protected abstract InternalFormat.Formatter handleRemainingFormats(InternalFormat.Spec spec);
 
     protected abstract InternalFormat.Formatter handleSingleCharacterFormat(InternalFormat.Spec spec);
+
+    protected char normalizeIntegerFormatType(char type) {
+        return type;
+    }
 
     protected InternalFormat.Formatter formatInteger(Object intObj, InternalFormat.Spec spec) {
         IntegerFormatter.Traditional fi;
@@ -249,7 +246,7 @@ abstract class FormatProcessor<T> {
         try {
             return formatImpl(args1);
         } catch (OutOfMemoryError e) {
-            throw PRaiseNode.raiseUncached(raisingNode, MemoryError);
+            throw PRaiseNode.raiseStatic(raisingNode, MemoryError);
         }
     }
 
@@ -257,10 +254,7 @@ abstract class FormatProcessor<T> {
         Object mapping = null;
         this.args = args1;
 
-        // We need to do a full subtype-check because native objects may inherit from tuple but have
-        // Java type 'PythonNativeObject' (e.g. 'namedtuple' alias 'structseq').
-        final Object args1LazyClass = GetClassNode.executeUncached(args1);
-        boolean tupleArgs = PGuards.isPTuple(args1) || isSubtype(args1LazyClass, PythonBuiltinClassType.PTuple);
+        boolean tupleArgs = PyTupleCheckNode.executeUncached(args1);
         if (tupleArgs) {
             // We will simply work through the tuple elements
             argIndex = 0;
@@ -313,7 +307,7 @@ abstract class FormatProcessor<T> {
             if (c == '(') {
                 // Mapping key, consisting of a parenthesised sequence of characters.
                 if (mapping == null) {
-                    throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.FORMAT_REQUIRES_MAPPING);
+                    throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.FORMAT_REQUIRES_MAPPING);
                 }
                 // Scan along until a matching close parenthesis is found
                 int parens = 1;
@@ -330,7 +324,7 @@ abstract class FormatProcessor<T> {
                 Object tmp = parseMappingKey(keyStart, index - 1);
                 // Look it up using this extent as the (right type of) key. The caller must have
                 // pushed the frame.
-                this.args = getItem(mapping, tmp);
+                this.args = PyObjectGetItem.executeUncached(mapping, tmp);
             } else {
                 // Not a mapping key: next clause will re-read c.
                 push();
@@ -422,7 +416,7 @@ abstract class FormatProcessor<T> {
              * Encode as an InternalFormat.Spec. The values in the constructor always have specified
              * values, except for sign, width and precision.
              */
-            InternalFormat.Spec spec = new InternalFormat.Spec(fill, align, sign, altFlag, width, Spec.NONE, precision, c);
+            InternalFormat.Spec spec = new InternalFormat.Spec(fill, align, sign, false, altFlag, width, Spec.NONE, precision, c);
 
             /*
              * Process argument according to format specification decoded from the string. It is
@@ -449,12 +443,18 @@ abstract class FormatProcessor<T> {
                     // Format the argument using this Spec.
                     // Note various types accepted here as long as they have an __int__ method.
                     arg = getArg();
-                    f = formatInteger(asNumber(arg, spec.type), spec);
+                    char integerFormatType = normalizeIntegerFormatType(spec.type);
+                    InternalFormat.Spec integerSpec = spec;
+                    if (integerFormatType != spec.type) {
+                        integerSpec = new Spec(spec.fill, spec.align, spec.sign, spec.noNegativeZero, spec.alternate, spec.width,
+                                        spec.grouping, spec.precision, integerFormatType);
+                    }
+                    f = formatInteger(asNumber(arg, integerFormatType), integerSpec);
                     if (f == null) {
-                        if (allowsFloat(spec.type)) {
-                            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.S_FORMAT_NUMBER_IS_REQUIRED_NOT_S, spec.type, arg);
+                        if (allowsFloat(integerFormatType)) {
+                            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.S_FORMAT_NUMBER_IS_REQUIRED_NOT_S, integerFormatType, arg);
                         } else {
-                            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.S_FORMAT_INTEGER_IS_REQUIRED_NOT_S, spec.type, arg);
+                            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.S_FORMAT_INTEGER_IS_REQUIRED_NOT_S, integerFormatType, arg);
                         }
                     }
                     break;
@@ -476,7 +476,7 @@ abstract class FormatProcessor<T> {
                 default:
                     f = handleRemainingFormats(spec);
                     if (f == null) {
-                        throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.UNSUPPORTED_FORMAT_CHAR_AT_INDEX, spec.type, (int) spec.type, index - 1);
+                        throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.UNSUPPORTED_FORMAT_CHAR_AT_INDEX, spec.type, (int) spec.type, index - 1);
                     }
             }
 
@@ -491,8 +491,8 @@ abstract class FormatProcessor<T> {
          * of range; if a special value, it would be wrong if it were -1, indicating a single item
          * that has not yet been used.
          */
-        if (argIndex == -1 || (argIndex >= 0 && PyObjectSizeNode.executeUncached(args1) >= argIndex + 1)) {
-            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.NOT_ALL_ARGS_CONVERTED_DURING_FORMATTING, getFormatType());
+        if (argIndex == -1 || (argIndex >= 0 && PyTupleSizeNode.executeUncached(args1) >= argIndex + 1)) {
+            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.NOT_ALL_ARGS_CONVERTED_DURING_FORMATTING, getFormatType());
         }
 
         // Return the final buffer contents as a str or unicode as appropriate.

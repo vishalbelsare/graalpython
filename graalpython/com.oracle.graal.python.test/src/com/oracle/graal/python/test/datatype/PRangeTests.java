@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -33,11 +33,11 @@ import org.junit.Test;
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.range.PIntRange;
 import com.oracle.graal.python.builtins.objects.range.PRange;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
-import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.test.PythonTests;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
@@ -64,24 +64,20 @@ public class PRangeTests {
     public void loopWithOnlyStop() throws UnexpectedResultException {
         PythonTests.enterContext();
         try {
-            PythonObjectFactory factory = PythonObjectFactory.getUncached();
-            PRange range = factory.createIntRange(10);
+            PythonLanguage language = PythonLanguage.get(null);
+            PRange range = PFactory.createIntRange(language, 10);
             int index = 0;
-            TestRoot testRoot = new TestRoot(PythonLanguage.get(factory));
             Object iter = PyObjectGetIter.executeUncached(range);
-            GetNextNode next = GetNextNode.create();
-            testRoot.doInsert(next);
-            IsBuiltinObjectProfile errorProfile = IsBuiltinObjectProfile.getUncached();
 
             while (true) {
                 try {
-                    int item = next.executeInt(null, iter);
+                    Object next = PyIterNextNode.executeUncached(iter);
+                    int item = PGuards.expectInteger(next);
                     assertEquals(index, item);
-                } catch (PException e) {
-                    e.expectStopIteration(null, errorProfile);
+                    index++;
+                } catch (IteratorExhausted e) {
                     break;
                 }
-                index++;
             }
         } finally {
             PythonTests.closeContext();
@@ -92,24 +88,20 @@ public class PRangeTests {
     public void loopWithStep() throws UnexpectedResultException {
         PythonTests.enterContext();
         try {
-            PythonObjectFactory factory = PythonObjectFactory.getUncached();
-            PRange range = PythonObjectFactory.getUncached().createIntRange(0, 10, 2, 5);
+            PythonLanguage language = PythonLanguage.get(null);
+            PRange range = PFactory.createIntRange(language, 0, 10, 2, 5);
             int index = 0;
-            TestRoot testRoot = new TestRoot(PythonLanguage.get(factory));
             Object iter = PyObjectGetIter.executeUncached(range);
-            GetNextNode next = GetNextNode.create();
-            testRoot.doInsert(next);
-            IsBuiltinObjectProfile errorProfile = IsBuiltinObjectProfile.getUncached();
 
             while (true) {
                 try {
-                    int item = next.executeInt(null, iter);
+                    Object next = PyIterNextNode.executeUncached(iter);
+                    int item = PGuards.expectInteger(next);
                     assertEquals(index, item);
-                } catch (PException e) {
-                    e.expectStopIteration(null, errorProfile);
+                    index += 2;
+                } catch (IteratorExhausted e) {
                     break;
                 }
-                index += 2;
             }
         } finally {
             PythonTests.closeContext();
@@ -120,7 +112,7 @@ public class PRangeTests {
     public void getItem() {
         PythonTests.enterContext();
         try {
-            PIntRange range = PythonObjectFactory.getUncached().createIntRange(10);
+            PIntRange range = PFactory.createIntRange(PythonLanguage.get(null), 10);
             assertEquals(3, range.getIntItemNormalized(3));
         } finally {
             PythonTests.closeContext();

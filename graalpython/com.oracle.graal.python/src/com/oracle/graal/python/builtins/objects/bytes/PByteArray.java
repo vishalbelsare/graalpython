@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -26,6 +26,9 @@
 package com.oracle.graal.python.builtins.objects.bytes;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.BufferError;
+import static com.oracle.graal.python.util.PythonUtils.builtinClassToType;
+
+import java.nio.ByteOrder;
 
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.common.IndexNodes;
@@ -33,6 +36,7 @@ import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.interop.PForeignToPTypeNode;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.sequence.storage.ByteSequenceStorage;
@@ -60,11 +64,11 @@ public final class PByteArray extends PBytesLike {
     private volatile long exports;
 
     public PByteArray(Object cls, Shape instanceShape, byte[] bytes) {
-        super(cls, instanceShape, bytes);
+        super(builtinClassToType(cls), instanceShape, bytes);
     }
 
     public PByteArray(Object cls, Shape instanceShape, SequenceStorage store) {
-        super(cls, instanceShape, store);
+        super(builtinClassToType(cls), instanceShape, store);
     }
 
     @Override
@@ -82,10 +86,6 @@ public final class PByteArray extends PBytesLike {
         }
     }
 
-    public final void reverse() {
-        store.reverse();
-    }
-
     public long getExports() {
         return exports;
     }
@@ -94,9 +94,9 @@ public final class PByteArray extends PBytesLike {
         this.exports = exports;
     }
 
-    public void checkCanResize(Node inliningTarget, PRaiseNode.Lazy raiseNode) {
+    public void checkCanResize(Node inliningTarget, PRaiseNode raiseNode) {
         if (exports != 0) {
-            throw raiseNode.get(inliningTarget).raise(BufferError, ErrorMessages.EXPORTS_CANNOT_RESIZE);
+            throw raiseNode.raise(inliningTarget, BufferError, ErrorMessages.EXPORTS_CANNOT_RESIZE);
         }
     }
 
@@ -150,13 +150,14 @@ public final class PByteArray extends PBytesLike {
 
     @ExportMessage
     public void writeArrayElement(long index, Object value,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached SequenceStorageNodes.SetItemScalarNode setItem,
+                    @Exclusive @Cached PForeignToPTypeNode convert,
                     @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
         boolean mustRelease = gil.acquire();
         try {
             try {
-                setItem.execute(inliningTarget, store, PInt.intValueExact(index), value);
+                setItem.execute(inliningTarget, store, PInt.intValueExact(index), convert.executeConvert(value));
             } catch (OverflowException e) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw InvalidArrayIndexException.create(index);
@@ -168,7 +169,7 @@ public final class PByteArray extends PBytesLike {
 
     @ExportMessage
     public void removeArrayElement(long index,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached SequenceStorageNodes.DeleteItemNode delItem,
                     @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
         boolean mustRelease = gil.acquire();
@@ -197,32 +198,32 @@ public final class PByteArray extends PBytesLike {
     }
 
     @ExportMessage
-    void writeShort(int byteOffset, short value,
+    void writeShortByteOrder(int byteOffset, short value, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeShort(store, byteOffset, value);
+        bufferLib.writeShortByteOrder(store, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    void writeInt(int byteOffset, int value,
+    void writeIntByteOrder(int byteOffset, int value, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeInt(store, byteOffset, value);
+        bufferLib.writeIntByteOrder(store, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    void writeLong(int byteOffset, long value,
+    void writeLongByteOrder(int byteOffset, long value, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeLong(store, byteOffset, value);
+        bufferLib.writeLongByteOrder(store, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    void writeFloat(int byteOffset, float value,
+    void writeFloatByteOrder(int byteOffset, float value, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeFloat(store, byteOffset, value);
+        bufferLib.writeFloatByteOrder(store, byteOffset, value, byteOrder);
     }
 
     @ExportMessage
-    void writeDouble(int byteOffset, double value,
+    void writeDoubleByteOrder(int byteOffset, double value, ByteOrder byteOrder,
                     @Shared("bufferLib") @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
-        bufferLib.writeDouble(store, byteOffset, value);
+        bufferLib.writeDoubleByteOrder(store, byteOffset, value, byteOrder);
     }
 }

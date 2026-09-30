@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -55,6 +55,7 @@ import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -67,18 +68,19 @@ public abstract class PrintExprNode extends PNodeWithContext {
 
     @Specialization
     void print(VirtualFrame frame, Object object,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached PyObjectLookupAttr lookupAttr,
                     @Cached CallNode callNode) {
         PythonModule sysModule = getContext().getSysModule();
         Object displayhook = lookupAttr.execute(frame, inliningTarget, sysModule, BuiltinNames.T_DISPLAYHOOK);
         if (displayhook == PNone.NO_VALUE) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw PRaiseNode.raiseUncached(this, RuntimeError, ErrorMessages.LOST_SYSDISPLAYHOOK);
+            throw PRaiseNode.raiseStatic(this, RuntimeError, ErrorMessages.LOST_SYSDISPLAYHOOK);
         }
         callNode.execute(frame, displayhook, object);
     }
 
+    @NeverDefault
     public static PrintExprNode create() {
         return PrintExprNodeGen.create();
     }

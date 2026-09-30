@@ -1,4 +1,4 @@
-# Copyright (c) 2022, Oracle and/or its affiliates.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2022 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -10,9 +10,17 @@ always fail. We rely on string comparison of the base classes instead.
 TODO: Remove the above-described hack.
 """
 
+from typing import Any
 
-def ast_dump(node, annotate_fields=True, include_attributes=False, *, indent=None):
-    def _format(node, level=0):
+
+def ast_dump(
+    node: Any,
+    annotate_fields: bool = True,
+    include_attributes: bool = False,
+    *,
+    indent: str | None = None,
+) -> str:
+    def _format(node: Any, level: int = 0) -> tuple[str, bool]:
         if indent is not None:
             level += 1
             prefix = "\n" + indent * level
@@ -37,7 +45,7 @@ def ast_dump(node, annotate_fields=True, include_attributes=False, *, indent=Non
                 value, simple = _format(value, level)
                 allsimple = allsimple and simple
                 if keywords:
-                    args.append("%s=%s" % (name, value))
+                    args.append(f"{name}={value}")
                 else:
                     args.append(value)
             if include_attributes and node._attributes:
@@ -50,18 +58,16 @@ def ast_dump(node, annotate_fields=True, include_attributes=False, *, indent=Non
                         continue
                     value, simple = _format(value, level)
                     allsimple = allsimple and simple
-                    args.append("%s=%s" % (name, value))
+                    args.append(f"{name}={value}")
             if allsimple and len(args) <= 3:
-                return "%s(%s)" % (node.__class__.__name__, ", ".join(args)), not args
-            return "%s(%s%s)" % (node.__class__.__name__, prefix, sep.join(args)), False
+                return "{}({})".format(node.__class__.__name__, ", ".join(args)), not args
+            return f"{node.__class__.__name__}({prefix}{sep.join(args)})", False
         elif isinstance(node, list):
             if not node:
                 return "[]", True
-            return "[%s%s]" % (prefix, sep.join(_format(x, level)[0] for x in node)), False
+            return f"[{prefix}{sep.join(_format(x, level)[0] for x in node)}]", False
         return repr(node), True
 
     if all(cls.__name__ != "AST" for cls in node.__class__.__mro__):
-        raise TypeError("expected AST, got %r" % node.__class__.__name__)
-    if indent is not None and not isinstance(indent, str):
-        indent = " " * indent
+        raise TypeError(f"expected AST, got {node.__class__.__name__!r}")
     return _format(node)[0]

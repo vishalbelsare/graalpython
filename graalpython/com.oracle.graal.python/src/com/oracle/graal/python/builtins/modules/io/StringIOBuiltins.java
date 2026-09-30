@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,6 @@
  */
 package com.oracle.graal.python.builtins.modules.io;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PIncrementalNewlineDecoder;
 import static com.oracle.graal.python.builtins.modules.io.BufferedIOUtil.SEEK_CUR;
 import static com.oracle.graal.python.builtins.modules.io.BufferedIOUtil.SEEK_END;
 import static com.oracle.graal.python.builtins.modules.io.BufferedIOUtil.SEEK_SET;
@@ -74,8 +73,6 @@ import static com.oracle.graal.python.nodes.ErrorMessages.S_SHOULD_HAVE_RETURNED
 import static com.oracle.graal.python.nodes.ErrorMessages.THIRD_ITEM_OF_STATE_MUST_BE_AN_INTEGER_GOT_P;
 import static com.oracle.graal.python.nodes.ErrorMessages.THIRD_ITEM_OF_STATE_SHOULD_BE_A_DICT_GOT_A_P;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETSTATE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.graal.python.nodes.StringLiterals.T_NEWLINE;
@@ -87,8 +84,12 @@ import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -99,15 +100,20 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.str.StringNodes.StringReplaceNode;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
 import com.oracle.graal.python.lib.PyIndexCheckNode;
 import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.lib.PyNumberIndexNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.GetTupleStorage;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
@@ -115,9 +121,9 @@ import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectExactProfile;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -126,16 +132,18 @@ import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PStringIO)
 public final class StringIOBuiltins extends PythonBuiltins {
 
     private static final int NIL_CODEPOINT = 0;
+
+    public static final TpSlots SLOTS = StringIOBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
@@ -145,14 +153,14 @@ public final class StringIOBuiltins extends PythonBuiltins {
     abstract static class ClosedCheckPythonUnaryBuiltinNode extends PythonUnaryBuiltinNode {
         @Specialization(guards = "!self.isOK()")
         static Object initError(@SuppressWarnings("unused") PStringIO self,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
 
         @Specialization(guards = "self.isClosed()")
         static Object closedError(@SuppressWarnings("unused") PStringIO self,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_CLOSED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_CLOSED);
         }
     }
 
@@ -165,19 +173,19 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!self.isOK()")
         static Object initError(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") Object arg,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
 
         @Specialization(guards = "self.isClosed()")
         static Object closedError(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") Object arg,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_CLOSED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_CLOSED);
         }
     }
 
     static void writeString(VirtualFrame frame, Node inliningTarget, PStringIO self, TruffleString obj,
-                    PRaiseNode.Lazy raiseNode,
+                    PRaiseNode raiseNode,
                     IncrementalNewlineDecoderBuiltins.DecodeNode decodeNode,
                     StringReplaceNode replaceNode,
                     TruffleString.CodePointLengthNode codePointLengthNode,
@@ -204,7 +212,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
          * things like comparing an unsigned and a signed integer.
          */
         if (self.getPos() > Integer.MAX_VALUE - decodedLen) {
-            throw raiseNode.get(inliningTarget).raise(OverflowError, NEW_POSITION_TOO_LARGE);
+            throw raiseNode.raise(inliningTarget, OverflowError, NEW_POSITION_TOO_LARGE);
         }
 
         if (self.isAccumulating()) {
@@ -219,7 +227,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
             self.realize();
         }
 
-        TruffleStringBuilder sb = self.getBuf();
+        TruffleStringBuilderUTF32 sb = self.getBuf();
         self.invalidateBufCache();
         if (self.getPos() > self.getStringSize()) {
             /*
@@ -238,7 +246,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
             // Without that API, we have to create a new builder and replace the old one with it
             TruffleString currentBuf = toStringNode.execute(sb, true);
             TruffleString left = substringNode.execute(currentBuf, 0, self.getPos(), TS_ENCODING, true);
-            sb = TruffleStringBuilder.create(TS_ENCODING, self.getPos() + decodedLen);
+            sb = TruffleStringBuilder.createUTF32(self.getPos() + decodedLen);
             self.setBuf(sb);
             appendStringNode.execute(sb, left);
             appendStringNode.execute(sb, decoded);
@@ -258,7 +266,20 @@ public final class StringIOBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self", "initial_value", "newline"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "StringIO", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class StringIONode extends PythonBuiltinNode {
+        @Specialization
+        static PStringIO doNew(Object cls, @SuppressWarnings("unused") Object arg,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            // data filled in subsequent __init__ call - see StringIONodeBuiltins.InitNode
+            return PFactory.createStringIO(cls, getInstanceShape.execute(cls));
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "StringIO", minNumOfPositionalArgs = 1, parameterNames = {"$self", "initial_value", "newline"})
     @ArgumentClinic(name = "initial_value", conversion = ArgumentClinic.ClinicConversion.TString, defaultValue = "T_EMPTY_STRING", useDefaultForNone = true)
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonTernaryClinicBuiltinNode {
@@ -270,20 +291,20 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization
         static PNone init(VirtualFrame frame, PStringIO self, TruffleString initialValue, Object newlineArg,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy lazyRaiseNode,
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode lazyRaiseNode,
                         @Cached IncrementalNewlineDecoderBuiltins.DecodeNode decodeNode,
                         @Cached IncrementalNewlineDecoderBuiltins.InitNode initNode,
                         @Cached StringReplaceNode replaceNode,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Cached TruffleString.CodePointAtIndexNode codePointAtIndexNode,
+                        @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
                         @Cached TruffleString.SubstringNode substringNode,
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode,
                         @Cached TruffleStringBuilder.AppendCodePointNode appendCodePointNode,
                         @Cached IONodes.ToTruffleStringNode toTruffleStringNode,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
             TruffleString newline;
 
             if (newlineArg == PNone.NO_VALUE) {
@@ -303,7 +324,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
             if (newline != null) {
                 self.setReadNewline(newline);
             }
-            self.setReadUniversal(newline == null || newline.isEmpty() || codePointAtIndexNode.execute(newline, 0, TS_ENCODING) == '\0');
+            self.setReadUniversal(newline == null || newline.isEmpty() || codePointAtIndexNode.execute(newline, 0) == '\0');
             self.setReadTranslate(newline == null);
             /*-
                 If newline == "", we don't translate anything.
@@ -311,12 +332,12 @@ public final class StringIOBuiltins extends PythonBuiltins {
                 (for newline == None, TextIOWrapper translates to os.linesep, but it
                 is pointless for StringIO)
             */
-            if (newline != null && !newline.isEmpty() && codePointAtIndexNode.execute(newline, 0, TS_ENCODING) == '\r') {
+            if (newline != null && !newline.isEmpty() && codePointAtIndexNode.execute(newline, 0) == '\r') {
                 self.setWriteNewline(self.getReadNewline());
             }
 
             if (self.isReadUniversal()) {
-                Object incDecoder = factory.createNLDecoder(PIncrementalNewlineDecoder);
+                Object incDecoder = PFactory.createNLDecoder(language);
                 initNode.execute(frame, incDecoder, self.getDecoder(), self.isReadTranslate(), PNone.NO_VALUE);
                 self.setDecoder(incDecoder);
             }
@@ -423,7 +444,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()"})
         static TruffleString readline(PStringIO self, int size,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached FindLineEndingNode findLineEndingNode,
                         @Cached TruffleString.SubstringNode substringNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode) {
@@ -434,7 +455,6 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
     @Builtin(name = J_TRUNCATE, minNumOfPositionalArgs = 1, parameterNames = {"$self", "size"})
     @ArgumentClinic(name = "size", defaultValue = "PNone.NONE", useDefaultForNone = true)
-    @TypeSystemReference(PythonArithmeticTypes.class)
     @GenerateNodeFactory
     abstract static class TruncateNode extends ClosedCheckPythonBinaryClinicBuiltinNode {
 
@@ -458,7 +478,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
                         @Shared @Cached TruffleStringBuilder.AppendStringNode appendStringNode) {
             self.realize();
             TruffleString currentBuf = toStringNode.execute(self.getBuf(), true);
-            TruffleStringBuilder newBuf = TruffleStringBuilder.create(TS_ENCODING, size);
+            TruffleStringBuilderUTF32 newBuf = TruffleStringBuilder.createUTF32(size);
             appendStringNode.execute(newBuf, substringNode.execute(currentBuf, 0, size, TS_ENCODING, true));
             self.setBuf(newBuf);
             self.setStringsize(size);
@@ -472,13 +492,12 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "!isInteger(arg)", "!isPNone(arg)"})
         static Object obj(VirtualFrame frame, PStringIO self, Object arg,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyNumberAsSizeNode asSizeNode,
                         @Cached PyNumberIndexNode indexNode,
                         @Shared @Cached TruffleString.SubstringNode substringNode,
                         @Shared @Cached TruffleStringBuilder.ToStringNode toStringNode,
-                        @Shared @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached TruffleStringBuilder.AppendStringNode appendStringNode) {
             int size = asSizeNode.executeExact(frame, inliningTarget, indexNode.execute(frame, inliningTarget, arg), OverflowError);
             if (size >= 0) {
                 if (size < self.getStringSize()) {
@@ -486,13 +505,13 @@ public final class StringIOBuiltins extends PythonBuiltins {
                 }
                 return size;
             }
-            return negSize(self, size, raiseNode.get(inliningTarget));
+            return negSize(self, size, inliningTarget);
         }
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "size < 0"})
         static Object negSize(@SuppressWarnings("unused") PStringIO self, int size,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, NEGATIVE_SIZE_VALUE_D, size);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, NEGATIVE_SIZE_VALUE_D, size);
         }
     }
 
@@ -508,7 +527,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()"})
         static Object doWrite(VirtualFrame frame, PStringIO self, TruffleString s,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached IncrementalNewlineDecoderBuiltins.DecodeNode decodeNode,
                         @Cached StringReplaceNode replaceNode,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
@@ -516,7 +535,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached TruffleStringBuilder.AppendCodePointNode appendCodePointNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             int size = codePointLengthNode.execute(s, TS_ENCODING);
             if (size > 0) {
                 writeString(frame, inliningTarget, self, s, raiseNode, decodeNode, replaceNode, codePointLengthNode,
@@ -575,32 +594,32 @@ public final class StringIOBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "!isSupportedWhence(whence)"})
         static Object whenceError(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") int pos, int whence,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, INVALID_WHENCE_D_SHOULD_BE_0_1_OR_2, whence);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, INVALID_WHENCE_D_SHOULD_BE_0_1_OR_2, whence);
         }
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "isSupportedWhence(whence)", "pos != 0", "whence != 0"})
         static Object largePos1(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") int pos, @SuppressWarnings("unused") int whence,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(OSError, CAN_T_DO_NONZERO_CUR_RELATIVE_SEEKS);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, OSError, CAN_T_DO_NONZERO_CUR_RELATIVE_SEEKS);
         }
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "pos < 0", "whence == 0"})
         static Object negPos(@SuppressWarnings("unused") PStringIO self, int pos, @SuppressWarnings("unused") int whence,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, NEGATIVE_SEEK_VALUE_D, pos);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, NEGATIVE_SEEK_VALUE_D, pos);
         }
 
         @Specialization(guards = "!self.isOK()")
         static Object initError(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") int pos, @SuppressWarnings("unused") int whence,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
 
         @Specialization(guards = "self.isClosed()")
         static Object closedError(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") int pos, @SuppressWarnings("unused") int whence,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_CLOSED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_CLOSED);
         }
     }
 
@@ -616,7 +635,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "!self.isAccumulating()"})
         static Object doit(PStringIO self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PStringIOBufToStringNode bufToStringNode) {
             return bufToStringNode.execute(inliningTarget, self);
         }
@@ -628,14 +647,14 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()"})
         static Object doit(VirtualFrame frame, PStringIO self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetValueNode getValueNode,
                         @Cached GetOrCreateDictNode getDict,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object initValue = getValueNode.execute(frame, self);
             Object readnl = self.getReadNewline() == null ? PNone.NONE : self.getReadNewline();
             Object[] state = new Object[]{initValue, readnl, self.getPos(), getDict.execute(inliningTarget, self)};
-            return factory.createTuple(state);
+            return PFactory.createTuple(language, state);
         }
     }
 
@@ -644,8 +663,9 @@ public final class StringIOBuiltins extends PythonBuiltins {
     abstract static class SetStateNode extends PythonBinaryBuiltinNode {
 
         @Specialization(guards = {"!self.isClosed()"})
-        static Object doit(VirtualFrame frame, PStringIO self, PTuple state,
-                        @Bind("this") Node inliningTarget,
+        static Object doit(VirtualFrame frame, PStringIO self, Object state,
+                        @Bind Node inliningTarget,
+                        @Cached GetTupleStorage getTupleStorage,
                         @Cached SequenceStorageNodes.GetInternalObjectArrayNode getArray,
                         @Cached InitNode initNode,
                         @Cached CastToTruffleStringNode toString,
@@ -655,10 +675,15 @@ public final class StringIOBuiltins extends PythonBuiltins {
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached HashingStorageAddAllToOther addAllToOtherNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            Object[] array = getArray.execute(inliningTarget, state.getSequenceStorage());
-            if (array.length < 4) {
-                return notTuple(self, state, raiseNode.get(inliningTarget));
+                        @Cached PyTupleCheckNode tupleCheckNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (!tupleCheckNode.execute(inliningTarget, state)) {
+                throw raiseNode.raise(inliningTarget, TypeError, P_SETSTATE_ARGUMENT_SHOULD_BE_D_TUPLE_GOT_P, self, 4, state);
+            }
+            SequenceStorage storage = getTupleStorage.execute(inliningTarget, state);
+            Object[] array = getArray.execute(inliningTarget, storage);
+            if (storage.length() < 4) {
+                throw raiseNode.raise(inliningTarget, TypeError, P_SETSTATE_ARGUMENT_SHOULD_BE_D_TUPLE_GOT_P, self, 4, state);
             }
             initNode.execute(frame, self, array[0], array[1]);
             /*
@@ -672,7 +697,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
             TruffleString buf = toString.execute(inliningTarget, array[0]);
             int bufsize = codePointLengthNode.execute(buf, TS_ENCODING);
             self.setRealized();
-            TruffleStringBuilder newBuf = TruffleStringBuilder.create(TS_ENCODING, bufsize);
+            TruffleStringBuilderUTF32 newBuf = TruffleStringBuilder.createUTF32(bufsize);
             appendStringNode.execute(newBuf, buf);
             self.setBuf(newBuf);
             self.setStringsize(bufsize);
@@ -683,40 +708,34 @@ public final class StringIOBuiltins extends PythonBuiltins {
              * erroneous (or malicious) inputs.
              */
             if (!indexCheckNode.execute(inliningTarget, array[2])) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, THIRD_ITEM_OF_STATE_MUST_BE_AN_INTEGER_GOT_P, array[2]);
+                throw raiseNode.raise(inliningTarget, TypeError, THIRD_ITEM_OF_STATE_MUST_BE_AN_INTEGER_GOT_P, array[2]);
             }
             int pos = asSizeNode.executeExact(frame, inliningTarget, array[2]);
             if (pos < 0) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, POSITION_VALUE_CANNOT_BE_NEGATIVE);
+                throw raiseNode.raise(inliningTarget, ValueError, POSITION_VALUE_CANNOT_BE_NEGATIVE);
             }
             self.setPos(pos);
 
             /* Set the dictionary of the instance variables. */
             if (!PGuards.isNone(array[3])) {
                 if (!PGuards.isDict(array[3])) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, THIRD_ITEM_OF_STATE_SHOULD_BE_A_DICT_GOT_A_P, array[3]);
+                    throw raiseNode.raise(inliningTarget, TypeError, THIRD_ITEM_OF_STATE_SHOULD_BE_A_DICT_GOT_A_P, array[3]);
                 }
                 /*
                  * Alternatively, we could replace the internal dictionary completely. However, it
                  * seems more practical to just update it.
                  */
                 PDict dict = getDict.execute(inliningTarget, self);
-                addAllToOtherNode.execute(frame, inliningTarget, ((PDict) array[3]).getDictStorage(), dict.getDictStorage());
+                addAllToOtherNode.execute(frame, inliningTarget, ((PDict) array[3]).getDictStorage(), dict);
             }
 
             return PNone.NONE;
         }
 
-        @Specialization(guards = {"!self.isClosed()", "!isPTuple(state)"})
-        static Object notTuple(PStringIO self, Object state,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, P_SETSTATE_ARGUMENT_SHOULD_BE_D_TUPLE_GOT_P, self, 4, state);
-        }
-
         @Specialization(guards = "self.isClosed()")
         static Object closedError(@SuppressWarnings("unused") PStringIO self, @SuppressWarnings("unused") Object arg,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_CLOSED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_CLOSED);
         }
     }
 
@@ -769,7 +788,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "self.hasDecoder()"})
         static Object doit(VirtualFrame frame, PStringIO self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetAttr getAttr) {
             return getAttr.execute(frame, inliningTarget, self.getDecoder(), T_NEWLINES);
         }
@@ -786,8 +805,8 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!self.isOK()")
         static Object initError(@SuppressWarnings("unused") PStringIO self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
     }
 
@@ -803,7 +822,7 @@ public final class StringIOBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
     abstract static class IternextNode extends ClosedCheckPythonUnaryBuiltinNode {
 
@@ -813,16 +832,15 @@ public final class StringIOBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "isStringIO(inliningTarget, self, profile)"}, limit = "1")
         static Object builtin(PStringIO self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached IsBuiltinObjectExactProfile profile,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode,
                         @Cached FindLineEndingNode findLineEndingNode,
-                        @Cached TruffleString.SubstringNode substringNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached TruffleString.SubstringNode substringNode) {
             self.realize();
             TruffleString line = stringioReadline(inliningTarget, self, -1, findLineEndingNode, substringNode, toStringNode);
             if (line.isEmpty()) {
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw TpIterNextBuiltin.iteratorExhausted();
             }
             return line;
         }
@@ -832,19 +850,19 @@ public final class StringIOBuiltins extends PythonBuiltins {
          */
         @Specialization(guards = {"self.isOK()", "!self.isClosed()", "!isStringIO(inliningTarget, self, profile)"}, limit = "1")
         static Object slowpath(VirtualFrame frame, PStringIO self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached IsBuiltinObjectExactProfile profile,
                         @Cached PyObjectCallMethodObjArgs callMethodReadline,
                         @Cached CastToTruffleStringNode toString,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             self.realize();
             Object res = callMethodReadline.execute(frame, inliningTarget, self, T_READLINE);
             if (!PGuards.isString(res)) {
-                throw raiseNode.get(inliningTarget).raise(OSError, S_SHOULD_HAVE_RETURNED_A_STR_OBJECT_NOT_P, T_READLINE, res);
+                throw raiseNode.raise(inliningTarget, OSError, S_SHOULD_HAVE_RETURNED_A_STR_OBJECT_NOT_P, T_READLINE, res);
             }
             TruffleString line = toString.execute(inliningTarget, res);
             if (line.isEmpty()) {
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw TpIterNextBuiltin.iteratorExhausted();
             }
             return line;
         }

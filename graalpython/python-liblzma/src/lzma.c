@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,7 +50,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <sys/types.h>
 
 #include <lzma.h>
 
@@ -62,61 +62,61 @@ typedef uint8_t  Byte;  /* 8 bits */
 #define MAX_FILTERS_SIZE (LZMA_FILTERS_MAX + 1)
 #define LZMA_CHECK_UNKNOWN (LZMA_CHECK_ID_MAX + 1)
 
-#define FORMAT_AUTO_INDEX 0 // nfi_var
-#define FORMAT_XZ_INDEX 1 // nfi_var
-#define FORMAT_ALONE_INDEX 2 // nfi_var
-#define FORMAT_RAW_INDEX 3 // nfi_var
+#define FORMAT_AUTO_INDEX 0
+#define FORMAT_XZ_INDEX 1
+#define FORMAT_ALONE_INDEX 2
+#define FORMAT_RAW_INDEX 3
 
-#define CHECK_NONE_INDEX 0 // nfi_var
-#define CHECK_CRC32_INDEX 1 // nfi_var
-#define CHECK_CRC64_INDEX 2 // nfi_var
-#define CHECK_SHA256_INDEX 3 // nfi_var
-#define CHECK_ID_MAX_INDEX 4 // nfi_var
-#define CHECK_UNKNOWN_INDEX 5 // nfi_var
+#define CHECK_NONE_INDEX 0
+#define CHECK_CRC32_INDEX 1
+#define CHECK_CRC64_INDEX 2
+#define CHECK_SHA256_INDEX 3
+#define CHECK_ID_MAX_INDEX 4
+#define CHECK_UNKNOWN_INDEX 5
 
-#define FILTER_LZMA1_INDEX 0 // nfi_var
-#define FILTER_LZMA2_INDEX 1 // nfi_var
-#define FILTER_DELTA_INDEX 2 // nfi_var
-#define FILTER_X86_INDEX 3 // nfi_var
-#define FILTER_POWERPC_INDEX 4 // nfi_var
-#define FILTER_IA64_INDEX 5 // nfi_var
-#define FILTER_ARM_INDEX 6 // nfi_var
-#define FILTER_ARMTHUMB_INDEX 7 // nfi_var
-#define FILTER_SPARC_INDEX 8 // nfi_var
+#define FILTER_LZMA1_INDEX 0
+#define FILTER_LZMA2_INDEX 1
+#define FILTER_DELTA_INDEX 2
+#define FILTER_X86_INDEX 3
+#define FILTER_POWERPC_INDEX 4
+#define FILTER_IA64_INDEX 5
+#define FILTER_ARM_INDEX 6
+#define FILTER_ARMTHUMB_INDEX 7
+#define FILTER_SPARC_INDEX 8
 
-#define MF_HC3_INDEX 0 // nfi_var
-#define MF_HC4_INDEX 1 // nfi_var
-#define MF_BT2_INDEX 2 // nfi_var
-#define MF_BT3_INDEX 3 // nfi_var
-#define MF_BT4_INDEX 4 // nfi_var
+#define MF_HC3_INDEX 0
+#define MF_HC4_INDEX 1
+#define MF_BT2_INDEX 2
+#define MF_BT3_INDEX 3
+#define MF_BT4_INDEX 4
 
-#define MODE_FAST_INDEX 0 // nfi_var
-#define MODE_NORMAL_INDEX 1 // nfi_var
+#define MODE_FAST_INDEX 0
+#define MODE_NORMAL_INDEX 1
 
-#define PRESET_DEFAULT_INDEX 0 // nfi_var
-#define PRESET_EXTREME_INDEX 1 // nfi_var
-
-
-#define ID_INDEX           0 // nfi_var
-#define PRESET_INDEX       1 // nfi_var
-#define DICT_SIZE_INDEX    2 // nfi_var
-#define LC_INDEX           3 // nfi_var
-#define LP_INDEX           4 // nfi_var
-#define PB_INDEX           5 // nfi_var
-#define MODE_INDEX         6 // nfi_var
-#define NICE_LEN_INDEX     7 // nfi_var
-#define MF_INDEX           8 // nfi_var
-#define DEPTH_INDEX        9 // nfi_var
-
-#define DIST_INDEX         1 // nfi_var
-
-#define START_OFFSET_INDEX 1 // nfi_var
-
-#define MAX_OPTS_INDEX     10 // nfi_var
+#define PRESET_DEFAULT_INDEX 0
+#define PRESET_EXTREME_INDEX 1
 
 
-#define LZMA_ID_ERROR      98  // nfi_var
-#define LZMA_PRESET_ERROR  99  // nfi_var
+#define ID_INDEX           0
+#define PRESET_INDEX       1
+#define DICT_SIZE_INDEX    2
+#define LC_INDEX           3
+#define LP_INDEX           4
+#define PB_INDEX           5
+#define MODE_INDEX         6
+#define NICE_LEN_INDEX     7
+#define MF_INDEX           8
+#define DEPTH_INDEX        9
+
+#define DIST_INDEX         1
+
+#define START_OFFSET_INDEX 1
+
+#define MAX_OPTS_INDEX     10
+
+
+#define LZMA_ID_ERROR      98
+#define LZMA_PRESET_ERROR  99
 
 #ifndef NDEBUG
     #include <stdio.h>
@@ -196,7 +196,7 @@ enum {
     FORMAT_RAW,
 };
 
-// The ref_count is important for `copy` as we 
+// The ref_count is important for `copy` as we
 // share off heap storage between native objects.
 typedef struct
 {
@@ -225,8 +225,6 @@ typedef struct
     double timeElapsed;
 #endif
 } lzmast_stream;
-
-// nfi_function: name('getMarcos') static(true)
 void get_macros(int* formats, int* checks, uint64_t* filters, int* mfs, int* modes, uint64_t* preset) {
     formats[FORMAT_AUTO_INDEX] = FORMAT_AUTO;
     formats[FORMAT_XZ_INDEX] = FORMAT_XZ;
@@ -239,7 +237,7 @@ void get_macros(int* formats, int* checks, uint64_t* filters, int* mfs, int* mod
     checks[CHECK_SHA256_INDEX] = LZMA_CHECK_SHA256;
     checks[CHECK_ID_MAX_INDEX] = LZMA_CHECK_ID_MAX;
     checks[CHECK_UNKNOWN_INDEX] = LZMA_CHECK_UNKNOWN;
-    
+
     filters[FILTER_LZMA1_INDEX] = LZMA_FILTER_LZMA1;
     filters[FILTER_LZMA2_INDEX] = LZMA_FILTER_LZMA2;
     filters[FILTER_DELTA_INDEX] = LZMA_FILTER_DELTA;
@@ -249,7 +247,7 @@ void get_macros(int* formats, int* checks, uint64_t* filters, int* mfs, int* mod
     filters[FILTER_ARM_INDEX] = LZMA_FILTER_ARM;
     filters[FILTER_ARMTHUMB_INDEX] = LZMA_FILTER_ARMTHUMB;
     filters[FILTER_SPARC_INDEX] = LZMA_FILTER_SPARC;
-    
+
     mfs[MF_HC3_INDEX] = LZMA_MF_HC3;
     mfs[MF_HC4_INDEX] = LZMA_MF_HC4;
     mfs[MF_BT2_INDEX] = LZMA_MF_BT2;
@@ -258,7 +256,7 @@ void get_macros(int* formats, int* checks, uint64_t* filters, int* mfs, int* mod
 
     modes[MODE_FAST_INDEX] = LZMA_MODE_FAST;
     modes[MODE_NORMAL_INDEX] = LZMA_MODE_NORMAL;
-    
+
     preset[PRESET_DEFAULT_INDEX] = LZMA_PRESET_DEFAULT;
     preset[PRESET_EXTREME_INDEX] = LZMA_PRESET_EXTREME;
 }
@@ -267,7 +265,7 @@ static void* LZMA_Malloc(void* ctx, size_t items, size_t size)
 {
     void *m = malloc((size_t)items * (size_t)size);
     LOG_FINER("malloc(address: %p, items: %u, size: %u)\n", m, items, size);
-    return m; 
+    return m;
 }
 
 static void LZMA_Free(void* ctx, void *ptr)
@@ -298,14 +296,6 @@ static off_heap_buffer* lzma_allocate_buffer(size_t items)
     return o;
 }
 
-static off_heap_buffer* lzma_create_copy_buffer(Byte *src, ssize_t len) {
-    off_heap_buffer *dest = lzma_allocate_buffer(len);
-    if (dest && len > 0) {
-        memcpy(dest->buf, src, len);
-    }
-    return dest; 
-}
-
 static void lzma_release_buffer(off_heap_buffer *o) {
     if (!o) {
         return;
@@ -328,16 +318,6 @@ static void lzma_release_buffer(off_heap_buffer *o) {
     free(o->buf);
     free(o);
 }
-
-static off_heap_buffer* lzma_get_ref(off_heap_buffer* o) {
-    if (o) {
-        LOG_FINEST("off_heap_buffer(ref_count: %zu + 1)\n", o->ref_count);
-        o->ref_count++;
-    }
-    return o;
-}
-
-// nfi_function: name('createStream') map('lzmast_stream*', 'POINTER')
 lzmast_stream *lzma_create_lzmast_stream() {
     lzmast_stream *lzmast = (lzmast_stream *) calloc(1, sizeof(lzmast_stream));
     lzmast->alloc.opaque = NULL;
@@ -358,8 +338,6 @@ lzmast_stream *lzma_create_lzmast_stream() {
     LOG_INFO("lzmast_stream(%p)\n", lzmast);
     return lzmast;
 }
-
-// nfi_function: name('getTimeElapsed') map('lzmast_stream*', 'POINTER')  static(true)
 double lzma_get_timeElapsed(lzmast_stream* lzmast) {
 #ifdef BENCHMARK
     double t = lzmast->timeElapsed;
@@ -392,8 +370,6 @@ free_filter_chain(lzmast_stream *lzmast) {
         lzmast->filters = NULL;
     }
 }
-
-// nfi_function: name('deallocateStream') map('lzmast_stream*', 'POINTER')
 void lzma_free_stream(lzmast_stream* lzmast) {
     if (!lzmast) {
         return;
@@ -410,38 +386,24 @@ void lzma_free_stream(lzmast_stream* lzmast) {
     LOG_INFO("free lzmast_stream(%p)\n", lzmast);
     free(lzmast);
 }
-
-// nfi_function: name('gcReleaseHelper') map('lzmast_stream*', 'POINTER') release(true)
 void lzma_gc_helper(lzmast_stream* lzmast) {
     lzma_free_stream(lzmast);
 }
-
-// nfi_function: name('getNextInIndex') map('lzmast_stream*', 'POINTER')
 ssize_t lzma_get_next_in_index(lzmast_stream *lzmast) {
     return lzmast->next_in_index;
 }
-
-// nfi_function: name('getLzsAvailIn') map('lzmast_stream*', 'POINTER')
 size_t lzma_get_lzs_avail_in(lzmast_stream *lzmast) {
     return lzmast->lzs.avail_in;
 }
-
-// nfi_function: name('getLzsAvailOut') map('lzmast_stream*', 'POINTER')
 size_t lzma_get_lzs_avail_out(lzmast_stream *lzmast) {
     return lzmast->lzs.avail_out;
 }
-
-// nfi_function: name('getLzsCheck') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_get_check(lzmast_stream *lzmast) {
     return lzmast->check;
 }
-
-// nfi_function: name('setLzsAvailIn') map('lzmast_stream*', 'POINTER')
 void lzma_set_lzs_avail_in(lzmast_stream *lzmast, size_t v) {
     lzmast->lzs.avail_in = v;
 }
-
-// nfi_function: name('getOutputBufferSize') map('lzmast_stream*', 'POINTER')
 size_t lzma_get_output_buffer_size(lzmast_stream *lzmast) {
     LOG_INFO("lzma_get_output_buffer_size(%p)\n", lzmast);
     size_t size = lzmast->output_size;
@@ -458,8 +420,6 @@ static void clear_output(lzmast_stream *lzmast) {
     lzmast->output->size = 0;
     lzmast->output_size = 0;
 }
-
-// nfi_function: name('getOutputBuffer') map('lzmast_stream*', 'POINTER')
 void lzma_get_output_buffer(lzmast_stream *lzmast, Byte *dest) {
     LOG_INFO("lzma_get_off_heap_buffer(%p)\n", lzmast);
     off_heap_buffer *buffer = lzmast->output;
@@ -525,8 +485,6 @@ grow_buffer(lzmast_stream *lzmast, ssize_t max_length) {
         return -1;
     }
 }
-
-// nfi_function: name('checkIsSupported')
 int lzma_lzma_check_is_supported(int check_id) {
     return lzma_check_is_supported(check_id);
 }
@@ -534,13 +492,11 @@ int lzma_lzma_check_is_supported(int check_id) {
 /************************************************
  *               Prepare Filters                *
  ************************************************/
-
-// nfi_function: name('setFilterSpecLZMA') map('lzmast_stream*', 'POINTER')
 int lzma_set_filter_spec_lzma(lzmast_stream *lzmast, int fidx, int64_t* opts) {
     initFilters(lzmast);
     lzma_options_lzma *options;
     lzmast->filters[fidx].id = (uint64_t) opts[ID_INDEX];
-    
+
     options = (lzma_options_lzma *)calloc(1, sizeof *options);
     if (options == NULL) {
         return LZMA_MEM_ERROR;
@@ -554,38 +510,36 @@ int lzma_set_filter_spec_lzma(lzmast_stream *lzmast, int fidx, int64_t* opts) {
     }
 
     if (opts[LC_INDEX] != -1) {
-        options->lc = (uint32_t) opts[LC_INDEX]; 
+        options->lc = (uint32_t) opts[LC_INDEX];
     }
 
     if (opts[LP_INDEX] != -1) {
-        options->lp = (uint32_t) opts[LP_INDEX]; 
+        options->lp = (uint32_t) opts[LP_INDEX];
     }
 
     if (opts[PB_INDEX] != -1) {
-        options->pb = (uint32_t) opts[PB_INDEX]; 
+        options->pb = (uint32_t) opts[PB_INDEX];
     }
 
     if (opts[MODE_INDEX] != -1) {
-        options->mode = (lzma_mode) opts[MODE_INDEX]; 
+        options->mode = (lzma_mode) opts[MODE_INDEX];
     }
 
     if (opts[NICE_LEN_INDEX] != -1) {
-        options->nice_len = (uint32_t) opts[NICE_LEN_INDEX]; 
+        options->nice_len = (uint32_t) opts[NICE_LEN_INDEX];
     }
 
     if (opts[MF_INDEX] != -1) {
-        options->mf = (lzma_match_finder) opts[MF_INDEX]; 
+        options->mf = (lzma_match_finder) opts[MF_INDEX];
     }
 
     if (opts[DEPTH_INDEX] != -1) {
-        options->depth = (uint32_t) opts[DEPTH_INDEX]; 
+        options->depth = (uint32_t) opts[DEPTH_INDEX];
     }
 
     lzmast->filters[fidx].options = options;
     return LZMA_OK;
 }
-
-// nfi_function: name('setFilterSpecDelta') map('lzmast_stream*', 'POINTER')
 int lzma_set_filter_spec_delta(lzmast_stream *lzmast, int fidx, int64_t* opts) {
     initFilters(lzmast);
     lzma_options_delta *options;
@@ -602,8 +556,6 @@ int lzma_set_filter_spec_delta(lzmast_stream *lzmast, int fidx, int64_t* opts) {
     lzmast->filters[fidx].options = options;
     return LZMA_OK;
 }
-
-// nfi_function: name('setFilterSpecBCJ') map('lzmast_stream*', 'POINTER')
 int lzma_set_filter_spec_bcj(lzmast_stream *lzmast, int fidx, int64_t* opts) {
     initFilters(lzmast);
     lzma_options_bcj *options;
@@ -618,10 +570,8 @@ int lzma_set_filter_spec_bcj(lzmast_stream *lzmast, int fidx, int64_t* opts) {
     lzmast->filters[fidx].options = options;
     return LZMA_OK;
 }
-
-// nfi_function: name('encodeFilter') map('lzmast_stream*', 'POINTER')
 int lzma_encode_filter_spec(lzmast_stream *lzmast, int64_t* opts) {
-    lzma_ret lzret;
+    lzma_ret lzret = LZMA_PROG_ERROR;
     uint32_t encoded_size;
     lzma_filter filter;
 
@@ -669,15 +619,14 @@ int lzma_encode_filter_spec(lzmast_stream *lzmast, int64_t* opts) {
     lzmast->output_size = encoded_size;
     return LZMA_OK;
 }
-
-// nfi_function: name('decodeFilter') map('lzmast_stream*', 'POINTER')
 int lzma_decode_filter_spec(int64_t filter_id, Byte* encoded_props, int len, int64_t *opts) {
+    LOG_INFO("lzma_decode_filter_spec(filter_id=%ld, encoded_props=%p, len=%d, opts=%p)\n", filter_id, encoded_props, len, opts);
 
     lzma_ret lzret;
     lzma_filter filter;
 
     filter.id = (lzma_vli) filter_id;
-    
+
     lzret = lzma_properties_decode(&filter, NULL, encoded_props, len);
     if (!isOK(lzret)) {
         return lzret;
@@ -715,7 +664,10 @@ int lzma_decode_filter_spec(int64_t filter_id, Byte* encoded_props, int len, int
         case LZMA_FILTER_ARMTHUMB:
         case LZMA_FILTER_SPARC: {
             lzma_options_bcj *options = filter.options;
-            opts[START_OFFSET_INDEX] = options->start_offset;
+            if (options) {
+                opts[START_OFFSET_INDEX] = options->start_offset;
+            }
+            opts[START_OFFSET_INDEX + 1] = filter.options == NULL;
             break;
         }
         default:
@@ -731,8 +683,6 @@ int lzma_decode_filter_spec(int64_t filter_id, Byte* encoded_props, int len, int
 /************************************************
  *               Compress Object                *
  ************************************************/
-
-// nfi_function: name('lzmaEasyEncoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_easy_encoder(lzmast_stream *lzmast, uint32_t preset, int check) {
     LOG_INFO("lzma_lzma_easy_encoder(%p, %d, %d)[lzmast->lzs (%p)]\n", lzmast, preset, check, lzmast->lzs);
     lzma_ret lzret = lzma_easy_encoder(&lzmast->lzs, preset, check);
@@ -742,8 +692,6 @@ int lzma_lzma_easy_encoder(lzmast_stream *lzmast, uint32_t preset, int check) {
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaStreamEncoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_stream_encoder(lzmast_stream *lzmast, int check) {
     LOG_INFO("lzma_lzma_stream_encoder(%p, %d)\n", lzmast, check);
     lzma_ret lzret = lzma_stream_encoder(&lzmast->lzs, lzmast->filters, check);
@@ -753,8 +701,6 @@ int lzma_lzma_stream_encoder(lzmast_stream *lzmast, int check) {
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaAloneEncoderPreset') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_alone_encoder_preset(lzmast_stream *lzmast, uint32_t preset) {
     LOG_INFO("lzma_lzma_alone_encoder_preset(%p, %d)\n", lzmast, preset);
     lzma_options_lzma options;
@@ -768,8 +714,6 @@ int lzma_lzma_alone_encoder_preset(lzmast_stream *lzmast, uint32_t preset) {
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaAloneEncoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_alone_encoder(lzmast_stream *lzmast) {
     lzma_ret lzret = lzma_alone_encoder(&lzmast->lzs, lzmast->filters[0].options);
     free_filter_chain(lzmast);
@@ -779,8 +723,6 @@ int lzma_lzma_alone_encoder(lzmast_stream *lzmast) {
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaRawEncoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_raw_encoder(lzmast_stream *lzmast) {
     lzma_ret lzret = lzma_raw_encoder(&lzmast->lzs, lzmast->filters);
     free_filter_chain(lzmast);
@@ -790,8 +732,6 @@ int lzma_lzma_raw_encoder(lzmast_stream *lzmast) {
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('compress') map('lzmast_stream*', 'POINTER')
 int lzma_compress(lzmast_stream *lzmast, Byte *data, size_t len, int iaction, ssize_t bufsize) {
     lzma_action action = (lzma_action) iaction;
     LOG_INFO("lzma_compress(%p, %p, %zd, %d, %zd)\n", lzmast, data, len, action, bufsize);
@@ -840,8 +780,6 @@ int lzma_compress(lzmast_stream *lzmast, Byte *data, size_t len, int iaction, ss
 /************************************************
  *              Decompress Object               *
  ************************************************/
-
-// nfi_function: name('lzmaRawDecoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_raw_decoder(lzmast_stream *lzmast) {
     lzmast->check = LZMA_CHECK_NONE;
     lzma_ret lzret = lzma_raw_decoder(&lzmast->lzs, lzmast->filters);
@@ -852,8 +790,6 @@ int lzma_lzma_raw_decoder(lzmast_stream *lzmast) {
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaAutoDecoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_auto_decoder(lzmast_stream *lzmast, uint64_t memlimit, uint32_t decoder_flags) {
     lzma_ret lzret = lzma_auto_decoder(&lzmast->lzs, memlimit, decoder_flags);
     if (!isOK(lzret)) {
@@ -862,8 +798,6 @@ int lzma_lzma_auto_decoder(lzmast_stream *lzmast, uint64_t memlimit, uint32_t de
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaStreamDecoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_stream_decoder(lzmast_stream *lzmast, uint64_t memlimit, uint32_t decoder_flags) {
     lzma_ret lzret = lzma_stream_decoder(&lzmast->lzs, memlimit, decoder_flags);
     if (!isOK(lzret)) {
@@ -872,8 +806,6 @@ int lzma_lzma_stream_decoder(lzmast_stream *lzmast, uint64_t memlimit, uint32_t 
     lzmast->lzs_type = INITIALIZED;
     return LZMA_OK;
 }
-
-// nfi_function: name('lzmaAloneDecoder') map('lzmast_stream*', 'POINTER')
 int lzma_lzma_alone_decoder(lzmast_stream *lzmast, uint64_t memlimit) {
     LOG_INFO("lzma_decompress(%p, %ld)\n", lzmast, memlimit);
     lzmast->check = LZMA_CHECK_NONE;
@@ -889,10 +821,8 @@ int lzma_lzma_alone_decoder(lzmast_stream *lzmast, uint64_t memlimit) {
    buffer is allocated dynamically and returned.  At most max_length bytes are
    returned, so some of the input may not be consumed. d->lzs.next_in and
    d->lzs.avail_in are updated to reflect the consumed input. */
-
-// nfi_function: name('decompress') map('lzmast_stream*', 'POINTER')
-int lzma_decompress(lzmast_stream *lzmast, 
-                Byte *input_buffer, ssize_t offset, 
+int lzma_decompress(lzmast_stream *lzmast,
+                Byte *input_buffer, ssize_t offset,
                 ssize_t max_length,
                 ssize_t bufsize, size_t lzs_avail_in) {
     LOG_INFO("lzma_decompress(%p, %p, %zd, %zd, %zd, %zd)\n", lzmast, input_buffer, offset, bufsize, lzs_avail_in);
@@ -931,11 +861,11 @@ int lzma_decompress(lzmast_stream *lzmast,
         if (!isOK(lzret)) {
             clear_output(lzmast);
             return lzret;
-        } 
+        }
         if (lzret == LZMA_GET_CHECK || lzret == LZMA_NO_CHECK) {
             lzmast->check = lzma_get_check(&lzmast->lzs);
             lzret = LZMA_OK;
-        } 
+        }
         if (lzret == LZMA_STREAM_END) {
             // lzmast->eof = 1;
             // we'll return LZMA_STREAM_END to the java side and process EOF.

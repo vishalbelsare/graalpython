@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -157,6 +157,20 @@ def test_pack_nan():
     assert struct.pack('<d', math.nan) == b'\x00\x00\x00\x00\x00\x00\xf8\x7f'
 
 
+def test_pack_inf():
+    assert struct.pack('<ff', float('inf'), float('-inf')) == b'\x00\x00\x80\x7f\x00\x00\x80\xff'
+
+
+def test_alignment():
+    assert struct.calcsize('3si') == struct.calcsize('ii')
+
+
+def test_big_integer_multipack():
+    value = -80000000000 << 100
+    value >>= 100
+    assert struct.pack('>Bq', 0x13, value) == b'\x13\xff\xff\xff\xed_\xa0\xe0\x00'
+
+
 def test_pack_large_long():
     for fmt in ('l', 'q'):
         assert struct.pack(fmt, 0) == b'\x00' * struct.calcsize(fmt)
@@ -165,10 +179,20 @@ def test_pack_large_long():
         assert struct.unpack(fmt, b'\xff' * struct.calcsize(fmt)) == (-1,)
 
     for fmt in ('L', 'Q'):
-        assert struct.pack(fmt, 0) == b'\x00' * struct.calcsize(fmt)
-        assert struct.unpack(fmt, b'\x00' * struct.calcsize(fmt)) == (0,)
-        assert struct.pack(fmt, 18446744073709551615) == b'\xff\xff\xff\xff\xff\xff\xff\xff'
-        assert struct.unpack(fmt, b'\xff\xff\xff\xff\xff\xff\xff\xff') == (18446744073709551615,)
+        size = struct.calcsize(fmt)
+        assert struct.pack(fmt, 0) == b'\x00' * size
+        assert struct.unpack(fmt, b'\x00' * size) == (0,)
+        maxval = (1 << (size * 8)) - 1
+        assert struct.pack(fmt, maxval) == b'\xff' * size
+        assert struct.unpack(fmt, b'\xff' * size) == (maxval,)
+
+
+def test_pack_void_ptr_unsigned_range():
+    size = struct.calcsize('P')
+    maxval = (1 << (size * 8)) - 1
+    assert struct.pack('P', maxval) == b'\xff' * size
+    assert struct.unpack('P', struct.pack('P', -1)) == (maxval,)
+    assert_raises(struct.error, struct.pack, 'P', maxval + 1)
 
 
 def test_pack_into():
@@ -269,11 +293,7 @@ def test_pack_varargs():
     except TypeError:
         raised = True
     assert raised
-
-
-def test_struct_is_builtin_on_enterprise():
-    if sys.implementation.name == "graalpy" and __graalpython__.is_managed_launcher():
-        # none of these should fail
-        import __graalpython_enterprise__
-        import _struct
-        assert "built-in" in repr(_struct)
+    try:
+        struct.Struct("iii").pack()
+    except struct.error as e:
+        assert "expected 3" in str(e), f"expected 3 not in {str(e)}"

@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,9 +37,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare
 
 
 class DummyNonInt():
@@ -47,12 +45,9 @@ class DummyNonInt():
 
 
 class TestPyBool(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyBool, self).compile_module(name)
 
     # (tfel): This test actually checks that the wrapped booleans that are
-    # stored as sulong globals are singletons
+    # stored as native globals are singletons
     test_PyBools_areSingleton = CPyExtFunction(
         lambda args: 1,
         lambda: (

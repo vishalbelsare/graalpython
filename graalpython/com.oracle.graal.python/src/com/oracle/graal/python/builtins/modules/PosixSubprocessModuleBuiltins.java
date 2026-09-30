@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,8 +49,8 @@ import java.util.List;
 
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.annotations.ClinicConverterFactory;
-import com.oracle.graal.python.builtins.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.modules.PosixModuleBuiltins.ObjectToOpaquePathNode;
@@ -62,17 +62,19 @@ import com.oracle.graal.python.builtins.objects.bytes.BytesNodes.ToBytesNode;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetSequenceStorageNode;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.GetItemNode;
 import com.oracle.graal.python.builtins.objects.exception.OSErrorEnum;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.lib.PyObjectGetItem;
 import com.oracle.graal.python.lib.PyObjectSizeNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.builtins.ListNodes.FastConstructListNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentCastNode.ArgumentCastNodeWithRaise;
+import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentCastNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.util.CannotCastException;
@@ -80,11 +82,11 @@ import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.PosixSupport;
 import com.oracle.graal.python.runtime.PosixSupportLibrary;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.Buffer;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.sequence.PSequence;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -108,9 +110,9 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
 
     /**
      * Helper converter which iterates the argv argument and converts each element to the opaque
-     * path representation used by {@link PosixSupportLibrary}.
+     * narrow string representation used by {@link PosixSupportLibrary}.
      */
-    abstract static class ProcessArgsConversionNode extends ArgumentCastNodeWithRaise {
+    abstract static class ProcessArgsConversionNode extends ArgumentCastNode {
         @Specialization
         static Object[] doNone(@SuppressWarnings("unused") PNone processArgs) {
             // CPython passes NULL to execve() in this case. man execve explicitly discourages this,
@@ -119,33 +121,37 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        @SuppressWarnings("truffle-static-method")
-        Object[] doSequence(VirtualFrame frame, Object processArgs,
-                        @Bind("this") Node inliningTarget,
+        static Object[] doSequence(VirtualFrame frame, Object processArgs,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached FastConstructListNode fastConstructListNode,
                         @Cached GetSequenceStorageNode getSequenceStorageNode,
                         @Cached IsBuiltinObjectProfile isBuiltinClassProfile,
                         @Cached ObjectToOpaquePathNode objectToOpaquePathNode,
-                        @Cached("createNotNormalized()") GetItemNode getItemNode) {
-            PSequence argsSequence;
+                        @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
+                        @Cached("createNotNormalized()") GetItemNode getItemNode,
+                        @Cached PRaiseNode raiseNode) {
+            PList argsList;
             try {
-                argsSequence = fastConstructListNode.execute(frame, inliningTarget, processArgs);
+                argsList = fastConstructListNode.execute(frame, inliningTarget, processArgs);
             } catch (PException e) {
                 e.expect(inliningTarget, TypeError, isBuiltinClassProfile);
-                throw raise(TypeError, ErrorMessages.S_MUST_BE_S, "argv", "a tuple");
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_MUST_BE_S, "argv", "a tuple");
             }
 
-            SequenceStorage argsStorage = getSequenceStorageNode.execute(inliningTarget, argsSequence);
+            SequenceStorage argsStorage = getSequenceStorageNode.execute(inliningTarget, argsList);
             int len = argsStorage.length();
             Object[] argsArray = new Object[len];
             for (int i = 0; i < len; ++i) {
-                SequenceStorage newStorage = getSequenceStorageNode.execute(inliningTarget, argsSequence);
+                SequenceStorage newStorage = getSequenceStorageNode.execute(inliningTarget, argsList);
                 if (newStorage != argsStorage || newStorage.length() != len) {
                     // TODO write a test for this
-                    throw raise(RuntimeError, ErrorMessages.ARGS_CHANGED_DURING_ITERATION);
+                    throw raiseNode.raise(inliningTarget, RuntimeError, ErrorMessages.ARGS_CHANGED_DURING_ITERATION);
                 }
                 Object o = getItemNode.execute(argsStorage, i);
-                argsArray[i] = objectToOpaquePathNode.execute(frame, inliningTarget, o, false);
+                Object path = objectToOpaquePathNode.execute(frame, inliningTarget, o, false);
+                Buffer bytes = posixLib.getPathAsBytes(context.getPosixSupport(), path);
+                argsArray[i] = posixLib.createCStringFromBytes(context.getPosixSupport(), bytes.data);
             }
             return argsArray;
         }
@@ -157,29 +163,30 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
         }
     }
 
-    abstract static class EnvConversionNode extends ArgumentCastNodeWithRaise {
+    abstract static class EnvConversionNode extends ArgumentCastNode {
         @Specialization
         static Object doNone(@SuppressWarnings("unused") PNone env) {
             return null;
         }
 
         @Specialization(guards = "!isPNone(env)")
-        @SuppressWarnings("truffle-static-method")
-        Object doSequence(VirtualFrame frame, Object env,
-                        @Bind("this") Node inliningTarget,
+        static Object doSequence(VirtualFrame frame, Object env,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached PyObjectSizeNode sizeNode,
                         @Cached ToBytesNode toBytesNode,
                         @Cached PyObjectGetItem getItem,
-                        @CachedLibrary("getContext().getPosixSupport()") PosixSupportLibrary posixLib) {
+                        @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
+                        @Cached PRaiseNode raiseNode) {
             // TODO unlike CPython, this accepts a dict (if the keys are integers (0, 1, ..., len-1)
             int length = sizeNode.execute(frame, inliningTarget, env);
             Object[] result = new Object[length];
             for (int i = 0; i < length; ++i) {
                 Object o = getItem.execute(frame, inliningTarget, env, i);
                 byte[] bytes = toBytesNode.execute(frame, o);
-                Object o1 = posixLib.createPathFromBytes(getContext().getPosixSupport(), bytes);
+                Object o1 = posixLib.createCStringFromBytes(context.getPosixSupport(), bytes);
                 if (o1 == null) {
-                    throw raise(ValueError, ErrorMessages.EMBEDDED_NULL_BYTE);
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.EMBEDDED_NULL_BYTE);
                 }
                 result[i] = o1;
             }
@@ -193,10 +200,10 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "fork_exec", minNumOfPositionalArgs = 17, parameterNames = {"args", "executable_list", "close_fds",
+    @Builtin(name = "fork_exec", parameterNames = {"args", "executable_list", "close_fds",
                     "fds_to_keep", "cwd", "env", "p2cread", "p2cwrite", "c2pread", "c2pwrite", "errread", "errwrite",
-                    "errpipe_read", "errpipe_write", "restore_signals", "call_setsid", "gid_object", "groups_list",
-                    "uid_object", "child_umask", "preexec_fn"})
+                    "errpipe_read", "errpipe_write", "restore_signals", "call_setsid", "pgid_to_set", "gid_object", "groups_list",
+                    "uid_object", "child_umask", "preexec_fn", "allow_vfork"})
     @ArgumentClinic(name = "args", conversionClass = ProcessArgsConversionNode.class)
     @ArgumentClinic(name = "close_fds", conversion = ClinicConversion.Boolean)
     @ArgumentClinic(name = "env", conversionClass = EnvConversionNode.class)
@@ -210,7 +217,9 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
     @ArgumentClinic(name = "errpipe_write", conversion = ClinicConversion.Int)
     @ArgumentClinic(name = "restore_signals", conversion = ClinicConversion.IntToBoolean)
     @ArgumentClinic(name = "call_setsid", conversion = ClinicConversion.IntToBoolean)
+    @ArgumentClinic(name = "pgid_to_set", conversion = ClinicConversion.Int)
     @ArgumentClinic(name = "child_umask", conversion = ClinicConversion.Int)
+    @ArgumentClinic(name = "allow_vfork", conversion = ClinicConversion.Boolean)
     @GenerateNodeFactory
     abstract static class NewForkExecNode extends PythonClinicBuiltinNode {
 
@@ -227,13 +236,13 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
             return s.getBytes();
         }
 
-        private static Object createPathFromBytes(Node inliningTarget, byte[] bytes, PosixSupportLibrary posixLib, PRaiseNode.Lazy raiseNode) {
-            Object o = posixLib.createPathFromBytes(PosixSupport.get(inliningTarget), bytes);
+        private static Object createCStringFromBytes(Node inliningTarget, byte[] bytes, PosixSupportLibrary posixLib, PRaiseNode raiseNode) {
+            Object o = posixLib.createCStringFromBytes(PosixSupport.get(inliningTarget), bytes);
             if (o == null) {
-                // TODO reconsider the contract of PosixSupportLibrary#createPathFromBytes w.r.t.
+                // TODO reconsider the contract of PosixSupportLibrary#createCStringFromBytes w.r.t.
                 // embedded null checks (we need to review that anyway since PosixSupportLibrary
                 // cannot do Python-specific fsencode)
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.EMBEDDED_NULL_BYTE);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.EMBEDDED_NULL_BYTE);
             }
             return o;
         }
@@ -244,11 +253,13 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
                         Object fdsToKeepObj, Object cwdObj, Object env,
                         int stdinRead, int stdinWrite, int stdoutRead, int stdoutWrite,
                         int stderrRead, int stderrWrite, int errPipeRead, int errPipeWrite,
-                        boolean restoreSignals, boolean callSetsid, Object gidObject, Object groupsList,
-                        Object uidObject, int childUmask, Object preexecFn,
+                        boolean restoreSignals, boolean callSetsid, int pgidToSet, Object gidObject, Object groupsList,
+                        Object uidObject, int childUmask, Object preexecFn, boolean allowVFork,
                         @CachedLibrary("getPosixSupport()") PosixSupportLibrary posixLib,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached("createNotNormalized()") GetItemNode tupleGetItem,
+                        @Cached TupleNodes.GetTupleStorage getTupleStorage,
+                        @Cached PyTupleCheckNode tupleCheckNode,
                         @Cached PyObjectGetItem getItem,
                         @Cached CastToJavaIntExactNode castToIntNode,
                         @Cached ObjectToOpaquePathNode objectToOpaquePathNode,
@@ -256,18 +267,18 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
                         @Cached GilNode gil,
                         @Cached ToBytesNode toBytesNode,
                         @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             if (!(preexecFn instanceof PNone)) {
-                throw raiseNode.get(inliningTarget).raise(RuntimeError, ErrorMessages.S_NOT_SUPPORTED, "preexec_fn");
+                throw raiseNode.raise(inliningTarget, RuntimeError, ErrorMessages.S_NOT_SUPPORTED, "preexec_fn");
             }
             if (closeFds && errPipeWrite < 3) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.S_MUST_BE_S, "errpipe_write", ">= 3");
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.S_MUST_BE_S, "errpipe_write", ">= 3");
             }
-            if (!(fdsToKeepObj instanceof PTuple)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.ARG_D_MUST_BE_S_NOT_P, "fork_exec()", 4, "tuple", fdsToKeepObj);
+            if (!tupleCheckNode.execute(inliningTarget, fdsToKeepObj)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.ARG_D_MUST_BE_S_NOT_P, "fork_exec()", 4, "tuple", fdsToKeepObj);
             }
             Object[] processArgs = args;
-            int[] fdsToKeep = convertFdSequence(inliningTarget, (PTuple) fdsToKeepObj, tupleGetItem, castToIntNode, raiseNode);
+            int[] fdsToKeep = convertFdSequence(inliningTarget, getTupleStorage.execute(inliningTarget, fdsToKeepObj), tupleGetItem, castToIntNode, raiseNode);
             Object cwd = PGuards.isPNone(cwdObj) ? null : objectToOpaquePathNode.execute(frame, inliningTarget, cwdObj, false);
 
             PythonContext context = PythonContext.get(inliningTarget);
@@ -281,11 +292,11 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
                 if (Arrays.equals(bytes, sysExecutable)) {
                     TruffleString[] additionalArgs = PythonOptions.getExecutableList(context);
                     if (length != 1 && additionalArgs.length != 1) {
-                        throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.UNSUPPORTED_USE_OF_SYS_EXECUTABLE);
+                        throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.UNSUPPORTED_USE_OF_SYS_EXECUTABLE);
                     }
                     Object[] extendedArgs = new Object[additionalArgs.length + (processArgs.length == 0 ? 0 : processArgs.length - 1)];
                     for (int j = 0; j < additionalArgs.length; ++j) {
-                        extendedArgs[j] = createPathFromBytes(inliningTarget, fsEncode(additionalArgs[j].toJavaStringUncached()), posixLib, raiseNode);
+                        extendedArgs[j] = createCStringFromBytes(inliningTarget, fsEncode(additionalArgs[j].toJavaStringUncached()), posixLib, raiseNode);
                     }
                     if (processArgs.length > 1) {
                         PythonUtils.arraycopy(processArgs, 1, extendedArgs, additionalArgs.length, processArgs.length - 1);
@@ -293,14 +304,14 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
                     processArgs = extendedArgs;
                     executables[i] = extendedArgs[0];
                 } else {
-                    executables[i] = createPathFromBytes(inliningTarget, bytes, posixLib, raiseNode);
+                    executables[i] = createCStringFromBytes(inliningTarget, bytes, posixLib, raiseNode);
                 }
             }
 
             gil.release(true);
             try {
                 return posixLib.forkExec(context.getPosixSupport(), executables, processArgs, cwd, env == null ? null : (Object[]) env, stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead,
-                                stderrWrite, errPipeRead, errPipeWrite, closeFds, restoreSignals, callSetsid, fdsToKeep);
+                                stderrWrite, errPipeRead, errPipeWrite, closeFds, restoreSignals, callSetsid, pgidToSet, fdsToKeep, allowVFork);
             } catch (PosixException e) {
                 gil.acquire();
                 throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
@@ -316,8 +327,7 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
          * Checks that the tuple contains only valid fds (positive integers fitting into an int) in
          * ascending order.
          */
-        private static int[] convertFdSequence(Node inliningTarget, PTuple fdSequence, GetItemNode getItemNode, CastToJavaIntExactNode castToIntNode, PRaiseNode.Lazy raiseNode) {
-            SequenceStorage storage = fdSequence.getSequenceStorage();
+        private static int[] convertFdSequence(Node inliningTarget, SequenceStorage storage, GetItemNode getItemNode, CastToJavaIntExactNode castToIntNode, PRaiseNode raiseNode) {
             int len = storage.length();
             int[] fds = new int[len];
             int prevFd = -1;
@@ -331,7 +341,7 @@ public final class PosixSubprocessModuleBuiltins extends PythonBuiltins {
                 } catch (PException | CannotCastException e) {
                     // 'handled' by raise() below
                 }
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.BAD_VALUES_IN_FDS_TO_KEEP);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.BAD_VALUES_IN_FDS_TO_KEEP);
             }
             return fds;
         }

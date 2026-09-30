@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -56,12 +56,15 @@ import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.statement.AbstractImportNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -79,15 +82,21 @@ public abstract class ImportFromNode extends PNodeWithContext {
 
     @Specialization
     Object doImport(VirtualFrame frame, Object module, TruffleString name,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached PyObjectLookupAttr lookupAttr,
+                    @Cached("createFor($node)") BoundaryCallData boundaryCallData,
                     @Cached InlinedBranchProfile maybeCircularProfile) {
         Object result = lookupAttr.execute(frame, inliningTarget, module, name);
         if (result != PNone.NO_VALUE) {
             return result;
         }
         maybeCircularProfile.enter(inliningTarget);
-        return tryResolveCircularImport(module, name);
+        Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+        try {
+            return tryResolveCircularImport(module, name);
+        } finally {
+            BoundaryCallContext.exit(frame, boundaryCallData, saved);
+        }
     }
 
     @TruffleBoundary
@@ -119,15 +128,16 @@ public abstract class ImportFromNode extends PNodeWithContext {
             pkgnameObj = PNone.NONE;
         }
         if (pkgpathObj != null && AbstractImportNode.PyModuleIsInitializing.getUncached().execute(null, module)) {
-            throw PConstructAndRaiseNode.getUncached().raiseImportError(null, pkgnameObj, pkgpathObj, ErrorMessages.CANNOT_IMPORT_NAME_CIRCULAR, name, pkgname, pkgpath);
+            throw PConstructAndRaiseNode.getUncached().raiseImportErrorWithModule(null, pkgnameObj, pkgpathObj, ErrorMessages.CANNOT_IMPORT_NAME_CIRCULAR, name, pkgname, pkgpath);
         } else {
             if (pkgpathObj == null) {
                 pkgpathObj = PNone.NONE;
             }
-            throw PConstructAndRaiseNode.getUncached().raiseImportError(null, pkgnameObj, pkgpathObj, ErrorMessages.CANNOT_IMPORT_NAME, name, pkgname, pkgpath);
+            throw PConstructAndRaiseNode.getUncached().raiseImportErrorWithModule(null, pkgnameObj, pkgpathObj, ErrorMessages.CANNOT_IMPORT_NAME, name, pkgname, pkgpath);
         }
     }
 
+    @NeverDefault
     public static ImportFromNode create() {
         return ImportFromNodeGen.create();
     }

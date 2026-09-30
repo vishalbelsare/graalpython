@@ -1,6 +1,6 @@
 # Contributing to GraalPy
 
-Thanks for considering to contribute! 
+Thanks for considering to contribute!
 To get you started, read about the structure of this implementation.
 
 You will need to sign the [Oracle Contributor Agreement](http://www.graalvm.org/community/contributors/) for us to be able to merge your work.
@@ -9,34 +9,219 @@ Please also take some time to review our [code of conduct](http://www.graalvm.or
 
 ## Getting Started
 
-The first thing you want to do is to set up [`mx`](https://github.com/graalvm/mx.git).
-This is the build tool we use to develop GraalVM languages.
-Note that you can use any JDK, and do not need GraalVM for development.
-In that case you'll only be able to run without the just-in-time compiler, but that can be fine for making and testing changes that are not performance sensitive.
+### Using a Github codespace
 
-Once you have `mx` on your `PATH`, you can run `mx build` in this repository.
+The devcontainer will use checked-in Maven POM facades, so basic Java editing works directly.
+Use `mx python-jvm` to build, run, and test a GraalPy distribution artifact.
+For full editing support, run `mx vscodeinit` and open the `graalpython.code-workspace` file that command generates.
+
+### Setting up on your machine
+
+#### General prerequisites
+
+All platforms require:
+
+* Git
+* CPython 3.8 or newer, which is required to run `mx`
+* [Maven](https://maven.apache.org/), with its `bin` directory on your `PATH`
+* [`mx`](https://github.com/graalvm/mx.git), the build tool used to develop GraalVM languages
+* A suitable JDK
+* CMake 3.22 or newer
+
+`mx` provides Ninja when it is not already available, so Ninja does not need to
+be installed separately.
+
+After installing the platform-specific prerequisites described below, clone `mx`:
+
+```shell
+git clone https://github.com/graalvm/mx.git
+```
+
+Add the `mx` directory to your `PATH`.
+
+Use `mx` to get additional projects at the right versions. From within your
+`graalpython` checkout, run:
+
+```
+mx sforceimport
+```
+
+You can then download a suitable JDK:
+
+```shell
+mx -p ../graal/vm --env ce-python fetch-jdk -A --jdk-id labsjdk-ce-latest
+```
+
+Set the `JAVA_HOME` environment variable as described for your platform below.
+
+#### Linux prerequisites
+
+For building GraalPy, you will also need some native build tools and libraries.
+On a Debian-based system, install:
+
+```bash
+sudo apt install build-essential libc++-12-dev zlib1g-dev cmake
+```
+
+The `python-libzsupport` project uses the zlib headers and library from
+`zlib1g-dev`. `python-libposix` uses the libc development headers and links
+against `libutil` and `librt`; these are provided by `libc6-dev`, which is
+installed through `build-essential`.
+The bzip2 and XZ sources used by `python-libbz2` and `python-liblzma` are
+downloaded by `mx`, so `libbz2-dev` and `liblzma-dev` are not required.
+If your distribution provides a CMake version older than 3.22, install a newer
+version separately.
+
+Set `JAVA_HOME`:
+
+```bash
+export JAVA_HOME="${HOME}/.mx/jdks/labsjdk-ce-latest"
+```
+
+#### Windows prerequisites
+
+GraalPy can be built natively on 64-bit Windows. Use
+[Git for Windows](https://gitforwindows.org/) for the general Git prerequisite.
+In addition, install:
+
+* Visual Studio 2022 with the **Desktop development with C++** workload, including
+  the MSVC x64 build tools and a Windows SDK
+
+The Windows SDK provides the headers and `Ws2_32.lib` required by
+`python-libposix`. CMake 3.22.2 is tested. Newer Visual Studio and CMake
+versions may work, but are not tested.
+
+GraalPy's checkout and generated build output require symbolic links and long paths.
+First, enable **Developer Mode** in Windows Settings under **System > For developers**.
+Developer Mode allows an unelevated process to create symbolic links. If Developer
+Mode is controlled by organizational policy, builds must instead run from an
+elevated shell.
+
+Next, enable Win32 long paths from an Administrator PowerShell:
+
+```powershell
+Set-ItemProperty `
+    -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+    -Name LongPathsEnabled `
+    -Type DWord `
+    -Value 1
+```
+
+Verify that the command prints `1`:
+
+```powershell
+Get-ItemPropertyValue `
+    -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+    -Name LongPathsEnabled
+```
+
+Close and reopen applications after changing this setting; a reboot may be needed
+because applications can cache it. Configure Git to support both long paths and
+symbolic links:
+
+```powershell
+git config --global core.longpaths true
+git config --global core.symlinks true
+```
+
+For a new checkout, explicitly enable symbolic links while cloning:
+
+```powershell
+git clone -c core.symlinks=true https://github.com/oracle/graalpython.git
+```
+
+Git for Windows may have written `core.symlinks=false` into an existing checkout's
+local `.git/config`, which overrides the global setting. Check all effective values
+from inside the checkout:
+
+```powershell
+git config --show-origin --show-scope --get-all core.symlinks
+```
+
+If the local value is `false`, repair the configuration:
+
+```powershell
+git config --local core.symlinks true
+```
+
+Files stored as symbolic links have mode `120000` in Git:
+
+```powershell
+git ls-files -s | Select-String '^120000\s'
+```
+
+For example, verify the `common.json` link:
+
+```powershell
+Get-Item -Force .\common.json | Format-List LinkType,Target
+```
+
+It should report `LinkType: SymbolicLink`. If it is a regular file containing only
+`./ci/graal/common.json`, changing the configuration does not automatically
+re-materialize it. Replace it after enabling Developer Mode and `core.symlinks`:
+
+```powershell
+Remove-Item -LiteralPath .\common.json
+git restore --source=HEAD --worktree -- .\common.json
+```
+
+Run the build in a 64-bit Visual Studio Developer PowerShell. A Developer PowerShell
+can be initialized from an ordinary PowerShell without relying on a
+version-specific Visual Studio installation path:
+
+```powershell
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vsPath = & $vswhere -latest -products * `
+    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+    -property installationPath
+& "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+```
+
+Verify the target architecture and tools before building:
+
+```powershell
+$env:VSCMD_ARG_TGT_ARCH
+cl
+where.exe cl
+where.exe dumpbin
+cmake --version
+python --version
+$env:INCLUDE
+$env:LIB
+```
+
+`VSCMD_ARG_TGT_ARCH` and the `cl` banner must indicate `x64`, not `x86`.
+Both `INCLUDE` and `LIB` must contain the Visual C++ and Windows SDK paths.
+
+Set `JAVA_HOME`:
+
+```powershell
+$env:JAVA_HOME="$HOME\.mx\jdks\labsjdk-ce-latest"
+```
+
+Make sure you are running in the x64 Visual Studio Developer PowerShell configured
+above when building.
+
+#### Building GraalPy
+
+Once you have all the necessary tools, you can run `mx python-jvm` in this repository.
 This will initially download the required dependencies next to the repository and build Python.
 If it succeeds without errors, you should already be able to run `mx python` and get a REPL.
 
-If you just want to copy and paste some commands, these should get you started:
-
-```bash
-git clone https://github.com/graalvm/mx.git
-git clone https://github.com/graalvm/graalpython.git
-cd graalpython
-../mx/mx build
-../mx/mx python -c "print(42)"
-```
-
 For development, we recommend running `mx ideinit` next.
 This will generate configurations for Eclipse, IntelliJ, and NetBeans so that you can open the projects in these IDEs.
-If you use another editor with support for the [Eclipse language server](https://github.com/eclipse/eclipse.jdt.ls) we have also had reports of useable development setups with that, but it's not something we support.
+See also the documentation in mx for [setting up your IDE](https://github.com/graalvm/mx/blob/master/docs/IDE.md).
+If you use another editor (such as VSCode, Emacs, or Neovim) with support for the [Eclipse language server](https://github.com/eclipse/eclipse.jdt.ls) or [Apache NetBeans language server](https://marketplace.visualstudio.com/items?itemName=ASF.apache-netbeans-java), you can also get useable development setups with that, but it's not something we explicitly support.
+
+The checked-in Maven POMs are lightweight facades for quick Java IDE import in editors such as Eclipse, VSCode, or any editor using JDTLS.
+They are not the full GraalPy build; use `mx ideinit` for the full generated IDE setup and `mx python-jvm` for the build needed to run or test GraalPy.
+The facade uses the `graalvm.version` Maven property for GraalVM artifact resolution; override it locally if you need a different version.
 
 ## Development Layout
 
 Besides the source code of the Python interpreter, we have some useful `mx` functions defined under the _mx.graalpython_ directory.
-As you make changes, you can always test them with `mx build && mx python`.
-Additionally, there are various "gates" that we use on our CI systems to check any code that is committed. 
+As you make changes, you can always test them with `mx python-jvm && mx python`.
+Additionally, there are various "gates" that we use on our CI systems to check any code that is committed.
 You can run all the gates with the command `mx python-gate` or just some by using `mx python-gate --tags [TAG]`.
 Interesting gates to run that cover a good chunk of the code things are:
 
@@ -67,7 +252,7 @@ In general, most of these methods should have equivalents in our libs nodes in t
 If something is missing that is commonly used, we probably have some Node for it somewhere, but it may be a good idea to create a lib node and migrate usages.
 
 GraalPy has its own variant of the Argument Clinic preprocessor.
-It is activated by: 
+It is activated by:
 * extending `PythonXXXClinicBuiltinNode` (e.g. `PythonBinaryClinicBuiltinNode`),
 * using `@ArgumentClinic` annotations on the built-in node class,
 * and overriding the `getArgumentClinic` method to return the class that will be generated from the annotations (it will be named the same as the node class plus `ClinicProviderGen` suffix).
@@ -104,6 +289,11 @@ If the IDE was initialized properly by using the command mentioned above, the ex
 
 Both of these commands also work when you have a `graalpy` executable, e.g. inside a `venv`.
 
+For debugging the C API and native extensions, first make sure you rebuild (`mx clean` first!) graalpython with the environment variable `CFLAGS=-g` set.
+This will keep debug symbols in our C API implementation which should allow you to use `gdb` or [`rr`](https://rr-project.org/) to debug.
+When you build an SVM image, debugging the entire application is possible, and there are [docs](https://www.graalvm.org/reference-manual/native-image/guides/debug-native-image-process/) to see Java code when inside the native debugger.
+Make sure you find and keep the `libpythonvm.so.debug` file around next to your GraalPy build, you can find it under `mxbuild/*/libpythonvm`.
+
 ## Advanced Commands to Develop and Debug
 
 Here are some advanced commands to debug test failures and fix issues.
@@ -111,7 +301,7 @@ Here are some advanced commands to debug test failures and fix issues.
 First, we have three sets of unit tests in the base repository:
 1. Our own Python-bases unit tests
 2. JUnit tests
-3. Python's standard library tests
+3. Python's standard library tests, we often refer to those as tagged tests
 
 To run the first, you can use this command:
 
@@ -119,11 +309,12 @@ To run the first, you can use this command:
 mx python-gate --tags python-unittest
 ```
 
-If some of the tests fail, you can re-run just a single test like this, substituting TEST-PATTERN (and possibly the file glob on the third line) with the test you want to run.
+If some of the tests fail, you can re-run just a single test like this, substituting TEST-SELECTOR with the test you want to run. You can use the whole failed test name including the path as the selector.
 Note that you can insert `-d` to debug on the Java level or use `--inspect` to debug in the Chrome debugger.
+Use `com.oracle.graal.python.runtime.exception.ExceptionUtils.printPythonLikeStackTrace()` in the Java debugger to print the current Python traceback on `stderr`.
 
 ```bash
-mx [-d] graalpytest [--inspect] test_*.py -k TEST-PATTERN
+mx [-d] graalpytest [--inspect] TEST-SELECTOR
 ```
 
 To run the JUnit tests, you can use this command:
@@ -146,16 +337,16 @@ mx python-gate --tags python-tagged-unittest
 ```
 
 Note that we use "tag files", small _*.txt_ files that select which tests to run, so we only run tests that we know should pass.
-To run a subset of those tests, use the following command:
+To run a subset of those tests, use the following command. The selector can be a test name, a test file path a glob or an individual test ID.
 
 ```
-mx [-d] python-run-cpython-unittest [--inspect] NAME-OF-CPYTHON-UNITTEST
+mx [-d] graalpytest [--inspect] --tagged TEST-SELECTOR
 ```
 
 A tag file can be regenerated with
 
 ```
-mx python-retag-unittests NAME-OF-CPYTHON-UNITTEST
+mx graalpytest --retag TEST-SELECTOR
 ```
 
 There are also several other gates that may fail with changes.
@@ -190,6 +381,26 @@ If you made changes to the bytecode compiler, you may have to regenerate its gol
 ```bash
 find graalpython -name '*.co' -delete
 mx punittest com.oracle.graal.python.test.compiler
+```
+
+### CI Unittests
+
+Most of our internal unittests are also ran on Github workflows.
+The `Run CI unittests` (`.github/workflows/ci-unittests.yml`) workflow will execute automatically when you open your PR, synchronize it and mark it as ready.
+**Note**: Unittests don't run on draft PRs.
+
+By default, all gates defined in the `Run CI unittests` `jobs_to_run:` regex will run.
+You can run specific tests by manually triggering the `Generate CI Matrix from ci.jsonnet` (`.github/workflows/ci-matrix-gen.yml`) workflow and filling in the `Jobs to run` field.This field MUST be a valid python regex or be left empty to run all gates.
+
+If you need to update any tags, please use the `Run Weekly unittest retagger` (`.github/workflows/ci-unittests-retagger.yml`) workflow. This sets up the required GitHub-specific environment and ensures that internal tests are not disrupted. Here again, you may use a Python regex to retag only specific platforms.
+
+The retagger workflow will automatically open a ready-to-merge PR in your fork.
+
+You can manually check which jobs will be run with your regex by using the `.github/scripts/extract_matrix.py` script.
+You will need to have the [sjsonnet](https://github.com/databricks/sjsonnet) binary available.
+
+```bash
+python3 .github/scripts/extract_matrix.py ../sjsonnet ci.jsonnet tier{1-3} {regex} > matrix.json
 ```
 
 ## Benchmarking
@@ -230,14 +441,57 @@ mx benchmark meso:nbody3 \
     -Dgraal.MethodFilter=*measure*
 ```
 
+For debugging native problems in benchmark runs, there's `BENCHMARK_DEBUG_ARGS` in `mx_graalpython_benchmark.py` to log more stuff for debugging, at the cost of performance.
+This is intended for focused reproducer runs on a branch.
+
+### Java embedding benchmarks (JMH)
+
+`python-jmh:GRAALPYTHON_BENCH` runs the Java embedding benchmarks, including
+`ContextInitSharedEngineBenchmark.initCtx`. That benchmark initializes Python in successive
+contexts sharing one engine; context construction and teardown are outside the measured operation.
+
+Build the benchmarks, Native Image toolchain, and GraalJDK for the JVM comparison from the same
+sources (this does not build a GraalPy native standalone):
+
+```bash
+mx --java-home=lookup:default --env jmh-native-ce sforceimports
+mx --java-home=lookup:default --env jmh-native-ce build \
+    --dependencies 'GRAALPYTHON_BENCH,GRAALVM,{MAVEN_TAG_DISTRIBUTIONS:graaljdk}'
+```
+
+Run the full suite on the JVM and as a native executable:
+
+```bash
+mx --java-home=lookup:default --env jmh-native-ce benchmark python-jmh:GRAALPYTHON_BENCH \
+    --results-file jmh-jvm-results.json -- --jvm=server --jvm-config=graal-core -- -f 5
+mx --java-home=lookup:default --env jmh-native-ce benchmark python-jmh:GRAALPYTHON_BENCH \
+    --results-file jmh-native-results.json -- --jvm=native-image --jvm-config=default-ce -- -f 5
+```
+
+Append `ContextInitSharedEngineBenchmark.initCtx` after `-f 5` to compare just shared-engine
+initialization. For a smoke test, replace `-f 5` with `-f 1 -wi 1 -i 1 -w 1 -r 1 -foe true`;
+these short runs are not suitable for performance comparisons.
+
+Native Image first runs the benchmarks with the tracing agent to collect reachability metadata,
+then builds one image and executes it in a fresh process for each requested fork. Pass a positive
+`-f` explicitly: the native dispatcher defaults to one fork and does not use JMH's default or
+`@Fork` annotations. Native results are reported per fork rather than aggregated across forks.
+The `--results-file` output contains all forks with VM/configuration dimensions; `jmh_result.json`
+is an intermediate file and is overwritten on each run. Image-build metrics are separate from
+benchmark execution metrics.
+
+The daily CI jobs run both JVM (`java_jmh_enterprise`) and Native Image
+(`java_jmh_native_enterprise`) variants and upload `bench-results.json`. The native job uses
+`--env jmh-native-ee --jvm=native-image --jvm-config=default-ee`; with access to the enterprise
+suites, use `jmh-native-ee` for the build command above to reproduce it.
+
 ### A note on terminology
 
 Note that there may be a little confusion about the configuration names of benchmarks.
 
-#### GraalVM Community Edition and Oracle GraalVM configurations
+#### Oracle GraalVM configurations
 
-We have benchmarks for GraalVM Community Edition and Oracle GraalVM.
-For historical reasons, these are sometimes referred to in some config files as *CE* and *EE*; *core* and *enterprise*; *graalvm_ce* and *graalvm_ee*; or *graalpython_core* and *graalpython_enterprise*, respectively.
+Benchmark CI jobs use Oracle GraalVM configurations. For historical reasons, these are sometimes referred to in config files as *EE*, *enterprise*, *graalvm_ee*, or *graalpython_enterprise*.
 
 ### Different GraalVM Python configurations
 
@@ -245,7 +499,7 @@ There are also different options for how the Python interpreter is run, passed v
  * `default` - run using the standard options
  * `default-multi` - run using a shared engine, which is the mode that is recommended to embedders that want to spawn multiple isolated Python contexts
  * `native` - same as `default`, its name is due to the fact that it runs C extensions using a mixture of LLVM bitcode interpreted and compiled via GraalVM and real native libraries
- * `sandboxed` - this name is historical - this configuration requires Oracle GraalVM and runs all C extensions purely as LLVM bitcode on the GraalVM, without any access to the native OS libraries, i.e., using the `--llvm.managed` option for GraalVM.
+ * `sandboxed` - this name is historical - this configuration runs some modules such as the posix and sha3 modules with Java code instead of with native access.
 
 ### Configuration of the underlying GraalVM runtime
 
@@ -267,7 +521,7 @@ mx --env ../../graal/vm/mx.vm/ce \
     --dynamicimports /vm build
 ```
 
-The first command will print some information about the GraalVM configuration that is about to be built, and the second will build it. 
+The first command will print some information about the GraalVM configuration that is about to be built, and the second will build it.
 >**IMPORTANT:** The first command should tell you that the `Config name` is `ce_python`, otherwise the next commands will not work.
 
 To run the JVM configuration:
@@ -293,22 +547,3 @@ mx --env ../../graal/vm/mx.vm/ce \
     --jvm-config=native \
     --python-vm-config=default --
 ```
-
-## Finding Memory Leaks
-
-For best performance we keep references to long-lived user objects (mostly functions, classes, and modules) directly in the AST nodes when using the default configuration of a single Python context (as is used when running the launcher).
-For better sharing of warm-up and where absolutely best peak performance is not needed, contexts can be configured with a shared engine and the ASTs will be shared across contexts.
-However, that implies we *must* not store any user objects strongly in the ASTs.
-We test that we have no PythonObjects alive after a Context is closed that are run as part of our JUnit tests.
-These can be run by themselves, for example, like so:
-
-```bash
-mx python-leak-test --lang python \
-    --shared-engine \
-      --code 'import site, json' \
-      --forbidden-class com.oracle.graal.python.builtins.objects.object.PythonObject \
-      --keep-dump
-```
-
-The `--keep-dump` option will print the heapdump location and leave the file there rather than deleting it.
-It can then be opened for example with VisualVM to check for the paths of any leaked object, if there are any.

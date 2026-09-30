@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2021, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2017 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -10,11 +10,30 @@
 
 #include "patchlevel.h"
 
+static int initialized = 0;
+static char version[300];
+
+void _Py_InitVersion(void)
+{
+    if (initialized) {
+        return;
+    }
+    initialized = 1;
+#ifdef Py_GIL_DISABLED
+    const char *buildinfo_format = "%.80s experimental free-threading build (%.80s) %.80s";
+#else
+    const char *buildinfo_format = "%.80s (%.80s) %.80s";
+#endif
+    PyOS_snprintf(version, sizeof(version), buildinfo_format,
+                  PY_VERSION, Py_GetBuildInfo(), Py_GetCompiler());
+}
+
 const char *
 Py_GetVersion(void)
 {
-    static char version[250];
-    PyOS_snprintf(version, sizeof(version), "%.80s (%.80s) %.80s",
-                  PY_VERSION, Py_GetBuildInfo(), Py_GetCompiler());
+    _Py_InitVersion();
     return version;
 }
+
+// Export the Python hex version as a constant.
+const unsigned long Py_Version = PY_VERSION_HEX;

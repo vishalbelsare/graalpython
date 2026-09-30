@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -25,24 +25,25 @@
  */
 package com.oracle.graal.python.builtins.objects.set;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___AND__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___HASH__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RAND__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ROR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___RXOR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___XOR__;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_FROZENSET;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.PNotImplemented;
-import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes.GetHashingStorageNode;
+import com.oracle.graal.python.builtins.objects.common.EmptyStorage;
+import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes;
+import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes.GetSetStorageForXorNode;
+import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes.GetSetStorageNode;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageAddAllToOther;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageCopy;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageDiff;
@@ -52,82 +53,93 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageXor;
+import com.oracle.graal.python.builtins.objects.common.PHashingCollection;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.HashBuiltinNode;
 import com.oracle.graal.python.lib.PyObjectHashNode;
-import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
-import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsAnyBuiltinObjectProfile;
-import com.oracle.graal.python.runtime.exception.PythonErrorType;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 /**
  * binary operations are implemented in {@link BaseSetBuiltins}
  */
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PFrozenSet})
 public final class FrozenSetBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = FrozenSetBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return FrozenSetBuiltinsFactory.getFactories();
     }
 
+    // frozenset([iterable])
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_FROZENSET, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2)
+    @GenerateNodeFactory
+    public abstract static class FrozenSetNode extends PythonBinaryBuiltinNode {
+
+        @Specialization(guards = "isNoValue(arg)")
+        static PFrozenSet frozensetEmpty(Object cls, @SuppressWarnings("unused") PNone arg,
+                        @Cached @Shared TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createFrozenSet(cls, getInstanceShape.execute(cls), EmptyStorage.INSTANCE);
+        }
+
+        @Specialization(guards = "isBuiltinClass.profileIsAnyBuiltinClass(inliningTarget, cls)")
+        static PFrozenSet frozensetIdentity(@SuppressWarnings("unused") Object cls, PFrozenSet arg,
+                        @SuppressWarnings("unused") @Bind Node inliningTarget,
+                        @Shared("isBuiltinProfile") @SuppressWarnings("unused") @Cached BuiltinClassProfiles.IsAnyBuiltinClassProfile isBuiltinClass) {
+            return arg;
+        }
+
+        @Specialization(guards = "!isBuiltinClass.profileIsAnyBuiltinClass(inliningTarget, cls)")
+        static PFrozenSet subFrozensetIdentity(Object cls, PFrozenSet arg,
+                        @SuppressWarnings("unused") @Bind Node inliningTarget,
+                        @Shared("isBuiltinProfile") @SuppressWarnings("unused") @Cached BuiltinClassProfiles.IsAnyBuiltinClassProfile isBuiltinClass,
+                        @Cached @Shared TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createFrozenSet(cls, getInstanceShape.execute(cls), arg.getDictStorage());
+        }
+
+        @Specialization(guards = {"!isNoValue(iterable)", "!isPFrozenSet(iterable)"})
+        static PFrozenSet frozensetIterable(VirtualFrame frame, Object cls, Object iterable,
+                        @Bind Node inliningTarget,
+                        @Cached HashingCollectionNodes.GetClonedHashingStorageNode getHashingStorageNode,
+                        @Cached @Shared TypeNodes.GetInstanceShape getInstanceShape) {
+            HashingStorage storage = getHashingStorageNode.getForSets(frame, inliningTarget, iterable);
+            return PFactory.createFrozenSet(cls, getInstanceShape.execute(cls), storage);
+        }
+    }
+
     @Builtin(name = "copy", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     public abstract static class CopyNode extends PythonUnaryBuiltinNode {
 
-        @Specialization
-        static PFrozenSet subFrozensetIdentity(PFrozenSet arg,
-                        @Bind("this") Node inliningTarget,
-                        @Cached IsAnyBuiltinObjectProfile isBuiltinClass,
-                        @Cached PythonObjectFactory.Lazy factory) {
-            if (isBuiltinClass.profileIsAnyBuiltinObject(inliningTarget, arg)) {
-                return arg;
-            } else {
-                return factory.get(inliningTarget).createFrozenSet(arg.getDictStorage());
-            }
-        }
-    }
-
-    @Builtin(name = J___AND__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___RAND__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    @ImportStatic(PGuards.class)
-    abstract static class AndNode extends PythonBinaryBuiltinNode {
-
-        @Specialization(guards = "canDoSetBinOp(right)")
-        static PBaseSet doPBaseSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet left, Object right,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile rightIsSetProfile,
-                        @Cached GetHashingStorageNode getHashingStorageNode,
-                        @Cached HashingStorageIntersect intersectNode,
-                        @Cached PythonObjectFactory factory) {
-            HashingStorage storage = intersectNode.execute(frame, inliningTarget, left.getDictStorage(), getHashingStorageNode.execute(frame, inliningTarget, right));
-            if (rightIsSetProfile.profile(inliningTarget, right instanceof PBaseSet)) {
-                return factory.createFrozenSet(storage);
-            } else {
-                return factory.createSet(storage);
-            }
+        @Specialization(guards = "isBuiltinFrozenSet(self)")
+        static PFrozenSet frozenSetIdentity(PFrozenSet self) {
+            return self;
         }
 
-        @Fallback
-        static Object doAnd(Object self, Object other,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonErrorType.TypeError, ErrorMessages.UNSUPPORTED_OPERAND_TYPES_FOR_S_P_AND_P, "&", self, other);
+        @Specialization(guards = "!isBuiltinFrozenSet(self)")
+        static PFrozenSet doGeneric(PFrozenSet self,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached HashingStorageNodes.HashingStorageCopy copy) {
+            return PFactory.createFrozenSet(language, copy.execute(inliningTarget, self.getDictStorage()));
         }
     }
 
@@ -137,37 +149,37 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isNoValue(other)")
         static PFrozenSet doSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet self, @SuppressWarnings("unused") PNone other,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createFrozenSet(self.getDictStorage());
+                        @Bind PythonLanguage language) {
+            return PFactory.createFrozenSet(language, self.getDictStorage());
         }
 
         @Specialization(guards = {"args.length == len", "args.length < 32"}, limit = "3")
         static PBaseSet doCached(VirtualFrame frame, PFrozenSet self, Object[] args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached("args.length") int len,
-                        @Shared @Cached GetHashingStorageNode getHashingStorageNode,
+                        @Shared @Cached HashingCollectionNodes.GetSetStorageNode getSetStorageNode,
                         @Shared @Cached HashingStorageCopy copyNode,
                         @Shared @Cached HashingStorageIntersect intersectNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             HashingStorage result = copyNode.execute(inliningTarget, self.getDictStorage());
             for (int i = 0; i < len; i++) {
-                result = intersectNode.execute(frame, inliningTarget, result, getHashingStorageNode.execute(frame, inliningTarget, args[i]));
+                result = intersectNode.execute(frame, inliningTarget, result, getSetStorageNode.execute(frame, inliningTarget, args[i]));
             }
-            return factory.createFrozenSet(result);
+            return PFactory.createFrozenSet(language, result);
         }
 
         @Specialization(replaces = "doCached")
         static PBaseSet doGeneric(VirtualFrame frame, PFrozenSet self, Object[] args,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetHashingStorageNode getHashingStorageNode,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached GetSetStorageNode getSetStorageNode,
                         @Shared @Cached HashingStorageCopy copyNode,
                         @Shared @Cached HashingStorageIntersect intersectNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             HashingStorage result = copyNode.execute(inliningTarget, self.getDictStorage());
             for (int i = 0; i < args.length; i++) {
-                result = intersectNode.execute(frame, inliningTarget, result, getHashingStorageNode.execute(frame, inliningTarget, args[i]));
+                result = intersectNode.execute(frame, inliningTarget, result, getSetStorageNode.execute(frame, inliningTarget, args[i]));
             }
-            return factory.createFrozenSet(result);
+            return PFactory.createFrozenSet(language, result);
         }
 
         static boolean isOther(Object arg) {
@@ -176,85 +188,37 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isOther(other)")
         static PFrozenSet doSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet self, Object other,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetHashingStorageNode getHashingStorageNode,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached HashingCollectionNodes.GetSetStorageNode getSetStorageNode,
                         @Shared @Cached HashingStorageIntersect intersectNode,
-                        @Shared @Cached PythonObjectFactory factory) {
-            HashingStorage result = intersectNode.execute(frame, inliningTarget, self.getDictStorage(), getHashingStorageNode.execute(frame, inliningTarget, other));
-            return factory.createFrozenSet(result);
-        }
-    }
-
-    @Builtin(name = J___OR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___ROR__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    @ImportStatic(PGuards.class)
-    abstract static class OrNode extends PythonBinaryBuiltinNode {
-
-        @Specialization(guards = "canDoSetBinOp(right)")
-        static PBaseSet doPBaseSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet left, Object right,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile rightIsSetProfile,
-                        @Cached GetHashingStorageNode getHashingStorageNode,
-                        @Cached HashingStorageCopy copyNode,
-                        @Cached HashingStorageAddAllToOther addAllToOther,
-                        @Cached PythonObjectFactory factory) {
-            HashingStorage storage = left.getDictStorage().union(inliningTarget, getHashingStorageNode.execute(frame, inliningTarget, right), copyNode, addAllToOther);
-            if (rightIsSetProfile.profile(inliningTarget, right instanceof PBaseSet)) {
-                return factory.createFrozenSet(storage);
-            } else {
-                return factory.createSet(storage);
-            }
-        }
-
-        @Fallback
-        static Object doOr(Object self, Object other,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonErrorType.TypeError, ErrorMessages.UNSUPPORTED_OPERAND_TYPES_FOR_S_P_AND_P, "|", self, other);
-        }
-    }
-
-    @Builtin(name = J___XOR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___RXOR__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    @ImportStatic(PGuards.class)
-    abstract static class XorNode extends PythonBinaryBuiltinNode {
-
-        @Specialization(guards = "canDoSetBinOp(right)")
-        static PBaseSet doPBaseSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet left, Object right,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile rightIsSetProfile,
-                        @Cached GetHashingStorageNode getHashingStorageNode,
-                        @Cached HashingStorageXor xorNode,
-                        @Cached PythonObjectFactory factory) {
-            HashingStorage rightStorage = getHashingStorageNode.execute(frame, inliningTarget, right);
-            HashingStorage storage = xorNode.execute(frame, inliningTarget, left.getDictStorage(), rightStorage);
-            if (rightIsSetProfile.profile(inliningTarget, right instanceof PBaseSet)) {
-                return factory.createFrozenSet(storage);
-            } else {
-                return factory.createSet(storage);
-            }
-        }
-
-        @Fallback
-        static Object doOr(Object self, Object other,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonErrorType.TypeError, ErrorMessages.UNSUPPORTED_OPERAND_TYPES_FOR_S_P_AND_P, "^", self, other);
+                        @Bind PythonLanguage language) {
+            HashingStorage result = intersectNode.execute(frame, inliningTarget, self.getDictStorage(), getSetStorageNode.execute(frame, inliningTarget, other));
+            return PFactory.createFrozenSet(language, result);
         }
     }
 
     @Builtin(name = "symmetric_difference", minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
+    @ImportStatic(PGuards.class)
     public abstract static class SymmetricDifferenceNode extends PythonBuiltinNode {
 
         @Specialization
-        static PFrozenSet doSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet self, Object other,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetHashingStorageNode getHashingStorage,
-                        @Cached HashingStorageXor xorNode,
-                        @Cached PythonObjectFactory factory) {
-            HashingStorage result = xorNode.execute(frame, inliningTarget, self.getDictStorage(), getHashingStorage.execute(frame, inliningTarget, other));
-            return factory.createFrozenSet(result);
+        static PFrozenSet doHashingCollection(VirtualFrame frame, PFrozenSet self, PHashingCollection other,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached HashingStorageXor xorNode,
+                        @Bind PythonLanguage language) {
+            HashingStorage result = xorNode.executePreservingLeft(frame, inliningTarget, other.getDictStorage(), self.getDictStorage());
+            return PFactory.createFrozenSet(language, result);
+        }
+
+        @Specialization(guards = "!isPHashingCollection(other)")
+        static PFrozenSet doGeneric(VirtualFrame frame, PFrozenSet self, Object other,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached GetSetStorageForXorNode getHashingStorage,
+                        @Exclusive @Cached HashingStorageXor xorNode,
+                        @Bind PythonLanguage language) {
+            HashingStorage result = xorNode.executeMutatingLeft(frame, inliningTarget, getHashingStorage.execute(frame, inliningTarget, other), self.getDictStorage());
+            return PFactory.createFrozenSet(language, result);
         }
     }
 
@@ -264,37 +228,37 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isNoValue(other)")
         static PFrozenSet doSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet self, @SuppressWarnings("unused") PNone other,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createFrozenSet(self.getDictStorage());
+                        @Bind PythonLanguage language) {
+            return PFactory.createFrozenSet(language, self.getDictStorage());
         }
 
         @Specialization(guards = {"args.length == len", "args.length < 32"}, limit = "3")
         static PBaseSet doCached(VirtualFrame frame, PFrozenSet self, Object[] args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached("args.length") int len,
-                        @Shared @Cached GetHashingStorageNode getHashingStorageNode,
+                        @Shared @Cached HashingCollectionNodes.GetSetStorageNode getSetStorageNode,
                         @Shared @Cached HashingStorageCopy copyNode,
                         @Shared @Cached HashingStorageDiff diffNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             HashingStorage result = copyNode.execute(inliningTarget, self.getDictStorage());
             for (int i = 0; i < len; i++) {
-                result = diffNode.execute(frame, inliningTarget, result, getHashingStorageNode.execute(frame, inliningTarget, args[i]));
+                result = diffNode.execute(frame, inliningTarget, result, getSetStorageNode.execute(frame, inliningTarget, args[i]));
             }
-            return factory.createFrozenSet(result);
+            return PFactory.createFrozenSet(language, result);
         }
 
         @Specialization(replaces = "doCached")
         static PBaseSet doGeneric(VirtualFrame frame, PFrozenSet self, Object[] args,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetHashingStorageNode getHashingStorageNode,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached HashingCollectionNodes.GetSetStorageNode getSetStorageNode,
                         @Shared @Cached HashingStorageCopy copyNode,
                         @Shared @Cached HashingStorageDiff diffNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             HashingStorage result = copyNode.execute(inliningTarget, self.getDictStorage());
             for (int i = 0; i < args.length; i++) {
-                result = diffNode.execute(frame, inliningTarget, result, getHashingStorageNode.execute(frame, inliningTarget, args[i]));
+                result = diffNode.execute(frame, inliningTarget, result, getSetStorageNode.execute(frame, inliningTarget, args[i]));
             }
-            return factory.createFrozenSet(result);
+            return PFactory.createFrozenSet(language, result);
         }
 
         static boolean isOther(Object arg) {
@@ -303,12 +267,12 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isOther(other)")
         static PFrozenSet doSet(@SuppressWarnings("unused") VirtualFrame frame, PFrozenSet self, Object other,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetHashingStorageNode getHashingStorageNode,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached GetSetStorageNode getSetStorageNode,
                         @Shared @Cached HashingStorageDiff diffNode,
-                        @Shared @Cached PythonObjectFactory factory) {
-            HashingStorage result = diffNode.execute(frame, inliningTarget, self.getDictStorage(), getHashingStorageNode.execute(frame, inliningTarget, other));
-            return factory.createFrozenSet(result);
+                        @Bind PythonLanguage language) {
+            HashingStorage result = diffNode.execute(frame, inliningTarget, self.getDictStorage(), getSetStorageNode.execute(frame, inliningTarget, other));
+            return PFactory.createFrozenSet(language, result);
         }
     }
 
@@ -318,37 +282,37 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"args.length == len", "args.length < 32"}, limit = "3")
         static PBaseSet doCached(VirtualFrame frame, PBaseSet self, Object[] args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached("args.length") int len,
-                        @Shared @Cached GetHashingStorageNode getHashingStorage,
+                        @Shared @Cached GetSetStorageNode getHashingStorage,
                         @Shared @Cached HashingStorageCopy copyNode,
                         @Shared @Cached HashingStorageAddAllToOther addAllToOther,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             HashingStorage result = copyNode.execute(inliningTarget, self.getDictStorage());
             for (int i = 0; i < len; i++) {
                 result = addAllToOther.execute(frame, inliningTarget, getHashingStorage.execute(frame, inliningTarget, args[i]), result);
             }
-            return factory.createFrozenSet(result);
+            return PFactory.createFrozenSet(language, result);
         }
 
         @Specialization(replaces = "doCached")
         static PBaseSet doGeneric(VirtualFrame frame, PBaseSet self, Object[] args,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetHashingStorageNode getHashingStorage,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached GetSetStorageNode getHashingStorage,
                         @Shared @Cached HashingStorageCopy copyNode,
                         @Shared @Cached HashingStorageAddAllToOther addAllToOther,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             HashingStorage result = copyNode.execute(inliningTarget, self.getDictStorage());
             for (int i = 0; i < args.length; i++) {
                 result = addAllToOther.execute(frame, inliningTarget, getHashingStorage.execute(frame, inliningTarget, args[i]), result);
             }
-            return factory.createFrozenSet(result);
+            return PFactory.createFrozenSet(language, result);
         }
     }
 
-    @Builtin(name = J___HASH__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class HashNode extends PythonUnaryBuiltinNode {
+    public abstract static class HashNode extends HashBuiltinNode {
         protected static long HASH_UNSET = -1;
 
         @Specialization(guards = {"self.getHash() != HASH_UNSET"})
@@ -358,7 +322,7 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.getHash() == HASH_UNSET"})
         public static long computeHash(VirtualFrame frame, PFrozenSet self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached HashingStorageGetIterator getIter,
                         @Cached HashingStorageIteratorNext iterNext,
                         @Cached HashingStorageIteratorKey iterKey,
@@ -404,11 +368,6 @@ public final class FrozenSetBuiltins extends PythonBuiltins {
 
         private static long shuffleBits(long value) {
             return ((value ^ 0x55b4db3) ^ (value << 16)) * 0xd93f34d7;
-        }
-
-        @Fallback
-        static Object genericHash(@SuppressWarnings("unused") Object self) {
-            return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
 }

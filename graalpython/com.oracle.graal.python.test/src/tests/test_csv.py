@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,9 +39,13 @@
 
 import unittest
 import csv
+import re
 from tempfile import TemporaryFile
 
 class TestUnicodeCharacters(unittest.TestCase):
+    def test_builtin_type_as_dialect(self):
+        self.assertIsInstance(csv.reader(re.ASCII, int), type(csv.reader([])))
+
     def test_read_utf_32_delimiter(self):
         test_data = ['a\U0001F642b']
         reader = csv.reader(test_data, delimiter="\U0001F642")
@@ -73,32 +77,6 @@ class TestUnicodeCharacters(unittest.TestCase):
 
             self.assertEqual(fileobj.read(),
                              expected + writer.dialect.lineterminator)
-
-class TestDialectValidity(unittest.TestCase):
-    # CPython supports empty quotechars and escapechars until inclusive 3.10.
-    def test_quoting(self):
-        class MyDialect(csv.Dialect):
-            delimiter = ";"
-            escapechar = '\\'
-            doublequote = False
-            skipinitialspace = True
-            lineterminator = '\r\n'
-            quoting = csv.QUOTE_NONE
-            quotechar = ""
-        d = MyDialect()
-        self.assertEqual(d.quotechar, "")
-
-    def test_escapechar(self):
-        class MyDialect(csv.Dialect):
-            delimiter = ";"
-            doublequote = False
-            skipinitialspace = True
-            lineterminator = '\r\n'
-            quoting = csv.QUOTE_NONE
-            escapechar = ""
-        d = MyDialect()
-        self.assertEqual(d.escapechar, "")
-
 
 
 

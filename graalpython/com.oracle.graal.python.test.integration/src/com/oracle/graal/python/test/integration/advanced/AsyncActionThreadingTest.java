@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,12 @@
  */
 package com.oracle.graal.python.test.integration.advanced;
 
+import static com.oracle.graal.python.test.integration.Utils.SUPPORTS_PANAMA;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -76,11 +78,12 @@ public class AsyncActionThreadingTest extends PythonTests {
     @Test
     public void testNoNewThreadsWithoutAutomaticAsyncActions() {
         Assume.assumeTrue("false".equalsIgnoreCase(System.getProperty("python.AutomaticAsyncActions")));
+        Assume.assumeTrue("Requires JEP 454 support for _testcapi", SUPPORTS_PANAMA);
         long threadCount = pythonThreadCount();
-        Context c = PythonTests.enterContext();
+        Context c = PythonTests.enterContext(Map.of("python.AllowSignalHandlers", "true", "python.PosixModuleBackend", "native"), new String[0]);
         try {
             Runnable poll = c.getPolyglotBindings().getMember("PollPythonAsyncActions").asHostObject();
-            c.eval("python", "import re, itertools, functools, _struct; _struct.pack('i', 1)");
+            c.eval("python", "import re, itertools, functools, _testcapi");
             assertTrue("manual async actions create no threads " + threadNames(), threadCount == pythonThreadCount());
             c.eval("python", "import threading; t = threading.Thread(target=lambda: 1); t.start(); t.join()");
             assertTrue("manual async actions create no thread for gil release " + threadNames(), threadCount == pythonThreadCount());

@@ -373,6 +373,16 @@ class TestVectorsTestCase(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, r'required.*digestmod'):
             hmac.HMAC(key, msg=data, digestmod='')
 
+    def test_with_fallback(self):
+        cache = getattr(hashlib, '__builtin_constructor_cache')
+        try:
+            cache['foo'] = hashlib.sha256
+            hexdigest = hmac.digest(b'key', b'message', 'foo').hex()
+            expected = '6e9ef29b75fffc5b7abae527d58fdadb2fe42e7219011976917343065f58ed4a'
+            self.assertEqual(hexdigest, expected)
+        finally:
+            cache.pop('foo')
+
 
 class ConstructorTestCase(unittest.TestCase):
 
@@ -469,7 +479,25 @@ class SanityTestCase(unittest.TestCase):
             self.fail("Exception raised during normal usage of HMAC class.")
 
 
+class UpdateTestCase(unittest.TestCase):
+    @hashlib_helper.requires_hashdigest('sha256')
+    def test_with_str_update(self):
+        with self.assertRaises(TypeError):
+            h = hmac.new(b"key", digestmod='sha256')
+            h.update("invalid update")
+
+
 class CopyTestCase(unittest.TestCase):
+
+    @hashlib_helper.requires_hashdigest('sha256')
+    def test_copy(self):
+        # Test a generic copy() and the attributes it exposes.
+        # See https://github.com/python/cpython/issues/142451.
+        h1 = hmac.new(b"my secret key", digestmod="sha256")
+        h2 = h1.copy()
+        self.assertEqual(h1.name, h2.name)
+        self.assertEqual(h1.digest_size, h2.digest_size)
+        self.assertEqual(h1.block_size, h2.block_size)
 
     @hashlib_helper.requires_hashdigest('sha256')
     def test_attributes_old(self):

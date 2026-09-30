@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,12 +38,11 @@
 # SOFTWARE.
 
 import itertools
-import sys
 import struct
+import sys
+import unittest
 
 from . import CPyExtTestCase, CPyExtFunction, CPyExtType, unhandled_error_compare_with_message, unhandled_error_compare
-
-__dir__ = __file__.rpartition("/")[0]
 
 indices = (-2, 2, 10)
 # indices = (-2, 0, 1, 2, 10)
@@ -95,9 +94,6 @@ def compare_unicode_bytes_with_kind(x, y):
 
 
 class TestPyMemoryView(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyMemoryView, self).compile_module(name)
 
     test_memoryview_read = CPyExtFunction(
         lambda args: args[1],
@@ -324,6 +320,29 @@ class TestPyMemoryView(CPyExtTestCase):
         cmpfunc=unhandled_error_compare_with_message,
     )
 
+    test_memoryview_accessors = CPyExtFunction(
+        lambda args: (True, bytes(args[0])),
+        lambda: ((bytearray(b'12345678'),),),
+        code='''
+            static PyObject* test_accessors(PyObject* obj) {
+                PyObject *mv = PyMemoryView_FromObject(obj);
+                if (!mv)
+                    return NULL;
+                Py_buffer *view = PyMemoryView_GET_BUFFER(mv);
+                PyObject *result = Py_BuildValue(
+                    "NN",
+                    PyBool_FromLong(PyMemoryView_GET_BASE(mv) == obj),
+                    PyBytes_FromStringAndSize(view->buf, view->len));
+                Py_DECREF(mv);
+                return result;
+            }
+        ''',
+        resultspec='O',
+        argspec='O',
+        arguments=["PyObject* obj"],
+        callfunction="test_accessors",
+    )
+
     ignored_test_memoryview_slice = CPyExtFunction(
         lambda args: bytes((5, 6, 255, 128, 99))[args[0]][args[1]][args[2]],
         lambda: list(itertools.product(slices, slices, range(-2, 5))),
@@ -382,7 +401,7 @@ class TestPyMemoryView(CPyExtTestCase):
                     0,
                     "l",
             };
-    
+
             static PyObject* test_read(PyObject *key, PyObject* expected) {
                 PyObject *mv = PyMemoryView_FromBuffer(&buffer);
                 if (!mv)
@@ -434,6 +453,7 @@ class TestPyMemoryView(CPyExtTestCase):
             error_buf:
                 if (destNative)
                     PyBuffer_Release(&buffer);
+                Py_XINCREF(ret); /* we need to return a new reference */
                 return ret;
             }
         ''',
@@ -445,7 +465,7 @@ class TestPyMemoryView(CPyExtTestCase):
     )
 
 
-class TestObject(object):
+class TestObject(unittest.TestCase):
     def test_memoryview_fromobject_multidim(self):
         TestType = CPyExtType(
             "TestMemoryViewMultidim",

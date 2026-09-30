@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,27 +40,18 @@
  */
 package com.oracle.graal.python.lib;
 
-import static com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol.FUN_PY_TRUFFLE_PY_SEQUENCE_CHECK;
-
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.PCallCapiFunction;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeNode;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
-import com.oracle.graal.python.builtins.objects.mappingproxy.PMappingproxy;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.str.PString;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.util.LazyInteropLibrary;
 import com.oracle.graal.python.runtime.sequence.PSequence;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -71,9 +62,12 @@ import com.oracle.truffle.api.strings.TruffleString;
 @GenerateUncached
 @GenerateCached(false)
 @GenerateInline
-@ImportStatic(SpecialMethodSlot.class)
 public abstract class PySequenceCheckNode extends PNodeWithContext {
     public abstract boolean execute(Node inliningTarget, Object object);
+
+    public static boolean executeUncached(Object object) {
+        return PySequenceCheckNodeGen.getUncached().execute(null, object);
+    }
 
     @Specialization
     static boolean doSequence(@SuppressWarnings("unused") PSequence object) {
@@ -86,31 +80,29 @@ public abstract class PySequenceCheckNode extends PNodeWithContext {
     }
 
     @Specialization
+    static boolean doString(@SuppressWarnings("unused") PString object) {
+        return true;
+    }
+
+    @Specialization
     static boolean doDict(@SuppressWarnings("unused") PDict object) {
         return false;
     }
 
-    @Specialization
-    static boolean doMappingproxy(@SuppressWarnings("unused") PMappingproxy object) {
-        return false;
-    }
-
-    @Specialization
-    static boolean doNative(PythonAbstractNativeObject object,
-                    @Cached(inline = false) PythonToNativeNode toSulongNode,
-                    @Cached(inline = false) PCallCapiFunction callCapiFunction) {
-        return ((int) callCapiFunction.call(FUN_PY_TRUFFLE_PY_SEQUENCE_CHECK, toSulongNode.execute(object))) != 0;
+    @Specialization(guards = "isNativeTuple(object)")
+    static boolean doNativeTuple(@SuppressWarnings("unused") PythonAbstractNativeObject object) {
+        return true;
     }
 
     @Fallback
     static boolean doGeneric(Node inliningTarget, Object object,
+                    @Cached PyDictCheckNode dictCheckNode,
                     @Cached GetClassNode getClassNode,
-                    @Cached(parameters = "GetItem", inline = false) LookupCallableSlotInMRONode lookupGetItem,
-                    @Cached LazyInteropLibrary lazyLib) {
-        Object type = getClassNode.execute(inliningTarget, object);
-        if (type == PythonBuiltinClassType.ForeignObject) {
-            return lazyLib.get(inliningTarget).hasArrayElements(object);
+                    @Cached GetCachedTpSlotsNode getSlotsNode) {
+        if (dictCheckNode.execute(inliningTarget, object)) {
+            return false;
         }
-        return lookupGetItem.execute(type) != PNone.NO_VALUE;
+        Object type = getClassNode.execute(inliningTarget, object);
+        return getSlotsNode.execute(inliningTarget, type).sq_item() != null;
     }
 }

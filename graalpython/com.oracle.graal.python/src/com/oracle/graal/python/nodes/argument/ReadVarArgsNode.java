@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -26,41 +26,24 @@
 package com.oracle.graal.python.nodes.argument;
 
 import com.oracle.graal.python.builtins.objects.function.PArguments;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 
 public abstract class ReadVarArgsNode extends ReadArgumentNode {
-    @Child private PythonObjectFactory factory;
+    private final int index;
 
-    ReadVarArgsNode(boolean isBuiltin) {
-        factory = isBuiltin ? null : PythonObjectFactory.create();
+    ReadVarArgsNode(int index) {
+        this.index = index;
     }
 
-    public static ReadVarArgsNode create() {
-        return create(false);
+    public static ReadVarArgsNode create(int index) {
+        return ReadVarArgsNodeGen.create(index);
     }
 
-    public static ReadVarArgsNode create(boolean isBuiltin) {
-        return ReadVarArgsNodeGen.create(isBuiltin);
-    }
-
-    public abstract Object[] executeObjectArray(VirtualFrame frame);
+    public abstract Object[] execute(VirtualFrame frame);
 
     @Specialization
-    Object extractVariableVarargs(VirtualFrame frame) {
-        return output(PArguments.getVariableArguments(frame));
-    }
-
-    private Object output(Object[] varArgs) {
-        if (isBuiltin()) {
-            return varArgs;
-        } else {
-            return factory.createTuple(varArgs);
-        }
-    }
-
-    public boolean isBuiltin() {
-        return factory == null;
+    Object[] read(VirtualFrame frame) {
+        return (Object[]) PArguments.getArgument(frame, index);
     }
 }

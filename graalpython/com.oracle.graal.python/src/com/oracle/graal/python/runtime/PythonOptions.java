@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -38,7 +38,6 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,7 +61,9 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Option;
 import com.oracle.truffle.api.TruffleLanguage.Env;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.dsl.Idempotent;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -77,65 +78,10 @@ public final class PythonOptions {
     private static final TruffleString T_STRING_LIST_SEPARATOR = tsLiteral(J_STRING_LIST_SEPARATOR);
 
     /**
-     * Whether Java classes are included that implement the SSL module. These come from packages
-     * including (but not limited to): javax.net.ssl, org.bouncycastle, java.security, javax.crypto,
-     * sun.security
-     */
-    public static final boolean WITHOUT_SSL = Boolean.getBoolean("python.WithoutSSL");
-
-    /**
-     * Whether cryptographic hashing functions are implemented via java.security.MessageDigest,
-     * javax.crypto.Mac and related functions.
-     */
-    public static final boolean WITHOUT_DIGEST = Boolean.getBoolean("python.WithoutDigest");
-
-    /**
-     * Whether Java classes are included that relate to Unix-specific access, modify process
-     * properties such as the default timezone, access the platform's Runtime MXBean, or spawn
-     * subprocesses are available.
-     */
-    public static final boolean WITHOUT_PLATFORM_ACCESS = Boolean.getBoolean("python.WithoutPlatformAccess");
-
-    /**
-     * This property can be used to exclude zip, zlib, lzma, and bzip2 support from the Python core.
-     */
-    public static final boolean WITHOUT_COMPRESSION_LIBRARIES = Boolean.getBoolean("python.WithoutCompressionLibraries");
-
-    /**
-     * This property can be used to exclude native posix support from the build. Only Java emulation
-     * will be available.
-     */
-    public static final boolean WITHOUT_NATIVE_POSIX = Boolean.getBoolean("python.WithoutNativePosix");
-
-    /**
-     * This property can be used to exclude socket and inet support from the Java posix backend.
-     */
-    public static final boolean WITHOUT_JAVA_INET = Boolean.getBoolean("python.WithoutJavaInet");
-
-    /**
-     * This property can be used to disable any usage of JNI.
-     */
-    public static final boolean WITHOUT_JNI = Boolean.getBoolean("python.WithoutJNI");
-
-    /**
      * This property can be used to control if async actions are automatically scheduled using
      * daemon threads or via embedder calling a polling API on the main thread.
      */
     public static final boolean AUTOMATIC_ASYNC_ACTIONS = !"false".equalsIgnoreCase(System.getProperty("python.AutomaticAsyncActions"));
-
-    public enum HPyBackendMode {
-        NFI,
-        JNI,
-        LLVM
-    }
-
-    static final OptionType<HPyBackendMode> HPY_BACKEND_TYPE = new OptionType<>("HPyBackend", s -> {
-        try {
-            return HPyBackendMode.valueOf(s.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Backend can be one of: " + Arrays.toString(HPyBackendMode.values()));
-        }
-    });
 
     private static final OptionType<TruffleString> TS_OPTION_TYPE = new OptionType<>("graal.python.TruffleString", PythonUtils::toTruffleStringUncached);
 
@@ -147,14 +93,19 @@ public final class PythonOptions {
                     "Determines default values for the CoreHome, StdLibHome, SysBasePrefix, SysPrefix.", usageSyntax = "<path>", stability = OptionStability.STABLE) //
     public static final OptionKey<String> PythonHome = new OptionKey<>("");
 
+    @EngineOption @Option(category = OptionCategory.EXPERT, help = "Allow running on unsupported platforms, making GraalPy behave as if running on macOS, Windows, or Linux. " +
+                    "This option is useful to run GraalPy on platforms with a compliant Java implementation, but without native support for GraalPy. " +
+                    "When this option is set, native libraries cannot be loaded and the Java backends must be used for common operating system libraries provided by Python.", //
+                    usageSyntax = "windows|macos|linux", stability = OptionStability.STABLE) //
+    public static final OptionKey<String> UnsupportedPlatformEmulates = new OptionKey<>("");
+
     @Option(category = OptionCategory.USER, help = "Set the location of sys.prefix. Overrides any environment variables or Java options.", usageSyntax = "<path>", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> SysPrefix = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
     @Option(category = OptionCategory.EXPERT, help = "Set the location of sys.base_prefix. Overrides any environment variables or Java options.", usageSyntax = "<path>", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> SysBasePrefix = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
-    @Option(category = OptionCategory.USER, help = "Set the location of lib/graalpy" + PythonLanguage.GRAALVM_MAJOR + "." + //
-                    PythonLanguage.GRAALVM_MINOR + ". Overrides any environment variables or Java options.", //
+    @Option(category = OptionCategory.USER, help = "Set the location of what is usually lib/graalpy<graalvm_major>.<graalvm_minor>. Overrides any environment variables or Java options.", //
                     usageSyntax = "<path>", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> CoreHome = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
@@ -183,7 +134,7 @@ public final class PythonOptions {
     @EngineOption @Option(category = OptionCategory.USER, help = "Equivalent to setting the PYTHONIOENCODING environment variable for the standard launcher.", usageSyntax = "<Encoding>[:<errors>]", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> StandardStreamEncoding = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
-    @Option(category = OptionCategory.USER, help = "Remove assert statements and any code conditional on the value of __debug__.", usageSyntax = "true|false", stability = OptionStability.STABLE) //
+    @EngineOption @Option(category = OptionCategory.USER, help = "Remove assert statements and any code conditional on the value of __debug__.", usageSyntax = "true|false", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> PythonOptimizeFlag = new OptionKey<>(false);
 
     @Option(category = OptionCategory.USER, help = "Equivalent to the Python -v flag. Turn on verbose mode.", usageSyntax = "true|false", stability = OptionStability.STABLE) //
@@ -194,6 +145,9 @@ public final class PythonOptions {
 
     @Option(category = OptionCategory.USER, help = "Equivalent to the Python -I flag. Isolate from the users environment by not adding the cwd to the path", usageSyntax = "true|false", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> IsolateFlag = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.USER, help = "Equivalent to the Python -P flag. Don't prepend a potentially unsafe path to sys.path", usageSyntax = "true|false", stability = OptionStability.STABLE) //
+    public static final OptionKey<Boolean> SafePathFlag = new OptionKey<>(false);
 
     @Option(category = OptionCategory.USER, help = "Equivalent to the Python -X warn_default_encoding flag. Enable opt-in EncodingWarning for 'encoding=None'", usageSyntax = "true|false", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> WarnDefaultEncodingFlag = new OptionKey<>(false);
@@ -212,10 +166,24 @@ public final class PythonOptions {
                         throw new IllegalArgumentException(String.format("IntMaxStrDigits: invalid limit; must be >= %d or 0 for unlimited.", INT_MAX_STR_DIGITS_THRESHOLD));
                     }));
 
+    @Option(category = OptionCategory.USER, help = "Override the return value of os.cpu_count(). Equivalent to the Python -X cpu_count option.", stability = OptionStability.STABLE) //
+    public static final OptionKey<Integer> CpuCount = new OptionKey<>(-1,
+                    new OptionType<>("CpuCount", (input) -> {
+                        try {
+                            int value = Integer.parseInt(input.stripLeading());
+                            if (value == -1 || value > 0) {
+                                return value;
+                            }
+                        } catch (NumberFormatException e) {
+                            // fallthrough
+                        }
+                        throw new IllegalArgumentException("CpuCount: invalid count; must be greater than 0, or -1 for the default.");
+                    }));
+
     @Option(category = OptionCategory.USER, help = "Equivalent to the Python -B flag. Don't write bytecode files.", usageSyntax = "true|false", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> DontWriteBytecodeFlag = new OptionKey<>(true);
 
-    @Option(category = OptionCategory.USER, help = "If this is set, GraalPython will write .pyc files in a mirror directory tree at this path, " +
+    @Option(category = OptionCategory.USER, help = "If this is set, GraalPy will write .pyc files in a mirror directory tree at this path, " +
                     "instead of in __pycache__ directories within the source tree. " +
                     "Equivalent to setting the PYTHONPYCACHEPREFIX environment variable for the standard launcher.", usageSyntax = "<path>", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> PyCachePrefix = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
@@ -237,11 +205,31 @@ public final class PythonOptions {
                         }
                     }));
 
-    @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the POSIX module.", usageSyntax = "java|native|llvm", stability = OptionStability.STABLE) //
+    @Option(category = OptionCategory.EXPERT, help = "Entropy source used for reviewed initialization-time randomness. " +
+                    "Use 'default' to reuse the default Java source, 'device:<path>' to read bytes from a device or file, " +
+                    "or 'fixed:<seed>' for deterministic testing.", usageSyntax = "default|device:<path>|fixed:<seed>", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<String> InitializationEntropySource = new OptionKey<>("default");
+
+    @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the POSIX module.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> PosixModuleBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
+
+    @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the Sha3 module.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
+    public static final OptionKey<TruffleString> Sha3ModuleBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
+
+    @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the Zlib, Bz2, and LZMA modules.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
+    public static final OptionKey<TruffleString> CompressionModulesBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
+
+    @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the pyexpat module.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
+    public static final OptionKey<TruffleString> PyExpatModuleBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
+
+    @EngineOption @Option(category = OptionCategory.USER, help = "Allow the unicodedata module to fall back from the ICU database to CPython's native UCD for unsupported features.", usageSyntax = "true|false", stability = OptionStability.STABLE) //
+    public static final OptionKey<Boolean> UnicodeCharacterDatabaseNativeFallback = new OptionKey<>(false);
 
     @Option(category = OptionCategory.USER, help = "Install default signal handlers on startup", usageSyntax = "true|false", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> InstallSignalHandlers = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.USER, help = "Allow installing signal handlers", usageSyntax = "true|false", stability = OptionStability.STABLE) //
+    public static final OptionKey<Boolean> AllowSignalHandlers = new OptionKey<>(false);
 
     @Option(category = OptionCategory.EXPERT, help = "Sets the language and territory, which will be used for initial locale. Format: 'language[_territory]', e.g., 'en_GB'. Leave empty to use the JVM default locale.", stability = OptionStability.STABLE) //
     public static final OptionKey<String> InitialLocale = new OptionKey<>("");
@@ -266,31 +254,18 @@ public final class PythonOptions {
     @EngineOption @Option(category = OptionCategory.INTERNAL, help = "Eagerly initialize source sections.", usageSyntax = "true|false") //
     public static final OptionKey<Boolean> ForceInitializeSourceSections = new OptionKey<>(false);
 
-    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "Print the java stacktrace. Possible modes:" +
-                    "    1   Print Java stacktrace for Java exceptions only." +
+    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "Print the Java stacktrace for exceptions. Possible modes:" +
+                    "    0   Do not print any Java stacktraces." +
+                    "    1   Print Java stacktrace for Java exceptions only (default)." +
                     "    2   Print Java stacktrace for Python exceptions only (ATTENTION: this will have a notable performance impact)." +
-                    "    3   Combines 1 and 2.", usageSyntax = "1|2|3") //
-    public static final OptionKey<Integer> WithJavaStacktrace = new OptionKey<>(0);
+                    "    3   Combines 1 and 2.", usageSyntax = "0|1|2|3") //
+    public static final OptionKey<Integer> WithJavaStacktrace = new OptionKey<>(1);
 
     @Option(category = OptionCategory.INTERNAL, usageSyntax = "true|false", help = "") //
     public static final OptionKey<Boolean> CatchGraalPythonExceptionForUnitTesting = new OptionKey<>(false);
 
     @EngineOption @Option(category = OptionCategory.INTERNAL, usageSyntax = "true|false", help = "Enable catching all Exceptions in generic try-catch statements.") //
     public static final OptionKey<Boolean> CatchAllExceptions = new OptionKey<>(false);
-
-    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "Choose the backend for HPy binary mode.", usageSyntax = "jni|nfi|llvm", stability = OptionStability.EXPERIMENTAL) //
-    public static final OptionKey<HPyBackendMode> HPyBackend = new OptionKey<>(HPyBackendMode.JNI, HPY_BACKEND_TYPE);
-
-    @EngineOption @Option(category = OptionCategory.INTERNAL, usageSyntax = "true|false", help = "If {@code true}, code is enabled that tries to reduce expensive upcalls into the runtime" +
-                    "when HPy API functions are used. This is achieved by mirroring data in native memory.", stability = OptionStability.EXPERIMENTAL) //
-    public static final OptionKey<Boolean> HPyEnableJNIFastPaths = new OptionKey<>(true);
-
-    @EngineOption @Option(category = OptionCategory.INTERNAL, usageSyntax = "<time>", help = "Specifies the interval (ms) for periodically printing HPy upcall statistics. If {@code 0}" +
-                    "or not specified, nothing will be printed (default).", stability = OptionStability.EXPERIMENTAL) //
-    public static final OptionKey<Integer> HPyTraceUpcalls = new OptionKey<>(0);
-
-    @Option(category = OptionCategory.INTERNAL, usageSyntax = "<path>", help = "Specify the directory where the JNI library is located.", stability = OptionStability.EXPERIMENTAL) //
-    public static final OptionKey<TruffleString> JNIHome = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Prints path to parsed files") //
     public static final OptionKey<Boolean> ParserLogFiles = new OptionKey<>(false);
@@ -313,14 +288,8 @@ public final class PythonOptions {
     @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "<limit>", help = "") //
     public static final OptionKey<Integer> NodeRecursionLimit = new OptionKey<>(1);
 
-    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "") //
-    public static final OptionKey<Boolean> ForceInlineGeneratorCalls = new OptionKey<>(false);
-
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Force to automatically import site.py module.", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> ForceImportSite = new OptionKey<>(false);
-
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Set-up library search paths to include GraalPy's LLVM toolchain library directories.") //
-    public static final OptionKey<Boolean> SetupLLVMLibraryPaths = new OptionKey<>(false);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "This option is set by the Python launcher to tell the language it can print exceptions directly", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> AlwaysRunExcepthook = new OptionKey<>(false);
@@ -330,10 +299,10 @@ public final class PythonOptions {
 
     // disabling TRegex has an effect on the _sre Python functions that are
     // dynamically created, so we cannot change that option again.
-    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Use the optimized TRegex engine. Default true") //
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Use the optimized TRegex engine. Default true", deprecated = true, deprecationMessage = "TRegex is used for all regexes, this option is ignored") //
     public static final OptionKey<Boolean> WithTRegex = new OptionKey<>(true);
 
-    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Use the CPython sre engine as a fallback to the TRegex engine.") //
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Use the CPython sre engine as a fallback to the TRegex engine.", deprecated = true, deprecationMessage = "TRegex is used for all regexes, this option is ignored") //
     public static final OptionKey<Boolean> TRegexUsesSREFallback = new OptionKey<>(true);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Switch on/off using lazy strings for performance reasons. Default true.") //
@@ -351,11 +320,14 @@ public final class PythonOptions {
     @Option(category = OptionCategory.EXPERT, usageSyntax = "<height>", help = "Set by the launcher to the terminal height.") //
     public static final OptionKey<Integer> TerminalHeight = new OptionKey<>(25);
 
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "<path>", help = "The sys.executable path. Set by the launcher, but can may need to be overridden in certain special situations.", stability = OptionStability.STABLE) //
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "<path>", help = "The sys.executable path. Set by the launcher, but may need to be overridden in certain special situations.", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> Executable = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "<path>", help = "The sys._base_executable path. Set by the launcher, but may need to be overridden in certain special situations.", stability = OptionStability.STABLE) //
+    public static final OptionKey<TruffleString> BaseExecutable = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
+
     @Option(category = OptionCategory.EXPERT, usageSyntax = "<cmdPart>[" + J_STRING_LIST_SEPARATOR +
-                    "<cmdPart>]", help = "The executed command list as string joined by the executable list separator char. This must always correspond to the real, valid command list used to run GraalPython.") //
+                    "<cmdPart>]", help = "The executed command list as string joined by the executable list separator char. This must always correspond to the real, valid command list used to run GraalPy.") //
     public static final OptionKey<TruffleString> ExecutableList = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "", help = "Option used by the venvlauncher to pass on the launcher target command", stability = OptionStability.STABLE) //
@@ -379,28 +351,62 @@ public final class PythonOptions {
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Forces AST sharing for inner contexts.") //
     public static final OptionKey<Boolean> ForceSharingForInnerContexts = new OptionKey<>(true);
 
-    @Option(category = OptionCategory.EXPERT, help = "Whether C extension modules should be loaded as native code (as opposed to Sulong bitcode execution).") //
-    public static final OptionKey<Boolean> NativeModules = new OptionKey<>(true);
+    @Option(category = OptionCategory.USER, stability = OptionStability.EXPERIMENTAL, usageSyntax = "true|false", help = "Whether the context should isolate its loading of C extension modules. " +
+                    "This allows more than one context to access C extensions. " +
+                    "Note that all contexts in the operating system process must set this option to true to cooperatively allow this feature to work.") //
+    public static final OptionKey<Boolean> IsolateNativeModules = new OptionKey<>(false);
 
-    @EngineOption @Option(category = OptionCategory.USER, usageSyntax = "true|false", help = "Emulate some Jython features that can cause performance degradation") //
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Whether the Python GC should be enabled (default) or not.") //
+    public static final OptionKey<Boolean> PythonGC = new OptionKey<>(true);
+
+    @Option(category = OptionCategory.INTERNAL, usageSyntax = "true|false", help = "Whether the background GC task should be enabled (default) or not.") //
+    public static final OptionKey<Boolean> BackgroundGCTask = new OptionKey<>(true);
+
+    @Option(category = OptionCategory.INTERNAL, usageSyntax = "<time>", help = "Specifies the interval (ms) for the background GC task to monitor the resident set size (RSS)") //
+    public static final OptionKey<Integer> BackgroundGCTaskInterval = new OptionKey<>(1000);
+
+    @Option(category = OptionCategory.INTERNAL, usageSyntax = "[1,100]", help = "The percentage increase in RSS memory between System.gc() calls. Low percentage will trigger System.gc() more often. (default: 30).") //
+    public static final OptionKey<Integer> BackgroundGCTaskThreshold = new OptionKey<>(30,
+                    new OptionType<>("BackgroundGCTaskThreshold", input -> {
+                        try {
+                            int value = Integer.parseInt(input);
+                            if (value >= 1 && value <= 100) {
+                                return value;
+                            }
+                        } catch (NumberFormatException e) {
+                            // fallthrough
+                        }
+                        throw new IllegalArgumentException("BackgroundGCTaskThreshold must be an integer in range [1, 100]");
+                    }));
+
+    @Option(category = OptionCategory.INTERNAL, usageSyntax = "<megabytes>", help = "The minimum RSS memory (in megabytes) to start calling System.gc(). (default: 4 GB).") //
+    public static final OptionKey<Integer> BackgroundGCTaskMinimum = new OptionKey<>(4096);
+
+    @EngineOption @Option(category = OptionCategory.USER, usageSyntax = "true|false", help = "Emulate some Jython features that can cause performance degradation", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> EmulateJython = new OptionKey<>(false);
 
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Enable tracing of native memory (ATTENTION: this will have significant impact on CExt execution performance).") //
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Enable Python abi3t compatibility") //
+    public static final OptionKey<Boolean> EnableAbi3t = new OptionKey<>(false);
+
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Enable tracing of native memory (ATTENTION: this will have significant impact on CExt execution performance).") //
     public static final OptionKey<Boolean> TraceNativeMemory = new OptionKey<>(false);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "If native memory tracing is enabled, also capture stack.") //
     public static final OptionKey<Boolean> TraceNativeMemoryCalls = new OptionKey<>(false);
 
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "<bytes>", help = "Max native memory heap size (default: 2 GB).") //
-    public static final OptionKey<Long> MaxNativeMemory = new OptionKey<>(1L << 31);
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "<bytes>", help = "Max native memory heap size (default: 8 GB).") //
+    public static final OptionKey<Long> MaxNativeMemory = new OptionKey<>(1L << 33);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "<bytes>", help = "Initial native memory heap size that triggers a GC (default: 256 MB).") //
     public static final OptionKey<Long> InitialNativeMemory = new OptionKey<>(1L << 28);
 
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Use the experimental panama backend for NFI.", stability = OptionStability.EXPERIMENTAL) //
-    public static final OptionKey<Boolean> UsePanama = new OptionKey<>(false);
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Poison GraalPy raw allocator headers and payloads before freeing native memory blocks.", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Boolean> PoisonNativeMemoryOnFree = new OptionKey<>(false);
 
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Set by the launcher to true (false means that GraalPython is being embedded in an application).") //
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Record a lightweight rolling history of GraalPy raw native memory allocation sites for allocator debugging.", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Boolean> SampleNativeMemoryAllocSites = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Set by the launcher to true (false means that GraalPy is being embedded in an application).") //
     public static final OptionKey<Boolean> RunViaLauncher = new OptionKey<>(false);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Enable built-in functions on the __graalpython__ module that are useful for debugging.") //
@@ -415,8 +421,22 @@ public final class PythonOptions {
     @Option(category = OptionCategory.INTERNAL, help = "The list of the original command line arguments passed to the Python executable.") //
     public static final OptionKey<TruffleString> OrigArgv = new OptionKey<>(T_EMPTY_STRING, TS_OPTION_TYPE);
 
-    @Option(category = OptionCategory.EXPERT, help = "If true, use the system's toolchain for native extension compilation. Otherwise, use the LLVM Toolchain included with GraalVM.") //
-    public static final OptionKey<Boolean> UseSystemToolchain = new OptionKey<>(true);
+    @EngineOption @Option(category = OptionCategory.INTERNAL, usageSyntax = "true|false", help = "If true, uses native storage strategy for primitive types") //
+    public static final OptionKey<Boolean> UseNativePrimitiveStorageStrategy = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Print warnings when using experimental features at runtime.", stability = OptionStability.STABLE) //
+    public static final OptionKey<Boolean> WarnExperimentalFeatures = new OptionKey<>(true);
+
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = """
+                    By default GraalPy only keeps a transformed form of bytecode in memory and may need to reread bytecode files when a different form of bytecode is requested, \
+                    such as when settrace instrumentation is enabled. This option avoids rereading bytecode files by keeping the original bytecode form in memory""") //
+    public static final OptionKey<Boolean> KeepBytecodeInMemory = new OptionKey<>(false);
+
+    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Boolean> ForceUncachedInterpreter = new OptionKey<>(false);
+
+    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Integer> UncachedInterpreterThreshold = new OptionKey<>(-1);
 
     public static final OptionDescriptors DESCRIPTORS = new PythonOptionsOptionDescriptors();
 
@@ -519,6 +539,16 @@ public final class PythonOptions {
         return true;
     }
 
+    public static void setUncachedInterpreterThreshold(PythonLanguage language, BytecodeNode bytecodeNode) {
+        if (language.getEngineOption(ForceUncachedInterpreter)) {
+            bytecodeNode.setUncachedThreshold(Integer.MIN_VALUE);
+        }
+        int threshold = language.getEngineOption(UncachedInterpreterThreshold);
+        if (threshold >= 0) {
+            bytecodeNode.setUncachedThreshold(threshold);
+        }
+    }
+
     @Idempotent
     public static int getAttributeAccessInlineCacheMaxDepth() {
         CompilerAsserts.neverPartOfCompilation();
@@ -537,21 +567,19 @@ public final class PythonOptions {
         return PythonLanguage.get(null).getEngineOption(VariableArgumentInlineCacheLimit);
     }
 
-    @Idempotent
-    public static int getNodeRecursionLimit() {
-        CompilerAsserts.neverPartOfCompilation();
-        int result = PythonLanguage.get(null).getEngineOption(NodeRecursionLimit);
-        // So that we can use byte counters and also Byte.MAX_VALUE as special placeholder
-        assert result < Byte.MAX_VALUE;
-        return result;
-    }
-
-    public static boolean isWithJavaStacktrace(PythonLanguage language) {
-        return language.getEngineOption(WithJavaStacktrace) > 0;
-    }
-
     public static boolean isPExceptionWithJavaStacktrace(PythonLanguage language) {
-        return language.getEngineOption(WithJavaStacktrace) > 1;
+        return language.getEngineOption(WithJavaStacktrace) >= 2;
+    }
+
+    public static boolean shouldPrintJavaStacktrace(PythonLanguage language, Throwable throwable) {
+        int mode = language.getEngineOption(WithJavaStacktrace);
+        if (mode == 1) {
+            return !(throwable instanceof AbstractTruffleException);
+        } else if (mode == 2) {
+            return throwable instanceof AbstractTruffleException;
+        } else {
+            return mode == 3;
+        }
     }
 
     @TruffleBoundary

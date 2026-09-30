@@ -145,7 +145,13 @@ class BaseContext(object):
         '''Check whether this is a fake forked process in a frozen executable.
         If so then run code specified by commandline and exit.
         '''
-        if sys.platform == 'win32' and getattr(sys, 'frozen', False):
+        # gh-140814: allow_none=True avoids locking in the default start
+        # method, which would cause a later set_start_method() to fail.
+        # None is safe to pass through: spawn.freeze_support()
+        # independently detects whether this process is a spawned
+        # child, so the start method check here is only an optimization.
+        if (getattr(sys, 'frozen', False)
+                and self.get_start_method(allow_none=True) in ('spawn', None)):
             from .spawn import freeze_support
             freeze_support()
 
@@ -213,54 +219,6 @@ class BaseContext(object):
     def _check_available(self):
         pass
 
-    # Begin Truffle change
-    def _is_graalpy(self):
-        return isinstance(self.get_context(), GraalPyContext)
-
-    def _get_id(self):
-        if self._is_graalpy():
-            from _multiprocessing_graalpy import _gettid
-            return _gettid()
-        import os
-        return os.getpid()
-
-    def _SemLock(self, kind, value, maxvalue, name, unlink):
-        if self._is_graalpy():
-            from _multiprocessing_graalpy import SemLock
-        else:
-            from _multiprocessing import SemLock
-        return SemLock(kind, value, maxvalue, name, unlink)
-
-    def _SemLock_rebuild(self, *args):
-        if self._is_graalpy():
-            from _multiprocessing_graalpy import SemLock
-        else:
-            from _multiprocessing import SemLock
-        return SemLock._rebuild(*args)
-
-    def _sem_unlink(self, name):
-        if self._is_graalpy():
-            from _multiprocessing_graalpy import sem_unlink
-        else:
-            from _multiprocessing import sem_unlink
-        sem_unlink(name)
-
-    def _close(self, fd):
-        if fd < 0:
-            from _multiprocessing_graalpy import _close as close
-        else:
-            from os import close
-        close(fd)
-
-    def _pipe(self):
-        if self._is_graalpy():
-            from _multiprocessing_graalpy import _pipe as pipe
-        else:
-            from os import pipe
-        return pipe()
-
-    # End Truffle change
-
 #
 # Type of default context -- underlying context can be set at most once
 #
@@ -306,34 +264,13 @@ class DefaultContext(BaseContext):
         return self._actual_context._name
 
     def get_all_start_methods(self):
-        # Begin Truffle change
-        methods = ['spawn', 'graalpy'] if __graalpython__.posix_module_backend() == 'native' else ['graalpy']
-        return methods
-        # End Truffle change
+        # GraalPy change
+        return ['spawn']
 
 
 #
 # Context types for fixed start method
 #
-
-# Begin Truffle change
-class GraalPyProcess(process.BaseProcess):
-    _start_method = 'graalpy'
-    @staticmethod
-    def _Popen(process_obj):
-        from multiprocessing.popen_truffleprocess import Popen
-        return Popen(process_obj)
-
-    @staticmethod
-    def _after_fork():
-        pass
-
-
-class GraalPyContext(BaseContext):
-    _name = 'graalpy'
-    Process = GraalPyProcess
-# End Truffle change
-
 
 if sys.platform != 'win32':
 
@@ -341,16 +278,16 @@ if sys.platform != 'win32':
         _start_method = 'fork'
         @staticmethod
         def _Popen(process_obj):
-            # Begin Truffle change
-            # from .popen_fork import Popen
-            # return Popen(process_obj)
-            raise NotImplementedError("'fork' not supported in graalpython")
-            # End Truffle change
+            # GraalPy change
+            raise NotImplementedError("'fork' not supported on GraalPy")
 
     class SpawnProcess(process.BaseProcess):
         _start_method = 'spawn'
         @staticmethod
         def _Popen(process_obj):
+            # GraalPy change
+            if __graalpython__.posix_module_backend() == 'java':
+                raise ValueError("multiprocessing not supported with the java POSIX backend")
             from .popen_spawn_posix import Popen
             return Popen(process_obj)
 
@@ -363,11 +300,8 @@ if sys.platform != 'win32':
         _start_method = 'forkserver'
         @staticmethod
         def _Popen(process_obj):
-            # Begin Truffle change
-            # from .popen_forkserver import Popen
-            # return Popen(process_obj)
-            raise NotImplementedError("'forkserver' not supported in GraalPy")
-            # End Truffle change
+            # GraalPy change
+            raise NotImplementedError("'forkserver' not supported on GraalPy")
 
     class ForkContext(BaseContext):
         _name = 'fork'
@@ -388,22 +322,14 @@ if sys.platform != 'win32':
         'fork': ForkContext(),
         'spawn': SpawnContext(),
         'forkserver': ForkServerContext(),
-        # Begin Truffle change
-        'graalpy': GraalPyContext(),
-        # End Truffle change
     }
-    # Begin Truffle change
-    # if sys.platform == 'darwin':
-    #     # bpo-33725: running arbitrary code after fork() is no longer reliable
-    #     # on macOS since macOS 10.14 (Mojave). Use spawn by default instead.
-    #     _default_context = DefaultContext(_concrete_contexts['spawn'])
-    # else:
-    #     _default_context = DefaultContext(_concrete_contexts['fork'])
-    if __graalpython__.posix_module_backend() == 'native':
+    # GraalPy change
+    if True:
+        # bpo-33725: running arbitrary code after fork() is no longer reliable
+        # on macOS since macOS 10.14 (Mojave). Use spawn by default instead.
         _default_context = DefaultContext(_concrete_contexts['spawn'])
     else:
-        _default_context = DefaultContext(_concrete_contexts['graalpy'])
-    # End Truffle change
+        _default_context = DefaultContext(_concrete_contexts['fork'])
 
 else:
 
@@ -425,13 +351,8 @@ else:
 
     _concrete_contexts = {
         'spawn': SpawnContext(),
-        # Begin Truffle change
-        'graalpy': GraalPyContext(),
-        # End Truffle change
     }
-    # Begin Truffle change
-    _default_context = DefaultContext(_concrete_contexts['graalpy'])
-    # End Truffle change
+    _default_context = DefaultContext(_concrete_contexts['spawn'])
 
 #
 # Force the start method

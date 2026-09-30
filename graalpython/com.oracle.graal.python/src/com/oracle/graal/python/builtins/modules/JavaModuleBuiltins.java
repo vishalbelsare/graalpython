@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,7 +49,7 @@ import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
@@ -68,12 +68,11 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.GilNode;
-import com.oracle.graal.python.runtime.IndirectCallData;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.runtime.interop.InteropByteArray;
@@ -126,12 +125,12 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isPString(name) || isTruffleString(name)")
         static Object type(Object name,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToJavaStringNode castToStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Env env = PythonContext.get(inliningTarget).getEnv();
             if (!env.isHostLookupAllowed()) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.NotImplementedError, ErrorMessages.HOST_LOOKUP_NOT_ALLOWED);
+                throw raiseNode.raise(inliningTarget, PythonErrorType.NotImplementedError, ErrorMessages.HOST_LOOKUP_NOT_ALLOWED);
             }
             String javaString = castToStringNode.execute(name);
             Object hostValue;
@@ -141,7 +140,7 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
                 hostValue = null;
             }
             if (hostValue == null) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.KeyError, ErrorMessages.HOST_SYM_NOT_DEFINED, javaString);
+                throw raiseNode.raise(inliningTarget, PythonErrorType.KeyError, ErrorMessages.HOST_SYM_NOT_DEFINED, javaString);
             } else {
                 return hostValue;
             }
@@ -149,8 +148,8 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
 
         @Fallback
         static Object doError(Object object,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.TypeError, ErrorMessages.UNSUPPORTED_OPERAND_P, object);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.UNSUPPORTED_OPERAND_P, object);
         }
     }
 
@@ -159,12 +158,12 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
     abstract static class AddToClassPathNode extends PythonBuiltinNode {
         @Specialization
         static PNone add(Object[] args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode castToString,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Env env = PythonContext.get(inliningTarget).getEnv();
             if (!env.isHostLookupAllowed()) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.NotImplementedError, ErrorMessages.HOST_ACCESS_NOT_ALLOWED);
+                throw raiseNode.raise(inliningTarget, PythonErrorType.NotImplementedError, ErrorMessages.HOST_ACCESS_NOT_ALLOWED);
             }
             for (int i = 0; i < args.length; i++) {
                 Object arg = args[i];
@@ -175,9 +174,9 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
                     // implicitly
                     env.addToHostClassPath(PythonContext.get(inliningTarget).getPublicTruffleFileRelaxed(entry, T_JAR));
                 } catch (CannotCastException e) {
-                    throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.CLASSPATH_ARG_MUST_BE_STRING, i + 1, arg);
+                    throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.CLASSPATH_ARG_MUST_BE_STRING, i + 1, arg);
                 } catch (SecurityException e) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.INVALD_OR_UNREADABLE_CLASSPATH, entry, e);
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.INVALD_OR_UNREADABLE_CLASSPATH, entry, e);
                 }
             }
             return PNone.NONE;
@@ -187,87 +186,60 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
     @Builtin(name = "is_function", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     abstract static class IsFunctionNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        boolean check(Object object) {
-            Env env = getContext().getEnv();
-            return env.isHostFunction(object);
+        @Specialization(limit = "3")
+        boolean check(Object object,
+                        @CachedLibrary("object") InteropLibrary lib) {
+            return lib.isHostObject(object) && lib.isExecutable(object) && !lib.hasMembers(object);
         }
     }
 
     @Builtin(name = "is_object", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     abstract static class IsObjectNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        boolean check(Object object) {
-            Env env = getContext().getEnv();
-            return env.isHostObject(object);
+        @Specialization(limit = "3")
+        boolean check(Object object,
+                        @CachedLibrary("object") InteropLibrary lib) {
+            return lib.isHostObject(object);
         }
     }
 
     @Builtin(name = "is_symbol", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     abstract static class IsSymbolNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        boolean check(Object object) {
-            Env env = getContext().getEnv();
-            return env.isHostSymbol(object);
+        @Specialization(limit = "3")
+        boolean check(Object object,
+                        @CachedLibrary("object") InteropLibrary lib) {
+            return lib.isHostObject(object) && lib.isScope(object);
         }
     }
 
     @Builtin(name = "is_type", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     abstract static class IsTypeNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        boolean isType(Object object) {
-            Env env = getContext().getEnv();
-            return env.isHostObject(object) && env.asHostObject(object) instanceof Class<?>;
+        @Specialization(limit = "3")
+        boolean isType(Object object,
+                        @CachedLibrary("object") InteropLibrary lib) {
+            return lib.isHostObject(object) && lib.isMetaObject(object);
         }
     }
 
     @Builtin(name = "instanceof", minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
     abstract static class InstanceOfNode extends PythonBinaryBuiltinNode {
-        @Specialization(guards = {"!isForeign1.execute(inliningTarget, object)", "isForeign2.execute(inliningTarget, klass)"})
+        @Specialization(limit = "3")
         static boolean check(Object object, Object klass,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Shared("isForeign1") @Cached IsForeignObjectNode isForeign1,
-                        @SuppressWarnings("unused") @Shared("isForeign2") @Cached IsForeignObjectNode isForeign2,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            Env env = PythonContext.get(inliningTarget).getEnv();
-            try {
-                Object hostKlass = env.asHostObject(klass);
-                if (hostKlass instanceof Class<?>) {
-                    return ((Class<?>) hostKlass).isInstance(object);
+                        @Bind Node inliningTarget,
+                        @CachedLibrary("klass") InteropLibrary lib,
+                        @Shared @Cached PRaiseNode raiseNode) {
+            if (lib.isHostObject(klass) && lib.isMetaObject(klass)) {
+                try {
+                    return lib.isMetaInstance(klass, object);
+                } catch (UnsupportedMessageException e) {
+                    throw CompilerDirectives.shouldNotReachHere(e);
                 }
-            } catch (ClassCastException cce) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.KLASS_ARG_IS_NOT_HOST_OBJ, klass);
+            } else {
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.KLASS_ARG_IS_NOT_HOST_OBJ, klass);
             }
-            return false;
-        }
-
-        @Specialization(guards = {"isForeign1.execute(inliningTarget, object)", "isForeign2.execute(inliningTarget, klass)"})
-        static boolean checkForeign(Object object, Object klass,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Shared("isForeign1") @Cached IsForeignObjectNode isForeign1,
-                        @SuppressWarnings("unused") @Shared("isForeign2") @Cached IsForeignObjectNode isForeign2,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            Env env = PythonContext.get(inliningTarget).getEnv();
-            try {
-                Object hostObject = env.asHostObject(object);
-                Object hostKlass = env.asHostObject(klass);
-                if (hostKlass instanceof Class<?>) {
-                    return ((Class<?>) hostKlass).isInstance(hostObject);
-                }
-            } catch (ClassCastException cce) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.OBJ_OR_KLASS_ARGS_IS_NOT_HOST_OBJ, object, klass);
-            }
-            return false;
-        }
-
-        @Fallback
-        static boolean fallback(Object object, Object klass,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.UNSUPPORTED_INSTANCEOF, object, klass);
         }
     }
 
@@ -285,10 +257,12 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
         private Object getAttr(VirtualFrame frame, PythonModule mod) {
             if (getAttr == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                // Note: passing VirtualFrame to TruffleBoundary methods (uncached execute) is fine,
-                // because this branch will never be compiled
-                Object javaLoader = PyObjectGetAttr.getUncached().execute(frame, null, mod, T_JAVA_PKG_LOADER);
-                getAttr = PyObjectCallMethodObjArgs.executeUncached(frame, javaLoader, T_MAKE_GETATTR, T_JAVA);
+                // Note: passing VirtualFrame to TruffleBoundary methods (uncached execute) is not
+                // fine in Bytecode DSL. We assume that direct calls are connected to AST, because
+                // we need the current BytecodeNode to materialize the frame properly, see assertion
+                // in CallContext$PassCallerFrameNode
+                Object javaLoader = PyObjectGetAttr.getUncached().execute(null, null, mod, T_JAVA_PKG_LOADER);
+                getAttr = PyObjectCallMethodObjArgs.executeUncached(null, javaLoader, T_MAKE_GETATTR, T_JAVA);
             }
             return getAttr;
         }
@@ -310,14 +284,14 @@ public final class JavaModuleBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isBytes(object)", limit = "3")
         static Object doBuffer(VirtualFrame frame, Object object,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @CachedLibrary("object") PythonBufferAcquireLibrary acquireLib,
                         @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib) {
-            Object buffer = acquireLib.acquireReadonly(object, frame, indirectCallData);
+            Object buffer = acquireLib.acquireReadonly(object, frame, callData);
             try {
                 return new InteropByteArray(bufferLib.getCopiedByteArray(object));
             } finally {
-                bufferLib.release(buffer, frame, indirectCallData);
+                bufferLib.release(buffer, frame, callData);
             }
         }
     }

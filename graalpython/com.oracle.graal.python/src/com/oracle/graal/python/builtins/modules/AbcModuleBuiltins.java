@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,6 @@
  */
 package com.oracle.graal.python.builtins.modules;
 
-import static com.oracle.graal.python.builtins.objects.type.TypeBuiltins.TYPE_FLAGS;
 import static com.oracle.graal.python.builtins.objects.type.TypeFlags.COLLECTION_FLAGS;
 import static com.oracle.graal.python.builtins.objects.type.TypeFlags.IMMUTABLETYPE;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
@@ -48,30 +47,36 @@ import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.type.PythonAbstractClass;
 import com.oracle.graal.python.builtins.objects.type.TypeFlags;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetSubclassesAsArrayNode;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
+import com.oracle.graal.python.lib.PyObjectSetAttr;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.HiddenAttr;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.DeleteAttributeNode;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaLongLossyNode;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -89,28 +94,44 @@ public final class AbcModuleBuiltins extends PythonBuiltins {
     @Builtin(name = "_abc_init", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     abstract static class AbcInitCollectionFlagsNode extends PythonUnaryBuiltinNode {
-        @TruffleBoundary
         @Specialization
-        static Object init(Object object,
-                        @Bind("this") Node inliningTarget,
-                        @Cached DeleteAttributeNode deleteAttributeNode) {
+        static Object init(VirtualFrame frame, Object object,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+            Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                initBoundary(inliningTarget, object);
+            } finally {
+                BoundaryCallContext.exit(frame, boundaryCallData, saved);
+            }
+            return PNone.NONE;
+        }
+
+        @TruffleBoundary
+        private static void initBoundary(Node inliningTarget, Object object) {
             if (TypeNodes.IsTypeNode.executeUncached(object)) {
                 Object flags = PyObjectLookupAttr.executeUncached(object, ABC_TPFLAGS);
                 long val;
                 try {
                     val = CastToJavaLongLossyNode.executeUncached(flags);
                 } catch (CannotCastException ex) {
-                    return PNone.NONE;
+                    return;
                 }
                 if ((val & COLLECTION_FLAGS) == COLLECTION_FLAGS) {
-                    throw PRaiseNode.raiseUncached(inliningTarget, TypeError, ErrorMessages.ABC_FLAGS_CANNOT_BE_SEQUENCE_AND_MAPPING);
+                    throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.ABC_FLAGS_CANNOT_BE_SEQUENCE_AND_MAPPING);
                 }
                 long tpFlags = TypeNodes.GetTypeFlagsNode.getUncached().execute(object);
                 tpFlags |= (val & COLLECTION_FLAGS);
-                WriteAttributeToObjectNode.getUncached().execute(object, TYPE_FLAGS, tpFlags);
-                deleteAttributeNode.execute(null, inliningTarget, object, ABC_TPFLAGS);
+                PythonAbstractObject type;
+                if (object instanceof PythonBuiltinClassType pbct) {
+                    type = PythonContext.get(inliningTarget).lookupType(pbct);
+                } else {
+                    assert object instanceof PythonAbstractObject;
+                    type = (PythonAbstractObject) object;
+                }
+                HiddenAttr.WriteNode.executeUncached(type, HiddenAttr.FLAGS, tpFlags);
+                PyObjectSetAttr.deleteUncached(object, ABC_TPFLAGS);
             }
-            return PNone.NONE;
         }
     }
 
@@ -118,9 +139,21 @@ public final class AbcModuleBuiltins extends PythonBuiltins {
     @Builtin(name = "_abc_register", minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
     abstract static class RegisterCollectionFlagsNode extends PythonBinaryBuiltinNode {
-        @TruffleBoundary
         @Specialization
-        static Object register(Object self, Object subclass) {
+        static Object register(VirtualFrame frame, Object self, Object subclass,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+            Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                registerBoundary(self, subclass);
+            } finally {
+                BoundaryCallContext.exit(frame, boundaryCallData, saved);
+            }
+            return PNone.NONE;
+        }
+
+        @TruffleBoundary
+        private static void registerBoundary(Object self, Object subclass) {
             if (TypeNodes.IsTypeNode.executeUncached(self)) {
                 long tpFlags = TypeNodes.GetTypeFlagsNode.executeUncached(self);
                 long collectionFlag = tpFlags & COLLECTION_FLAGS;
@@ -128,7 +161,6 @@ public final class AbcModuleBuiltins extends PythonBuiltins {
                     setCollectionFlagRecursive(subclass, collectionFlag);
                 }
             }
-            return PNone.NONE;
         }
 
         private static void setCollectionFlagRecursive(Object child, long flag) {

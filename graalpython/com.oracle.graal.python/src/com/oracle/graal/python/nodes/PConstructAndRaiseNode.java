@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,13 +49,16 @@ import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.exception.OSErrorEnum;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.ssl.SSLErrorCode;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNodeGen.LazyNodeGen;
-import com.oracle.graal.python.nodes.call.special.CallVarargsMethodNode;
+import com.oracle.graal.python.nodes.call.CallNode;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixErrnoException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.UnsupportedPosixFeatureException;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.formatting.ErrorMessageFormatter;
@@ -76,7 +79,7 @@ import com.oracle.truffle.api.strings.TruffleString;
 
 @GenerateUncached
 @ImportStatic(PGuards.class)
-@SuppressWarnings("truffle-inlining")       // footprint reduction 28 -> 9
+@GenerateInline(false)       // footprint reduction 28 -> 9
 public abstract class PConstructAndRaiseNode extends Node {
     public final PException executeWithArgsOnly(Frame frame, PythonBuiltinClassType type, Object[] arguments) {
         return execute(frame, type, null, null, null, arguments, PKeyword.EMPTY_KEYWORDS);
@@ -94,7 +97,7 @@ public abstract class PConstructAndRaiseNode extends Node {
     }
 
     private PException raiseInternal(VirtualFrame frame, PythonBuiltinClassType type, Object cause, Object[] arguments, PKeyword[] keywords,
-                    CallVarargsMethodNode callNode, Python3Core core, TruffleString.FromJavaStringNode fromJavaStringNode) {
+                    CallNode callNode, Python3Core core, TruffleString.FromJavaStringNode fromJavaStringNode) {
         if (arguments != null) {
             for (int i = 0; i < arguments.length; ++i) {
                 if (arguments[i] instanceof String) {
@@ -107,14 +110,14 @@ public abstract class PConstructAndRaiseNode extends Node {
             error.setContext(cause);
             error.setCause(cause);
         }
-        return PRaiseNode.raiseExceptionObject(this, error);
+        return PRaiseNode.raiseExceptionObjectStatic(this, error);
     }
 
     @Specialization(guards = {"format == null", "formatArgs == null"})
     PException constructAndRaiseNoFormatString(VirtualFrame frame, PythonBuiltinClassType type, Object cause, @SuppressWarnings("unused") TruffleString format,
                     @SuppressWarnings("unused") Object[] formatArgs,
                     Object[] arguments, PKeyword[] keywords,
-                    @Cached.Shared("callNode") @Cached CallVarargsMethodNode callNode,
+                    @Cached.Shared("callNode") @Cached CallNode callNode,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         Python3Core core = PythonContext.get(this);
         return raiseInternal(frame, type, cause, arguments, keywords, callNode, core, fromJavaStringNode);
@@ -123,7 +126,7 @@ public abstract class PConstructAndRaiseNode extends Node {
     @Specialization(guards = {"format != null", "arguments == null"})
     PException constructAndRaiseNoArgs(VirtualFrame frame, PythonBuiltinClassType type, Object cause, TruffleString format, Object[] formatArgs,
                     @SuppressWarnings("unused") Object[] arguments, PKeyword[] keywords,
-                    @Cached.Shared("callNode") @Cached CallVarargsMethodNode callNode,
+                    @Cached.Shared("callNode") @Cached CallNode callNode,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         Python3Core core = PythonContext.get(this);
         Object[] args = new Object[]{formatArgs != null ? getFormattedMessage(format, formatArgs) : format};
@@ -133,7 +136,7 @@ public abstract class PConstructAndRaiseNode extends Node {
     @Specialization(guards = {"format != null", "arguments != null"})
     PException constructAndRaise(VirtualFrame frame, PythonBuiltinClassType type, Object cause, TruffleString format, Object[] formatArgs,
                     Object[] arguments, PKeyword[] keywords,
-                    @Cached.Shared("callNode") @Cached CallVarargsMethodNode callNode,
+                    @Cached.Shared("callNode") @Cached CallNode callNode,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         Python3Core core = PythonContext.get(this);
         Object[] args = new Object[arguments.length + 1];
@@ -143,7 +146,7 @@ public abstract class PConstructAndRaiseNode extends Node {
     }
 
     // ImportError helpers
-    public final PException raiseImportError(Frame frame, Object name, Object path, TruffleString format, Object... formatArgs) {
+    public final PException raiseImportErrorWithModule(Frame frame, Object name, Object path, TruffleString format, Object... formatArgs) {
         return raiseImportErrorInternal(frame, format, formatArgs, new PKeyword[]{new PKeyword(T_NAME, name), new PKeyword(T_PATH, path)});
     }
 
@@ -155,7 +158,7 @@ public abstract class PConstructAndRaiseNode extends Node {
         return execute(frame, PythonBuiltinClassType.ImportError, null, format, formatArgs, null, keywords);
     }
 
-    public final PException raiseImportErrorWithCause(Frame frame, Object cause, Object name, Object path, TruffleString format, Object... formatArgs) {
+    public final PException raiseImportErrorWithModuleAndCause(Frame frame, Object cause, Object name, Object path, TruffleString format, Object... formatArgs) {
         return execute(frame, PythonBuiltinClassType.ImportError, cause, format, formatArgs, null, new PKeyword[]{new PKeyword(T_NAME, name), new PKeyword(T_PATH, path)});
     }
 
@@ -165,21 +168,54 @@ public abstract class PConstructAndRaiseNode extends Node {
         return toTruffleStringUncached(exception.getMessage());
     }
 
-    private final PException raise(Frame frame, PythonBuiltinClassType err, TruffleString message, Object... formatArgs) {
+    private PException raise(Frame frame, PythonBuiltinClassType err, TruffleString message, Object... formatArgs) {
         return executeWithFmtMessageAndArgs(frame, err, message, formatArgs, PythonUtils.EMPTY_OBJECT_ARRAY);
     }
 
+    private static Object[] createOsErrorArgs(int errno, TruffleString message) {
+        return new Object[]{errno, message};
+    }
+
+    private static Object[] createOsErrorArgs(int errno, TruffleString message, Object filename1) {
+        return createOsErrorArgs(errno, message, filename1, null);
+    }
+
+    private static Object[] createOsErrorArgs(OSErrorEnum osErrorEnum, TruffleString filename1) {
+        return createOsErrorArgs(osErrorEnum.getNumber(), osErrorEnum.getMessage(), filename1, null);
+    }
+
     private static Object[] createOsErrorArgs(int errno, TruffleString message, Object filename1, Object filename2) {
-        return new Object[]{errno, message, filename1, null, filename2};
+        if (filename1 != null) {
+            if (filename2 != null) {
+                return new Object[]{errno, message, filename1, 0, filename2};
+            }
+            return new Object[]{errno, message, filename1};
+        }
+        assert filename2 == null;
+        return new Object[]{errno, message};
     }
 
-    private static Object[] createOsErrorArgs(OSErrorEnum osErrorEnum, TruffleString filename1, TruffleString filename2) {
-        return new Object[]{osErrorEnum.getNumber(), osErrorEnum.getMessage(), filename1, null, filename2};
+    private static Object[] createOsErrorArgs(int errno, TruffleString message, Integer winerror, Object filename1, Object filename2) {
+        if (winerror == null) {
+            return createOsErrorArgs(errno, message, filename1, filename2);
+        }
+        if (filename1 == null) {
+            assert filename2 == null;
+            return new Object[]{errno, message, PNone.NONE, winerror};
+        }
+        if (filename2 == null) {
+            return new Object[]{errno, message, filename1, winerror};
+        }
+        return new Object[]{errno, message, filename1, winerror, filename2};
     }
 
-    private static Object[] createOsErrorArgs(Exception exception, TruffleString filename1, TruffleString filename2, TruffleString.EqualNode eqNode) {
+    private static Object[] createOsErrorArgs(OSErrorEnum osErrorEnum) {
+        return new Object[]{osErrorEnum.getNumber(), osErrorEnum.getMessage()};
+    }
+
+    private static Object[] createOsErrorArgs(Exception exception, TruffleString.EqualNode eqNode) {
         OSErrorEnum.ErrorAndMessagePair errorAndMessage = OSErrorEnum.fromException(exception, eqNode);
-        return new Object[]{errorAndMessage.oserror.getNumber(), errorAndMessage.message, filename1, null, filename2};
+        return new Object[]{errorAndMessage.oserror.getNumber(), errorAndMessage.message};
     }
 
     private PException raiseOSErrorInternal(Frame frame, Object[] arguments) {
@@ -187,15 +223,15 @@ public abstract class PConstructAndRaiseNode extends Node {
     }
 
     public final PException raiseOSError(Frame frame, OSErrorEnum osErrorEnum) {
-        return raiseOSErrorInternal(frame, createOsErrorArgs(osErrorEnum, null, null));
+        return raiseOSErrorInternal(frame, createOsErrorArgs(osErrorEnum));
     }
 
     public final PException raiseOSError(Frame frame, OSErrorEnum osErrorEnum, TruffleString filename) {
-        return raiseOSErrorInternal(frame, createOsErrorArgs(osErrorEnum, filename, null));
+        return raiseOSErrorInternal(frame, createOsErrorArgs(osErrorEnum, filename));
     }
 
     public final PException raiseOSError(Frame frame, Exception exception, TruffleString.EqualNode eqNode) {
-        return raiseOSErrorInternal(frame, createOsErrorArgs(exception, null, null, eqNode));
+        return raiseOSErrorInternal(frame, createOsErrorArgs(exception, eqNode));
     }
 
     public final PException raiseOSError(Frame frame, OSErrorEnum osErrorEnum, Exception exception) {
@@ -203,34 +239,51 @@ public abstract class PConstructAndRaiseNode extends Node {
     }
 
     public final PException raiseOSError(Frame frame, int errno, TruffleString message, Object filename) {
-        return raiseOSErrorInternal(frame, createOsErrorArgs(errno, message, filename, null));
+        return raiseOSErrorInternal(frame, createOsErrorArgs(errno, message, filename));
     }
 
-    public final PException raiseOSError(Frame frame, int errno, TruffleString message, Object filename, Object filename2) {
-        return raiseOSErrorInternal(frame, createOsErrorArgs(errno, message, filename, filename2));
-    }
-
-    public final PException raiseOSError(VirtualFrame frame, int code, TruffleString message) {
-        return raiseOSError(frame, code, message, null, null);
+    public final PException raiseOSError(VirtualFrame frame, int errno, TruffleString message) {
+        return raiseOSErrorInternal(frame, createOsErrorArgs(errno, message));
     }
 
     public final PException raiseOSErrorFromPosixException(VirtualFrame frame, PosixException e) {
-        return raiseOSError(frame, e.getErrorCode(), e.getMessageAsTruffleString(), null, null);
+        if (e instanceof PosixErrnoException errnoException) {
+            return raiseOSErrorInternal(frame, createOsErrorArgs(errnoException.getErrorCode(), errnoException.getMessageAsTruffleString(), errnoException.getWinerror(), null, null));
+        }
+        assert e instanceof UnsupportedPosixFeatureException;
+        return raiseOSErrorUnsupported(frame, (UnsupportedPosixFeatureException) e);
     }
 
     public final PException raiseOSErrorFromPosixException(VirtualFrame frame, PosixException e, Object filename1) {
-        return raiseOSError(frame, e.getErrorCode(), e.getMessageAsTruffleString(), filename1, null);
+        if (e instanceof PosixErrnoException errnoException) {
+            return raiseOSErrorInternal(frame, createOsErrorArgs(errnoException.getErrorCode(), errnoException.getMessageAsTruffleString(), errnoException.getWinerror(), filename1, null));
+        }
+        assert e instanceof UnsupportedPosixFeatureException;
+        return raiseOSErrorUnsupported(frame, (UnsupportedPosixFeatureException) e);
     }
 
     public final PException raiseOSErrorFromPosixException(VirtualFrame frame, PosixException e, Object filename1, Object filename2) {
-        return raiseOSError(frame, e.getErrorCode(), e.getMessageAsTruffleString(), filename1, filename2);
+        if (e instanceof PosixErrnoException errnoException) {
+            return raiseOSErrorInternal(frame, createOsErrorArgs(errnoException.getErrorCode(), errnoException.getMessageAsTruffleString(), errnoException.getWinerror(), filename1, filename2));
+        }
+        assert e instanceof UnsupportedPosixFeatureException;
+        return raiseOSErrorUnsupported(frame, (UnsupportedPosixFeatureException) e);
+    }
+
+    public final PException raiseOSErrorUnsupported(VirtualFrame frame, UnsupportedPosixFeatureException e) {
+        return executeWithArgsOnly(frame, PythonBuiltinClassType.IOUnsupportedOperation, new Object[]{createUnsupportedErrorMessage(e)});
+    }
+
+    @TruffleBoundary
+    private static TruffleString createUnsupportedErrorMessage(UnsupportedPosixFeatureException e) {
+        return TruffleString.fromJavaStringUncached(e.getMessage(), TS_ENCODING);
     }
 
     public final PException raiseSSLError(Frame frame, TruffleString message) {
         return raiseSSLError(frame, message, PythonUtils.EMPTY_OBJECT_ARRAY);
     }
 
-    private final PException raiseSSLError(Frame frame, TruffleString message, Object... formatArgs) {
+    public final PException raiseSSLError(Frame frame, TruffleString message, Object... formatArgs) {
         return raise(frame, PythonBuiltinClassType.SSLError, message, formatArgs);
     }
 
@@ -264,7 +317,7 @@ public abstract class PConstructAndRaiseNode extends Node {
         return getUncached().raiseSSLError(null, errorCode, format, formatArgs);
     }
 
-    private final PException raiseOSErrorSubType(Frame frame, PythonBuiltinClassType osErrorSubtype, TruffleString format, Object... fmtArgs) {
+    private PException raiseOSErrorSubType(Frame frame, PythonBuiltinClassType osErrorSubtype, TruffleString format, Object... fmtArgs) {
         TruffleString message = getFormattedMessage(format, fmtArgs);
         final OSErrorEnum osErrorEnum = errorType2errno(osErrorSubtype);
         assert osErrorEnum != null : "could not determine an errno for this error, either not an OSError subtype or multiple errno codes are available";
@@ -281,14 +334,6 @@ public abstract class PConstructAndRaiseNode extends Node {
 
     public final PException raiseUnicodeEncodeError(Frame frame, String encoding, TruffleString object, int start, int end, String reason) {
         return executeWithArgsOnly(frame, PythonBuiltinClassType.UnicodeEncodeError, new Object[]{encoding, object, start, end, reason});
-    }
-
-    private final PException raiseUnicodeDecodeError(Frame frame, String encoding, Object object, int start, int end, String reason) {
-        return executeWithArgsOnly(frame, PythonBuiltinClassType.UnicodeDecodeError, new Object[]{encoding, object, start, end, reason});
-    }
-
-    public static PException raiseUncachedUnicodeDecodeError(String encoding, Object object, int start, int end, String reason) {
-        return getUncached().raiseUnicodeDecodeError(null, encoding, object, start, end, reason);
     }
 
     @NeverDefault

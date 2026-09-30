@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,26 +40,37 @@
  */
 package com.oracle.graal.python.lib;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readLongField;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import com.oracle.graal.python.builtins.modules.MathModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
-import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.TypeFlags;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.CallSlotHashFunNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.MaybeBindDescriptorNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
-import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.nodes.util.CastUnsignedToJavaLongHashNode;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -67,18 +78,19 @@ import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
-@ImportStatic(SpecialMethodSlot.class)
 @GenerateUncached
 @GenerateCached(false)
 @GenerateInline
 public abstract class PyObjectHashNode extends PNodeWithContext {
+    private static final CApiTiming C_API_TIMING = CApiTiming.create(true, NativeCAPISymbol.FUN_PY_TYPE_READY);
+
     public static long executeUncached(Object value) {
         return PyObjectHashNodeGen.getUncached().execute(null, null, value);
     }
@@ -95,16 +107,15 @@ public abstract class PyObjectHashNode extends PNodeWithContext {
     @Specialization
     @InliningCutoff
     public static long hash(TruffleString object,
-                    @Shared @Cached(inline = false) TruffleString.HashCodeNode hashCodeNode) {
+                    @Shared @Cached TruffleString.HashCodeNode hashCodeNode) {
         return avoidNegative1(hashCodeNode.execute(object, TS_ENCODING));
     }
 
-    @Specialization(guards = "cannotBeOverridden(object, inliningTarget, getClassNode)", limit = "1")
+    @Specialization(guards = "isBuiltinPString(object)")
     @InliningCutoff
-    static long hash(@SuppressWarnings("unused") Node inliningTarget, PString object,
-                    @SuppressWarnings("unused") @Cached GetPythonObjectClassNode getClassNode,
+    static long hash(Node inliningTarget, PString object,
                     @Cached CastToTruffleStringNode cast,
-                    @Shared @Cached(inline = false) TruffleString.HashCodeNode hashCodeNode) {
+                    @Shared @Cached TruffleString.HashCodeNode hashCodeNode) {
         return hash(cast.execute(inliningTarget, object), hashCodeNode);
     }
 
@@ -162,34 +173,73 @@ public abstract class PyObjectHashNode extends PNodeWithContext {
 
     @Fallback
     @InliningCutoff
-    static long hash(VirtualFrame frame, Node inliningTarget, Object object,
+    static long genericHash(VirtualFrame frame, Node inliningTarget, Object object,
                     @Cached GetClassNode getClassNode,
-                    @Cached(parameters = "Hash", inline = false) LookupCallableSlotInMRONode lookupHash,
-                    @Cached MaybeBindDescriptorNode bindDescriptorNode,
-                    @Cached(inline = false) CallUnaryMethodNode callHash,
-                    @Cached CastUnsignedToJavaLongHashNode cast,
-                    @Cached PRaiseNode.Lazy raiseNode) {
-        /* This combines the logic from abstract.c:PyObject_Hash and typeobject.c:slot_tp_hash */
-        Object type = getClassNode.execute(inliningTarget, object);
-        // We have to do the lookup and bind steps separately to avoid binding possible None
-        Object hashDescr = lookupHash.execute(type);
-        if (hashDescr != PNone.NO_VALUE && hashDescr != PNone.NONE) {
-            try {
-                hashDescr = bindDescriptorNode.execute(frame, inliningTarget, hashDescr, object, type);
-            } catch (PException e) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.UNHASHABLE_TYPE_P, object);
-            }
-            Object result = callHash.executeObject(frame, hashDescr, object);
-            try {
-                return avoidNegative1(cast.execute(inliningTarget, result));
-            } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.HASH_SHOULD_RETURN_INTEGER);
-            }
+                    @Cached GetCachedTpSlotsNode getSlotsNode,
+                    @Cached InlinedConditionProfile typeIsNotReadyProfile,
+                    @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                    @Cached CallSlotHashFunNode callHashFun,
+                    @Cached PRaiseNode raiseNode) {
+        Object klass = getClassNode.execute(inliningTarget, object);
+        TpSlots slots = getSlotsNode.execute(inliningTarget, klass);
+        if (slots.tp_hash() == null) {
+            slots = handleNoHash(frame, inliningTarget, object, typeIsNotReadyProfile, boundaryCallData, raiseNode, klass, slots);
         }
-        throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.UNHASHABLE_TYPE_P, object);
+        return callHashFun.execute(frame, inliningTarget, slots.tp_hash(), object);
     }
 
-    public static PyObjectHashNode getUncached() {
-        return PyObjectHashNodeGen.getUncached();
+    @InliningCutoff
+    private static TpSlots handleNoHash(VirtualFrame frame, Node inliningTarget, Object object, InlinedConditionProfile typeIsNotReadyProfile,
+                    BoundaryCallData boundaryCallData, PRaiseNode raiseNode, Object klass, TpSlots slots) {
+        boolean initialized = false;
+        if (klass instanceof PythonAbstractNativeObject nativeKlass) {
+            // Comment from CPython:
+            /*
+             * To keep to the general practice that inheriting solely from object in C code should
+             * work without an explicit call to PyType_Ready, we implicitly call PyType_Ready here
+             * and then check the tp_hash slot again
+             */
+            long flags = readLongField(nativeKlass.getPtr(), CFields.PyTypeObject__tp_flags);
+            if (typeIsNotReadyProfile.profile(inliningTarget, (flags & TypeFlags.READY) == 0)) {
+                Object savedState = BoundaryCallContext.enter(frame, boundaryCallData);
+                try {
+                    slots = callTypeReady(inliningTarget, object, nativeKlass);
+                    initialized = true;
+                } finally {
+                    BoundaryCallContext.exit(frame, boundaryCallData, savedState);
+                }
+            }
+        }
+        if (!initialized) {
+            throw raiseUnhashable(inliningTarget, object, raiseNode);
+        }
+        return slots;
+    }
+
+    @TruffleBoundary
+    private static TpSlots callTypeReady(Node inliningTarget, Object object, PythonAbstractNativeObject klass) {
+        assert EnsurePythonObjectNode.doesNotNeedPromotion(klass);
+        PythonContext context = PythonContext.get(null);
+        var callable = CApiContext.getNativeSymbol(null, NativeCAPISymbol.FUN_PY_TYPE_READY);
+        int res = ExternalFunctionInvoker.invokePY_TYPE_READY(null, C_API_TIMING, context.ensureNativeContext(),
+                        BoundaryCallData.getUncached(), context.getThreadState(context.getLanguage(inliningTarget)), callable,
+                        PythonToNativeInternalNode.executeUncached(klass, false));
+        if (res < 0) {
+            throw raiseSystemError(inliningTarget, klass);
+        }
+        TpSlots slots = GetTpSlotsNode.executeUncached(klass);
+        if (slots.tp_hash() == null) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.UNHASHABLE_TYPE_P, object);
+        }
+        return slots;
+    }
+
+    private static PException raiseSystemError(Node inliningTarget, Object klass) {
+        throw PRaiseNode.raiseStatic(inliningTarget, SystemError, ErrorMessages.LAZY_INITIALIZATION_FAILED, klass);
+    }
+
+    @InliningCutoff
+    private static PException raiseUnhashable(Node inliningTarget, Object object, PRaiseNode raiseNode) {
+        throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.UNHASHABLE_TYPE_P, object);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,35 +47,37 @@ import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibyteCodecU
 import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecModuleBuiltins.MBENC_FLUSH;
 import static com.oracle.graal.python.nodes.ErrorMessages.ARG_MUST_BE_A_SEQUENCE_OBJECT;
 import static com.oracle.graal.python.nodes.ErrorMessages.CODEC_IS_UNEXPECTED_TYPE;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
-import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
-import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
+import com.oracle.graal.python.lib.PySequenceCheckNode;
+import com.oracle.graal.python.lib.PySequenceGetItemNode;
+import com.oracle.graal.python.lib.PySequenceSizeNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.StringLiterals;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.graal.python.runtime.sequence.PSequence;
-import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -86,6 +88,8 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = MultibyteStreamWriter)
 public final class MultibyteStreamWriterBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = MultibyteStreamWriterBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return MultibyteStreamWriterBuiltinsFactory.getFactories();
@@ -93,30 +97,29 @@ public final class MultibyteStreamWriterBuiltins extends PythonBuiltins {
 
     private static final TruffleString WRITE = tsLiteral("write");
 
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     protected abstract static class NewNode extends PythonBuiltinNode {
 
-        private static final TruffleString CODEC = tsLiteral("codec");
-
         @Specialization
         static Object mbstreamwriterNew(VirtualFrame frame, Object type, Object stream, Object err,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode castToStringNode,
                         @Cached PyObjectGetAttr getAttr,
                         @Cached TruffleString.EqualNode isEqual,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) { // "O|s:StreamWriter"
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) { // "O|s:StreamWriter"
             TruffleString errors = null;
             if (err != PNone.NO_VALUE) {
                 errors = castToStringNode.execute(inliningTarget, err);
             }
 
-            MultibyteStreamWriterObject self = factory.createMultibyteStreamWriterObject(type);
+            MultibyteStreamWriterObject self = PFactory.createMultibyteStreamWriterObject(type, getInstanceShape.execute(type));
 
-            Object codec = getAttr.execute(frame, inliningTarget, type, CODEC);
+            Object codec = getAttr.execute(frame, inliningTarget, type, StringLiterals.T_CODEC);
             if (!(codec instanceof MultibyteCodecObject)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, CODEC_IS_UNEXPECTED_TYPE);
+                throw raiseNode.raise(inliningTarget, TypeError, CODEC_IS_UNEXPECTED_TYPE);
             }
 
             self.codec = ((MultibyteCodecObject) codec).codec;
@@ -129,7 +132,8 @@ public final class MultibyteStreamWriterBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self"})
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "MultibyteStreamWriter", minNumOfPositionalArgs = 1, parameterNames = {"$self"})
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonUnaryBuiltinNode {
 
@@ -146,12 +150,11 @@ public final class MultibyteStreamWriterBuiltins extends PythonBuiltins {
         // _multibytecodec_MultibyteStreamWriter_write
         @Specialization
         static Object write(VirtualFrame frame, MultibyteStreamWriterObject self, Object strobj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached MultibyteIncrementalEncoderBuiltins.EncodeStatefulNode encodeStatefulNode,
-                        @Cached PyObjectCallMethodObjArgs callMethod,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached PyObjectCallMethodObjArgs callMethod) {
             // mbstreamwriter_iwrite
-            Object str = encodeStatefulNode.execute(frame, self, strobj, 0, factory);
+            Object str = encodeStatefulNode.execute(frame, self, strobj, 0);
             callMethod.execute(frame, inliningTarget, self.stream, WRITE, str);
             return PNone.NONE;
         }
@@ -163,30 +166,27 @@ public final class MultibyteStreamWriterBuiltins extends PythonBuiltins {
 
         // _multibytecodec_MultibyteStreamWriter_writelines
         @Specialization
-        static Object writelines(VirtualFrame frame, MultibyteStreamWriterObject self, PSequence lines,
-                        @Bind("this") Node inliningTarget,
+        static Object doGeneric(VirtualFrame frame, MultibyteStreamWriterObject self, Object lines,
+                        @Bind Node inliningTarget,
+                        @Cached PySequenceCheckNode sequenceCheckNode,
+                        @Cached PySequenceSizeNode sizeNode,
+                        @Cached PySequenceGetItemNode getItemNode,
                         @Cached MultibyteIncrementalEncoderBuiltins.EncodeStatefulNode encodeStatefulNode,
-                        @Cached SequenceNodes.GetSequenceStorageNode getStorage,
-                        @Cached SequenceStorageNodes.GetItemNode getItem,
-                        @Cached PyObjectCallMethodObjArgs callMethod,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached PyObjectCallMethodObjArgs callMethod) {
 
-            SequenceStorage sq = getStorage.execute(inliningTarget, lines);
-            for (int i = 0; i < sq.length(); i++) {
+            if (!sequenceCheckNode.execute(inliningTarget, lines)) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ARG_MUST_BE_A_SEQUENCE_OBJECT);
+            }
+
+            int n = sizeNode.execute(frame, inliningTarget, lines);
+            for (int i = 0; i < n; i++) {
                 /* length can be changed even within this loop */
-                Object strobj = getItem.execute(sq, i);
+                Object strobj = getItemNode.execute(lines, i);
                 // mbstreamwriter_iwrite
-                Object str = encodeStatefulNode.execute(frame, self, strobj, 0, factory);
+                Object str = encodeStatefulNode.execute(frame, self, strobj, 0);
                 callMethod.execute(frame, inliningTarget, self.stream, WRITE, str);
             }
             return PNone.NONE;
-        }
-
-        // assuming !pySequenceCheck.execute(lines)
-        @Fallback
-        static Object writelines(@SuppressWarnings("unused") Object self, @SuppressWarnings("unused") Object lines,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ARG_MUST_BE_A_SEQUENCE_OBJECT);
         }
     }
 
@@ -197,21 +197,19 @@ public final class MultibyteStreamWriterBuiltins extends PythonBuiltins {
         // _multibytecodec_MultibyteStreamWriter_reset_impl
         @Specialization
         static Object reset(VirtualFrame frame, MultibyteStreamWriterObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Cached MultibyteCodecUtil.EncodeNode encodeNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached MultibyteCodecUtil.EncodeNode encodeNode) {
             if (self.pending == null) {
                 return PNone.NONE;
             }
             int datalen = codePointLengthNode.execute(self.pending, TS_ENCODING);
-            PBytes pwrt = encodeEmptyInput(datalen, MBENC_FLUSH | MBENC_RESET, factory);
+            PBytes pwrt = encodeEmptyInput(inliningTarget, datalen, MBENC_FLUSH | MBENC_RESET);
             if (pwrt == null) {
                 MultibyteEncodeBuffer buf = new MultibyteEncodeBuffer(self.pending);
                 pwrt = encodeNode.execute(frame, inliningTarget, self.codec, self.state, buf,
-                                self.errors, MBENC_FLUSH | MBENC_RESET,
-                                factory);
+                                self.errors, MBENC_FLUSH | MBENC_RESET);
             }
             /*
              * some pending buffer can be truncated when UnicodeEncodeError is raised on 'strict'

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,37 +54,33 @@ import static com.oracle.graal.python.nodes.StringLiterals.T_XMLCHARREFREPLACE;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.LookupError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.BackslashReplaceErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.IgnoreErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.NameReplaceErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.ReplaceErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.StrictErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.SurrogateEscapeErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.SurrogatePassErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlers.XmlCharRefReplaceErrorHandlerNode;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.BackslashReplaceErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.IgnoreErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.NameReplaceErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.ReplaceErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.StrictErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.SurrogateEscapeErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.SurrogatePassErrorHandlerNodeGen;
-import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.XmlCharRefReplaceErrorHandlerNodeGen;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.BackslashReplaceErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.IgnoreErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.NameReplaceErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.ReplaceErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.StrictErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.SurrogateEscapeErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.SurrogatePassErrorHandlerNodeFactory;
+import com.oracle.graal.python.builtins.modules.codecs.ErrorHandlersFactory.XmlCharRefReplaceErrorHandlerNodeFactory;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.lib.PyCallableCheckNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.statement.AbstractImportNode;
+import com.oracle.graal.python.runtime.ExecutionContext;
+import com.oracle.graal.python.runtime.IndirectCallData;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.util.PythonUtils;
-import com.oracle.graal.python.util.Supplier;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -94,22 +90,24 @@ public final class CodecsRegistry {
     // Equivalent of PyCodec_LookupError
     @GenerateInline
     @GenerateCached(false)
+    @GenerateUncached
     public abstract static class PyCodecLookupErrorNode extends Node {
 
-        public abstract Object execute(Node inliningTarget, TruffleString name);
+        public abstract Object execute(Frame frame, Node inliningTarget, TruffleString name);
 
         @Specialization
-        static Object lookup(Node inliningTarget, TruffleString name,
+        static Object lookup(VirtualFrame frame, Node inliningTarget, TruffleString name,
+                        @Cached CodecsRegistry.EnsureRegistryInitializedNode ensureRegistryInitializedNode,
                         @Cached InlinedConditionProfile resultProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             PythonContext context = PythonContext.get(inliningTarget);
-            ensureRegistryInitialized(context);
+            ensureRegistryInitializedNode.execute(frame, inliningTarget, context);
             if (name == null) {
                 name = T_STRICT;
             }
             Object result = getErrorHandler(context, name);
             if (resultProfile.profile(inliningTarget, result == null)) {
-                throw raiseNode.get(inliningTarget).raise(LookupError, UNKNOWN_ERROR_HANDLER, name);
+                throw raiseNode.raise(inliningTarget, LookupError, UNKNOWN_ERROR_HANDLER, name);
             }
             return result;
         }
@@ -120,42 +118,70 @@ public final class CodecsRegistry {
     @GenerateCached(false)
     public abstract static class PyCodecRegisterErrorNode extends Node {
 
-        public abstract void execute(Node inliningTarget, TruffleString name, Object handler);
+        public abstract void execute(VirtualFrame frame, Node inliningTarget, TruffleString name, Object handler);
 
-        @Specialization(guards = "callableCheckNode.execute(inliningTarget, handler)")
-        static void register(Node inliningTarget, TruffleString name, Object handler,
-                        @SuppressWarnings("unused") @Cached @Shared("callableCheck") PyCallableCheckNode callableCheckNode) {
+        @Specialization
+        static void register(VirtualFrame frame, Node inliningTarget, TruffleString name, Object handler,
+                        @Cached PyCallableCheckNode callableCheckNode,
+                        @Cached CodecsRegistry.EnsureRegistryInitializedNode ensureRegistryInitializedNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (!callableCheckNode.execute(inliningTarget, handler)) {
+                throw raiseNode.raise(inliningTarget, TypeError, HANDLER_MUST_BE_CALLABLE);
+            }
             PythonContext context = PythonContext.get(inliningTarget);
-            ensureRegistryInitialized(context);
+            ensureRegistryInitializedNode.execute(frame, inliningTarget, context);
             putErrorHandler(context, name, handler);
-        }
-
-        @Specialization(guards = "!callableCheckNode.execute(inliningTarget, handler)")
-        static void registerNoCallable(@SuppressWarnings("unused") Node inliningTarget, @SuppressWarnings("unused") TruffleString name, @SuppressWarnings("unused") Object handler,
-                        @SuppressWarnings("unused") @Cached @Shared("callableCheck") PyCallableCheckNode callableCheckNode,
-                        @Cached(inline = false) PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, HANDLER_MUST_BE_CALLABLE);
         }
     }
 
-    public static void ensureRegistryInitialized(PythonContext context) {
-        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.SLOWPATH_PROBABILITY, !context.isCodecsInitialized())) {
-            registerDefaultHandler(context, T_STRICT, StrictErrorHandlerNode.class, StrictErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_IGNORE, IgnoreErrorHandlerNode.class, IgnoreErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_REPLACE, ReplaceErrorHandlerNode.class, ReplaceErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_XMLCHARREFREPLACE, XmlCharRefReplaceErrorHandlerNode.class, XmlCharRefReplaceErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_BACKSLASHREPLACE, BackslashReplaceErrorHandlerNode.class, BackslashReplaceErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_NAMEREPLACE, NameReplaceErrorHandlerNode.class, NameReplaceErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_SURROGATEPASS, SurrogatePassErrorHandlerNode.class, SurrogatePassErrorHandlerNodeGen::create);
-            registerDefaultHandler(context, T_SURROGATEESCAPE, SurrogateEscapeErrorHandlerNode.class, SurrogateEscapeErrorHandlerNodeGen::create);
-            AbstractImportNode.importModule(T_ENCODINGS);
-            context.markCodecsInitialized();
+    @GenerateInline
+    @GenerateCached(value = false)
+    @GenerateUncached
+    public abstract static class EnsureRegistryInitializedNode extends Node {
+        public abstract void execute(Frame frame, Node inliningTarget, PythonContext context);
+
+        @Specialization(guards = "context.isCodecsInitialized()")
+        static void ensure(@SuppressWarnings("unused") PythonContext context) {
+            // nothing to do
+        }
+
+        @Specialization(guards = "!context.isCodecsInitialized()")
+        static void ensure(VirtualFrame frame, Node inliningTarget, PythonContext context,
+                        @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
+            Object savedState = ExecutionContext.BoundaryCallContext.enter(frame, language, context, boundaryCallData);
+            try {
+                doInitialize(context);
+            } finally {
+                ExecutionContext.BoundaryCallContext.exit(frame, language, context, savedState);
+            }
         }
     }
 
     @TruffleBoundary
-    private static void registerDefaultHandler(PythonContext context, TruffleString name, Class<?> nodeClass, Supplier<PythonBuiltinBaseNode> nodeSupplier) {
-        PBuiltinFunction f = PythonUtils.createMethod(context.getLanguage(), null, nodeClass, null, 0, nodeSupplier, name.toJavaStringUncached());
+    public static void initialize(PythonContext context) {
+        if (!context.isCodecsInitialized()) {
+            doInitialize(context);
+        }
+    }
+
+    @TruffleBoundary
+    private static void doInitialize(PythonContext context) {
+        registerDefaultHandler(context, T_STRICT, StrictErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_IGNORE, IgnoreErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_REPLACE, ReplaceErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_XMLCHARREFREPLACE, XmlCharRefReplaceErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_BACKSLASHREPLACE, BackslashReplaceErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_NAMEREPLACE, NameReplaceErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_SURROGATEPASS, SurrogatePassErrorHandlerNodeFactory.getInstance());
+        registerDefaultHandler(context, T_SURROGATEESCAPE, SurrogateEscapeErrorHandlerNodeFactory.getInstance());
+        AbstractImportNode.importModule(T_ENCODINGS);
+        context.markCodecsInitialized();
+    }
+
+    @TruffleBoundary
+    private static void registerDefaultHandler(PythonContext context, TruffleString name, NodeFactory<? extends PythonBuiltinBaseNode> nodeFactory) {
+        PBuiltinFunction f = PythonUtils.createMethod(context.getLanguage(), null, nodeFactory, null, 0);
         putErrorHandler(context, name, f);
     }
 

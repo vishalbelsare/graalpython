@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,17 +44,26 @@ import static com.oracle.graal.python.builtins.PythonBuiltinClassType.NotImpleme
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ENTER__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EXIT__;
+import static com.oracle.graal.python.runtime.PosixConstants.O_CREAT;
+import static com.oracle.graal.python.runtime.PosixConstants.O_EXCL;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.PythonOS;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.multiprocessing.SemLockBuiltinsClinicProviders.SemLockNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.thread.PThread;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
@@ -71,7 +80,7 @@ import com.oracle.graal.python.runtime.PosixSupport;
 import com.oracle.graal.python.runtime.PosixSupportLibrary;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.UnsupportedPosixFeatureException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -84,6 +93,9 @@ import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PSemLock)
 public class SemLockBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = SemLockBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return SemLockBuiltinsFactory.getFactories();
@@ -93,6 +105,55 @@ public class SemLockBuiltins extends PythonBuiltins {
     public void initialize(Python3Core core) {
         addBuiltinConstant("SEM_VALUE_MAX", PosixConstants.SEM_VALUE_MAX.defined ? PosixConstants.SEM_VALUE_MAX.getValueIfDefined() : Integer.MAX_VALUE);
         super.initialize(core);
+    }
+
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "SemLock", parameterNames = {"$cls", "kind", "value", "maxvalue", "name", "unlink"})
+    @ArgumentClinic(name = "kind", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "value", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "maxvalue", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "name", conversion = ArgumentClinic.ClinicConversion.TString)
+    @ArgumentClinic(name = "unlink", conversion = ArgumentClinic.ClinicConversion.IntToBoolean)
+    @GenerateNodeFactory
+    abstract static class SemLockNode extends PythonClinicBuiltinNode {
+        @Specialization
+        static PSemLock construct(VirtualFrame frame, Object cls, int kind, int value, int maxValue, TruffleString name, boolean unlink,
+                        @Bind Node inliningTarget,
+                        @Bind("getPosixSupport()") PosixSupport posixSupport,
+                        @CachedLibrary("posixSupport") PosixSupportLibrary posixLib,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (kind != PSemLock.RECURSIVE_MUTEX && kind != PSemLock.SEMAPHORE) {
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.UNRECOGNIZED_KIND);
+            }
+            Object posixName = posixLib.createCStringFromString(posixSupport, name);
+            long handle;
+            try {
+                handle = posixLib.semOpen(posixSupport, posixName, O_CREAT.value | O_EXCL.value, 0600, value);
+            } catch (PosixException e) {
+                throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
+            }
+            if (unlink) {
+                try {
+                    posixLib.semUnlink(posixSupport, posixName);
+                } catch (PosixException e) {
+                    try {
+                        posixLib.semClose(posixSupport, handle);
+                    } catch (PosixException ex) {
+                        // Ignore, we're already on an error path
+                    }
+                    throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
+                }
+            }
+            TruffleString storedName = PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32 ? null : name;
+            return PFactory.createSemLock(cls, getInstanceShape.execute(cls), handle, kind, maxValue, storedName);
+        }
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return SemLockNodeClinicProviderGen.INSTANCE;
+        }
     }
 
     @Builtin(name = "handle", minNumOfPositionalArgs = 1, isGetter = true)
@@ -118,7 +179,8 @@ public class SemLockBuiltins extends PythonBuiltins {
     abstract static class NameNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PSemLock self) {
-            return self.getName();
+            TruffleString name = self.getName();
+            return name == null ? PNone.NONE : name;
         }
     }
 
@@ -137,7 +199,7 @@ public class SemLockBuiltins extends PythonBuiltins {
     abstract static class AcquireNode extends PythonTernaryClinicBuiltinNode {
         @Specialization
         static boolean acquire(VirtualFrame frame, PSemLock self, boolean blocking, Object timeoutObj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Bind("getPosixSupport()") PosixSupport posixSupport,
                         @CachedLibrary("posixSupport") PosixSupportLibrary posixLib,
                         @Cached PyFloatAsDoubleNode asDoubleNode,
@@ -184,7 +246,7 @@ public class SemLockBuiltins extends PythonBuiltins {
             }
             if (acquired) {
                 self.increaseCount();
-                self.setLastThreadId(PThread.getThreadId(Thread.currentThread()));
+                self.setLastThreadId(Thread.currentThread().threadId());
                 return true;
             } else {
                 return false;
@@ -202,14 +264,14 @@ public class SemLockBuiltins extends PythonBuiltins {
     abstract static class ReleaseNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PNone release(VirtualFrame frame, PSemLock self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Bind("getPosixSupport()") PosixSupport posixSupport,
                         @CachedLibrary("posixSupport") PosixSupportLibrary posixLib,
-                        @Cached PRaiseNode.Lazy raiseNode,
+                        @Cached PRaiseNode raiseNode,
                         @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
             if (self.getKind() == PSemLock.RECURSIVE_MUTEX) {
                 if (!self.isMine()) {
-                    throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.AssertionError, ErrorMessages.ATTEMP_TO_RELEASE_RECURSIVE_LOCK);
+                    throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.AssertionError, ErrorMessages.ATTEMP_TO_RELEASE_RECURSIVE_LOCK);
                 }
                 if (self.getCount() > 1) {
                     self.decreaseCount();
@@ -221,7 +283,7 @@ public class SemLockBuiltins extends PythonBuiltins {
                     try {
                         sval = posixLib.semGetValue(posixSupport, self.getHandle());
                         if (sval >= self.getMaxValue()) {
-                            throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.SEMAPHORE_RELEASED_TOO_MANY_TIMES);
+                            throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.SEMAPHORE_RELEASED_TOO_MANY_TIMES);
                         }
                     } catch (UnsupportedPosixFeatureException e) {
                         /* We will only check properly the maxvalue == 1 case */
@@ -229,7 +291,7 @@ public class SemLockBuiltins extends PythonBuiltins {
                             if (posixLib.semTryWait(posixSupport, self.getHandle())) {
                                 /* it was not locked so undo wait and raise */
                                 posixLib.semPost(posixSupport, self.getHandle());
-                                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.SEMAPHORE_RELEASED_TOO_MANY_TIMES);
+                                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.SEMAPHORE_RELEASED_TOO_MANY_TIMES);
                             }
                         }
                     }
@@ -290,11 +352,11 @@ public class SemLockBuiltins extends PythonBuiltins {
     abstract static class GetValueNode extends PythonUnaryBuiltinNode {
         @Specialization
         int get(VirtualFrame frame, PSemLock self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Bind("getPosixSupport()") PosixSupport posixSupport,
                         @CachedLibrary("posixSupport") PosixSupportLibrary posixLib,
                         @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             try {
                 int sval = posixLib.semGetValue(posixSupport, self.getHandle());
                 /*
@@ -305,11 +367,11 @@ public class SemLockBuiltins extends PythonBuiltins {
                     sval = 0;
                 }
                 return sval;
-            } catch (PosixException e) {
-                throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
             } catch (UnsupportedPosixFeatureException e) {
                 // Not available on Darwin
-                throw raiseNode.get(inliningTarget).raise(NotImplementedError);
+                throw raiseNode.raise(inliningTarget, NotImplementedError);
+            } catch (PosixException e) {
+                throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
             }
         }
     }
@@ -319,7 +381,7 @@ public class SemLockBuiltins extends PythonBuiltins {
     abstract static class IsZeroNode extends PythonUnaryBuiltinNode {
         @Specialization
         static boolean get(VirtualFrame frame, PSemLock self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Bind("getPosixSupport()") PosixSupport posixSupport,
                         @CachedLibrary("posixSupport") PosixSupportLibrary posixLib,
                         @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
@@ -354,24 +416,27 @@ public class SemLockBuiltins extends PythonBuiltins {
     @ArgumentClinic(name = "handle", conversion = ArgumentClinic.ClinicConversion.Long)
     @ArgumentClinic(name = "kind", conversion = ArgumentClinic.ClinicConversion.Int)
     @ArgumentClinic(name = "maxvalue", conversion = ArgumentClinic.ClinicConversion.Int)
-    @ArgumentClinic(name = "name", conversion = ArgumentClinic.ClinicConversion.TString)
     @GenerateNodeFactory
     abstract static class RebuildNode extends PythonClinicBuiltinNode {
         @Specialization
-        static Object rebuild(VirtualFrame frame, Object cls, @SuppressWarnings("unused") long origHandle, int kind, int maxValue, TruffleString name,
-                        @Bind("this") Node inliningTarget,
+        static Object rebuild(VirtualFrame frame, Object cls, long origHandle, int kind, int maxValue, Object name,
+                        @Bind Node inliningTarget,
                         @Bind("getPosixSupport()") PosixSupport posixSupport,
                         @CachedLibrary("posixSupport") PosixSupportLibrary posixLib,
-                        @Cached PythonObjectFactory factory,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
                         @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
-            Object posixName = posixLib.createPathFromString(posixSupport, name);
+            if (PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32) {
+                return PFactory.createSemLock(cls, getInstanceShape.execute(cls), origHandle, kind, maxValue, null);
+            }
+            TruffleString posixNameString = (TruffleString) name;
+            Object posixName = posixLib.createCStringFromString(posixSupport, posixNameString);
             long handle;
             try {
                 handle = posixLib.semOpen(posixSupport, posixName);
             } catch (PosixException e) {
                 throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
             }
-            return factory.createSemLock(cls, handle, kind, maxValue, name);
+            return PFactory.createSemLock(cls, getInstanceShape.execute(cls), handle, kind, maxValue, posixNameString);
         }
 
         @Override

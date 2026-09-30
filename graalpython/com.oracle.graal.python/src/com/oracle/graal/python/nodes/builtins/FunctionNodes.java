@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,22 +44,18 @@ import com.oracle.graal.python.builtins.objects.code.CodeNodes;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.builtins.objects.function.PFunction;
-import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.method.PMethod;
 import com.oracle.graal.python.builtins.objects.method.PMethodBase;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.builtins.FunctionNodesFactory.GetCallTargetNodeGen;
 import com.oracle.graal.python.nodes.builtins.FunctionNodesFactory.GetSignatureNodeGen;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
@@ -125,66 +121,6 @@ public abstract class FunctionNodes {
         @Specialization
         static Object[] doBuiltinMethod(PBuiltinMethod builtinMethod) {
             return builtinMethod.getBuiltinFunction().getDefaults();
-        }
-
-    }
-
-    @ImportStatic(PGuards.class)
-    @GenerateUncached
-    @GenerateInline
-    @GenerateCached(false)
-    public abstract static class GetKeywordDefaultsNode extends PNodeWithContext {
-
-        public abstract PKeyword[] execute(Node inliningTarget, Object function);
-
-        public abstract PKeyword[] execute(Node inliningTarget, PMethodBase method);
-
-        /**
-         * Fast-path if method is a partial evaluation constant.
-         */
-        public static PKeyword[] getMethodKeywords(PMethodBase method) {
-            CompilerAsserts.partialEvaluationConstant(method);
-            return getFunctionKeywords(method.getFunction());
-        }
-
-        /**
-         * Fast-path if the function is a partial evaluation constant.
-         */
-        public static PKeyword[] getFunctionKeywords(Object fun) {
-            CompilerAsserts.partialEvaluationConstant(fun);
-            if (fun instanceof PFunction f) {
-                return f.getKwDefaults();
-            } else if (fun instanceof PBuiltinFunction f) {
-                return f.getKwDefaults();
-            }
-            throw CompilerDirectives.shouldNotReachHere();
-        }
-
-        @Specialization
-        static PKeyword[] doFunction(PFunction function) {
-            return function.getKwDefaults();
-        }
-
-        @Specialization
-        static PKeyword[] doBuiltinFunction(PBuiltinFunction builtinFunction) {
-            return builtinFunction.getKwDefaults();
-        }
-
-        @Specialization(guards = "isPFunction(function)")
-        static PKeyword[] doMethod(@SuppressWarnings("unused") PMethod method,
-                        @Bind("method.getFunction()") Object function) {
-            return ((PFunction) function).getKwDefaults();
-        }
-
-        @Specialization(guards = "isPBuiltinFunction(method.getFunction())")
-        static PKeyword[] doMethodBuiltin(@SuppressWarnings("unused") PMethod method,
-                        @Bind("method.getFunction()") Object function) {
-            return ((PBuiltinFunction) function).getKwDefaults();
-        }
-
-        @Specialization
-        static PKeyword[] doBuiltinMethod(PBuiltinMethod builtinMethod) {
-            return builtinMethod.getBuiltinFunction().getKwDefaults();
         }
 
     }
@@ -276,56 +212,6 @@ public abstract class FunctionNodes {
 
         public static GetSignatureNode getUncached() {
             return GetSignatureNodeGen.getUncached();
-        }
-    }
-
-    @ImportStatic(PGuards.class)
-    @GenerateUncached
-    @GenerateInline(false) // used lazily
-    public abstract static class GetCallTargetNode extends PNodeWithContext {
-
-        public abstract RootCallTarget execute(Object function);
-
-        @Specialization
-        static RootCallTarget doFunction(PFunction function,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("getCode") @Cached GetFunctionCodeNode getFunctionCodeNode,
-                        @Shared("getCt") @Cached CodeNodes.GetCodeCallTargetNode getCt) {
-            return getCt.execute(inliningTarget, getFunctionCodeNode.execute(inliningTarget, function));
-        }
-
-        @Specialization
-        static RootCallTarget doBuiltinFunction(PBuiltinFunction builtinFunction) {
-            return builtinFunction.getCallTarget();
-        }
-
-        @Specialization(guards = "isPFunction(function)")
-        static RootCallTarget doMethod(@SuppressWarnings("unused") PMethod method,
-                        @Bind("this") Node inliningTarget,
-                        @Bind("method.getFunction()") Object function,
-                        @Shared("getCode") @Cached GetFunctionCodeNode getFunctionCodeNode,
-                        @Shared("getCt") @Cached CodeNodes.GetCodeCallTargetNode getCt) {
-            return getCt.execute(inliningTarget, getFunctionCodeNode.execute(inliningTarget, (PFunction) function));
-        }
-
-        @Specialization(guards = "isPBuiltinFunction(method.getFunction())")
-        static RootCallTarget doMethod(@SuppressWarnings("unused") PMethod method,
-                        @Bind("method.getFunction()") Object function) {
-            return ((PBuiltinFunction) function).getCallTarget();
-        }
-
-        @Specialization
-        static RootCallTarget doBuiltinMethod(PBuiltinMethod builtinMethod) {
-            return builtinMethod.getBuiltinFunction().getCallTarget();
-        }
-
-        @Fallback
-        static RootCallTarget fallback(@SuppressWarnings("unused") Object callable) {
-            return null;
-        }
-
-        public static GetCallTargetNode getUncached() {
-            return GetCallTargetNodeGen.getUncached();
         }
     }
 }

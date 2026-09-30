@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,73 +42,50 @@ package com.oracle.graal.python.nodes.call.special;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.function.BuiltinMethodDescriptor.UnaryBuiltinDescriptor;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.attributes.LookupAttributeInMRONode;
+import com.oracle.graal.python.nodes.expression.UnaryOpNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.PythonOptions;
-import com.oracle.graal.python.util.Supplier;
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
-import com.oracle.truffle.api.dsl.ReportPolymorphism.Megamorphic;
+import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @ImportStatic(PythonOptions.class)
-public abstract class LookupAndCallUnaryNode extends Node {
-
-    public abstract static class NoAttributeHandler extends PNodeWithContext {
-        public abstract Object execute(Object receiver);
-    }
-
+public abstract class LookupAndCallUnaryNode extends UnaryOpNode {
     protected final TruffleString name;
-    private final SpecialMethodSlot slot;
-    protected final Supplier<NoAttributeHandler> handlerFactory;
-    @Child private NoAttributeHandler handler;
 
-    public abstract Object executeObject(VirtualFrame frame, Object receiver);
+    public abstract Object executeObject(VirtualFrame frame, Object receiver) throws SpecialMethodNotFound;
+
+    @Override
+    public Object execute(VirtualFrame frame, Object receiver) {
+        return executeObject(frame, receiver);
+    }
 
     @NeverDefault
     public static LookupAndCallUnaryNode create(TruffleString name) {
-        return LookupAndCallUnaryNodeGen.create(name, null);
+        return LookupAndCallUnaryNodeGen.create(name);
     }
 
-    @NeverDefault
-    public static LookupAndCallUnaryNode create(SpecialMethodSlot slot) {
-        return LookupAndCallUnaryNodeGen.create(slot, null);
-    }
-
-    @NeverDefault
-    public static LookupAndCallUnaryNode create(TruffleString name, Supplier<NoAttributeHandler> handlerFactory) {
-        return LookupAndCallUnaryNodeGen.create(name, handlerFactory);
-    }
-
-    @NeverDefault
-    public static LookupAndCallUnaryNode create(SpecialMethodSlot slot, Supplier<NoAttributeHandler> handlerFactory) {
-        return LookupAndCallUnaryNodeGen.create(slot, handlerFactory);
-    }
-
-    LookupAndCallUnaryNode(SpecialMethodSlot slot, Supplier<NoAttributeHandler> handlerFactory) {
-        this.slot = slot;
-        this.name = slot.getName();
-        this.handlerFactory = handlerFactory;
-    }
-
-    LookupAndCallUnaryNode(TruffleString name, Supplier<NoAttributeHandler> handlerFactory) {
-        this.slot = null;
+    LookupAndCallUnaryNode(TruffleString name) {
         this.name = name;
-        this.handlerFactory = handlerFactory;
     }
 
     public TruffleString getMethodName() {
@@ -116,22 +93,23 @@ public abstract class LookupAndCallUnaryNode extends Node {
     }
 
     protected final PythonUnaryBuiltinNode getUnaryBuiltin(PythonBuiltinClassType clazz) {
-        if (slot != null) {
-            Object attribute = slot.getValue(clazz);
-            if (attribute instanceof UnaryBuiltinDescriptor) {
-                return ((UnaryBuiltinDescriptor) attribute).createNode();
-            }
-            // If the slot does not contain builtin, full lookup wouldn't find a builtin either
-            return null;
-        }
+        CompilerAsserts.neverPartOfCompilation();
         Object attribute = LookupAttributeInMRONode.Dynamic.getUncached().execute(clazz, name);
         if (attribute instanceof PBuiltinFunction) {
             PBuiltinFunction builtinFunction = (PBuiltinFunction) attribute;
-            if (PythonUnaryBuiltinNode.class.isAssignableFrom(builtinFunction.getBuiltinNodeFactory().getNodeClass())) {
-                return (PythonUnaryBuiltinNode) builtinFunction.getBuiltinNodeFactory().createNode();
+            NodeFactory<? extends PythonBuiltinBaseNode> builtinNodeFactory = builtinFunction.getBuiltinNodeFactory();
+            if (builtinNodeFactory != null && PythonUnaryBuiltinNode.class.isAssignableFrom(builtinNodeFactory.getNodeClass())) {
+                PythonUnaryBuiltinNode builtinNode = (PythonUnaryBuiltinNode) builtinNodeFactory.createNode();
+                if (!callerExceedsMaxSize(builtinNode)) {
+                    return builtinNode;
+                }
             }
         }
         return null;
+    }
+
+    private <T extends PythonBuiltinBaseNode> boolean callerExceedsMaxSize(T builtinNode) {
+        return BuiltinInliningPolicy.exceedsCallerSize(BuiltinInliningPolicy.checkCallerSize(this, builtinNode));
     }
 
     protected static PythonBuiltinClassType getBuiltinClass(Node inliningTarget, Object receiver, GetClassNode getClassNode) {
@@ -145,73 +123,42 @@ public abstract class LookupAndCallUnaryNode extends Node {
 
     // Object
 
-    @Specialization(guards = {"clazz != null", "function != null", "isClazz(inliningTarget, clazz, receiver, getClassNode)"}, limit = "getCallSiteInlineCacheMaxDepth()")
+    @Specialization(guards = {"clazz != null", "function != null", "isClazz(inliningTarget, clazz, receiver, getClassNode)"}, limit = "1")
     static Object callObjectBuiltin(VirtualFrame frame, Object receiver,
-                    @SuppressWarnings("unused") @Bind("this") Node inliningTarget,
+                    @SuppressWarnings("unused") @Bind Node inliningTarget,
                     @SuppressWarnings("unused") @Shared @Cached GetClassNode getClassNode,
-                    @SuppressWarnings("unused") @Cached("getBuiltinClass(this, receiver, getClassNode)") PythonBuiltinClassType clazz,
+                    @SuppressWarnings("unused") @Cached("getBuiltinClass($node, receiver, getClassNode)") PythonBuiltinClassType clazz,
                     @Cached("getUnaryBuiltin(clazz)") PythonUnaryBuiltinNode function) {
         return function.execute(frame, receiver);
     }
 
-    @Specialization(guards = "getObjectClass(receiver) == cachedClass", limit = "3")
-    Object callObjectGeneric(VirtualFrame frame, Object receiver,
-                    @Bind("this") Node inliningTarget,
-                    @SuppressWarnings("unused") @Cached("receiver.getClass()") Class<?> cachedClass,
-                    @Shared @Cached GetClassNode getClassNode,
-                    @Shared @Cached("createLookup()") LookupSpecialBaseNode getattr,
-                    @Shared @Cached CallUnaryMethodNode dispatchNode) {
-        return doCallObject(frame, inliningTarget, receiver, getClassNode, getattr, dispatchNode);
-    }
-
-    @Specialization(replaces = "callObjectGeneric")
-    @Megamorphic
+    @Specialization(replaces = "callObjectBuiltin")
+    @InliningCutoff
     @SuppressWarnings("truffle-static-method")
-    Object callObjectMegamorphic(VirtualFrame frame, Object receiver,
-                    @Bind("this") Node inliningTarget,
-                    @Shared @Cached GetClassNode getClassNode,
-                    @Shared @Cached("createLookup()") LookupSpecialBaseNode getattr,
-                    @Shared @Cached CallUnaryMethodNode dispatchNode) {
-        return doCallObject(frame, inliningTarget, receiver, getClassNode, getattr, dispatchNode);
-    }
-
-    protected Class<?> getObjectClass(Object object) {
-        return object.getClass();
-    }
-
-    private Object doCallObject(VirtualFrame frame, Node inliningTarget, Object receiver, GetClassNode getClassNode, LookupSpecialBaseNode getattr, CallUnaryMethodNode dispatchNode) {
-        Object attr = getattr.execute(frame, getClassNode.execute(inliningTarget, receiver), receiver);
+    Object callObject(VirtualFrame frame, Object receiver,
+                    @Bind Node inliningTarget,
+                    @Cached InlinedBranchProfile notFoundProfile,
+                    @Exclusive @Cached GetClassNode getClassNode,
+                    @Cached("create(name)") LookupSpecialMethodNode getattr,
+                    @Cached CallUnaryMethodNode dispatchNode) {
+        Object receiverClass = getClassNode.execute(inliningTarget, receiver);
+        Object attr = getattr.execute(frame, receiverClass, receiver);
         if (attr == PNone.NO_VALUE) {
-            if (handlerFactory != null) {
-                if (handler == null) {
-                    CompilerDirectives.transferToInterpreterAndInvalidate();
-                    handler = insert(handlerFactory.get());
-                }
-                return handler.execute(receiver);
-            }
-            return PNone.NO_VALUE;
-        } else {
-            return dispatchNode.executeObject(frame, attr, receiver);
+            notFoundProfile.enter(inliningTarget);
+            throw SpecialMethodNotFound.INSTANCE;
         }
-    }
-
-    @NeverDefault
-    protected final LookupSpecialBaseNode createLookup() {
-        if (slot != null) {
-            return LookupSpecialMethodSlotNode.create(slot);
-        }
-        return LookupSpecialMethodNode.create(name);
+        return dispatchNode.executeObject(frame, attr, receiver);
     }
 
     @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 20
+    @GenerateInline(false)       // footprint reduction 36 -> 20
     public abstract static class LookupAndCallUnaryDynamicNode extends PNodeWithContext {
 
         public abstract Object executeObject(Object receiver, TruffleString name);
 
         @Specialization
         static Object doObject(Object receiver, TruffleString name,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached LookupSpecialMethodNode.Dynamic getattr,
                         @Cached CallUnaryMethodNode dispatchNode,

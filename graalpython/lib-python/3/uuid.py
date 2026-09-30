@@ -47,19 +47,22 @@ Typical usage:
 import os
 import sys
 
-from enum import Enum
+from enum import Enum, _simple_enum
 
 
 __author__ = 'Ka-Ping Yee <ping@zesty.ca>'
 
 # The recognized platforms - known behaviors
-if sys.platform in ('win32', 'darwin'):
+if sys.platform in {'win32', 'darwin', 'emscripten', 'wasi'}:
     _AIX = _LINUX = False
+elif sys.platform == 'linux':
+    _LINUX = True
+    _AIX = False
 else:
     import platform
     _platform_system = platform.system()
     _AIX     = _platform_system == 'AIX'
-    _LINUX   = _platform_system == 'Linux'
+    _LINUX   = _platform_system in ('Linux', 'Android')
 
 _MAC_DELIM = b':'
 _MAC_OMITS_LEADING_ZEROES = False
@@ -75,7 +78,8 @@ int_ = int      # The built-in int type
 bytes_ = bytes  # The built-in bytes type
 
 
-class SafeUUID(Enum):
+@_simple_enum(Enum)
+class SafeUUID:
     safe = 0
     unsafe = -1
     unknown = None
@@ -185,7 +189,7 @@ class UUID:
             if len(bytes) != 16:
                 raise ValueError('bytes is not a 16-char string')
             assert isinstance(bytes, bytes_), repr(bytes)
-            int = int_.from_bytes(bytes, byteorder='big')
+            int = int_.from_bytes(bytes)  # big endian
         if fields is not None:
             if len(fields) != 6:
                 raise ValueError('fields is not a 6-tuple')
@@ -283,7 +287,7 @@ class UUID:
 
     @property
     def bytes(self):
-        return self.int.to_bytes(16, 'big')
+        return self.int.to_bytes(16)  # big endian
 
     @property
     def bytes_le(self):
@@ -400,7 +404,7 @@ def _get_command_stdout(command, *args):
 # over locally administered ones since the former are globally unique, but
 # we'll return the first of the latter found if that's all the machine has.
 #
-# See https://en.wikipedia.org/wiki/MAC_address#Universal_vs._local
+# See https://en.wikipedia.org/wiki/MAC_address#Universal_vs._local_(U/L_bit)
 
 def _is_universal(mac):
     return not (mac & (1 << 41))
@@ -528,6 +532,8 @@ def _ip_getnode():
 def _arp_getnode():
     """Get the hardware address on Unix by running arp."""
     import os, socket
+    if not hasattr(socket, "gethostbyname"):
+        return None
     try:
         ip_addr = socket.gethostbyname(socket.gethostname())
     except OSError:
@@ -561,60 +567,48 @@ def _netstat_getnode():
     # This works on AIX and might work on Tru64 UNIX.
     return _find_mac_under_heading('netstat', '-ian', b'Address')
 
-def _ipconfig_getnode():
-    """[DEPRECATED] Get the hardware address on Windows."""
-    # bpo-40501: UuidCreateSequential() is now the only supported approach
-    return _windll_getnode()
-
-def _netbios_getnode():
-    """[DEPRECATED] Get the hardware address on Windows."""
-    # bpo-40501: UuidCreateSequential() is now the only supported approach
-    return _windll_getnode()
-
 
 # Import optional C extension at toplevel, to help disabling it when testing
 try:
     import _uuid
     _generate_time_safe = getattr(_uuid, "generate_time_safe", None)
+    _has_stable_extractable_node = getattr(_uuid, "has_stable_extractable_node", False)
     _UuidCreate = getattr(_uuid, "UuidCreate", None)
-    _has_uuid_generate_time_safe = _uuid.has_uuid_generate_time_safe
 except ImportError:
     _uuid = None
     _generate_time_safe = None
+    _has_stable_extractable_node = False
     _UuidCreate = None
-    _has_uuid_generate_time_safe = None
-
-
-def _load_system_functions():
-    """[DEPRECATED] Platform-specific functions loaded at import time"""
 
 
 def _unix_getnode():
     """Get the hardware address on Unix using the _uuid extension module."""
-    if _generate_time_safe:
+    if _generate_time_safe and _has_stable_extractable_node:
         uuid_time, _ = _generate_time_safe()
         return UUID(bytes=uuid_time).node
 
 def _windll_getnode():
     """Get the hardware address on Windows using the _uuid extension module."""
-    if _UuidCreate:
+    if _UuidCreate and _has_stable_extractable_node:
         uuid_bytes = _UuidCreate()
         return UUID(bytes_le=uuid_bytes).node
 
 def _random_getnode():
     """Get a random node ID."""
-    # RFC 4122, $4.1.6 says "For systems with no IEEE address, a randomly or
-    # pseudo-randomly generated value may be used; see Section 4.5.  The
-    # multicast bit must be set in such addresses, in order that they will
-    # never conflict with addresses obtained from network cards."
+    # RFC 9562, §6.10-3 says that
+    #
+    #   Implementations MAY elect to obtain a 48-bit cryptographic-quality
+    #   random number as per Section 6.9 to use as the Node ID. [...] [and]
+    #   implementations MUST set the least significant bit of the first octet
+    #   of the Node ID to 1. This bit is the unicast or multicast bit, which
+    #   will never be set in IEEE 802 addresses obtained from network cards.
     #
     # The "multicast bit" of a MAC address is defined to be "the least
     # significant bit of the first octet".  This works out to be the 41st bit
     # counting from 1 being the least significant bit, or 1<<40.
     #
-    # See https://en.wikipedia.org/wiki/MAC_address#Unicast_vs._multicast
-    import random
-    return random.getrandbits(48) | (1 << 40)
+    # See https://en.wikipedia.org/w/index.php?title=MAC_address&oldid=1128764812#Universal_vs._local_(U/L_bit)
+    return int.from_bytes(os.urandom(6)) | (1 << 40)
 
 
 # _OS_GETTERS, when known, are targeted for a specific OS or platform.
@@ -708,9 +702,11 @@ def uuid1(node=None, clock_seq=None):
 
 def uuid3(namespace, name):
     """Generate a UUID from the MD5 hash of a namespace UUID and a name."""
+    if isinstance(name, str):
+        name = bytes(name, "utf-8")
     from hashlib import md5
     digest = md5(
-        namespace.bytes + bytes(name, "utf-8"),
+        namespace.bytes + name,
         usedforsecurity=False
     ).digest()
     return UUID(bytes=digest[:16], version=3)
@@ -721,9 +717,61 @@ def uuid4():
 
 def uuid5(namespace, name):
     """Generate a UUID from the SHA-1 hash of a namespace UUID and a name."""
+    if isinstance(name, str):
+        name = bytes(name, "utf-8")
     from hashlib import sha1
-    hash = sha1(namespace.bytes + bytes(name, "utf-8")).digest()
+    hash = sha1(namespace.bytes + name).digest()
     return UUID(bytes=hash[:16], version=5)
+
+
+def main():
+    """Run the uuid command line interface."""
+    uuid_funcs = {
+        "uuid1": uuid1,
+        "uuid3": uuid3,
+        "uuid4": uuid4,
+        "uuid5": uuid5
+    }
+    uuid_namespace_funcs = ("uuid3", "uuid5")
+    namespaces = {
+        "@dns": NAMESPACE_DNS,
+        "@url": NAMESPACE_URL,
+        "@oid": NAMESPACE_OID,
+        "@x500": NAMESPACE_X500
+    }
+
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Generates a uuid using the selected uuid function.")
+    parser.add_argument("-u", "--uuid", choices=uuid_funcs.keys(), default="uuid4",
+                        help="The function to use to generate the uuid. "
+                        "By default uuid4 function is used.")
+    parser.add_argument("-n", "--namespace",
+                        help="The namespace is a UUID, or '@ns' where 'ns' is a "
+                        "well-known predefined UUID addressed by namespace name. "
+                        "Such as @dns, @url, @oid, and @x500. "
+                        "Only required for uuid3/uuid5 functions.")
+    parser.add_argument("-N", "--name",
+                        help="The name used as part of generating the uuid. "
+                        "Only required for uuid3/uuid5 functions.")
+
+    args = parser.parse_args()
+    uuid_func = uuid_funcs[args.uuid]
+    namespace = args.namespace
+    name = args.name
+
+    if args.uuid in uuid_namespace_funcs:
+        if not namespace or not name:
+            parser.error(
+                "Incorrect number of arguments. "
+                f"{args.uuid} requires a namespace and a name. "
+                "Run 'python -m uuid -h' for more information."
+            )
+        namespace = namespaces[namespace] if namespace in namespaces else UUID(namespace)
+        print(uuid_func(namespace, name))
+    else:
+        print(uuid_func())
+
 
 # The following standard UUIDs are for use with uuid3() or uuid5().
 
@@ -731,3 +779,6 @@ NAMESPACE_DNS = UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
 NAMESPACE_URL = UUID('6ba7b811-9dad-11d1-80b4-00c04fd430c8')
 NAMESPACE_OID = UUID('6ba7b812-9dad-11d1-80b4-00c04fd430c8')
 NAMESPACE_X500 = UUID('6ba7b814-9dad-11d1-80b4-00c04fd430c8')
+
+if __name__ == "__main__":
+    main()

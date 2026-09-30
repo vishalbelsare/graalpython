@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -55,6 +55,7 @@ import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 
 public class SSLCipherSelector {
@@ -71,8 +72,20 @@ public class SSLCipherSelector {
         selectCiphersFromList(node, cipherList, selected, deleted);
         // The call fails when no <= TLSv1.2 ciphersuites get selected, regardless of TLSv1.3
         // ciphersuites
-        if (selected.size() == 0) {
-            throw PConstructAndRaiseNode.raiseUncachedSSLError(ErrorMessages.NO_CIPHER_CAN_BE_SELECTED);
+        if (selected.isEmpty()) {
+            EncapsulatingNodeReference nodeRef = null;
+            Node prev = null;
+            if (node != null && node.isAdoptable()) {
+                nodeRef = EncapsulatingNodeReference.getCurrent();
+                prev = nodeRef.set(node);
+            }
+            try {
+                throw PConstructAndRaiseNode.raiseUncachedSSLError(ErrorMessages.NO_CIPHER_CAN_BE_SELECTED);
+            } finally {
+                if (nodeRef != null) {
+                    nodeRef.set(prev);
+                }
+            }
         }
         // The API that CPython uses is meant only for setting <= TLSv1.2 ciphersuites, but it
         // also unconditionally adds a hardcoded list of TLSv1.3 ciphersuites to the beginning
@@ -111,9 +124,21 @@ public class SSLCipherSelector {
             if (cipherString.startsWith("@STRENGTH")) {
                 selected.sort(Comparator.comparingInt(SSLCipher::getStrengthBits).reversed());
             } else if (cipherString.startsWith("@SECLEVEL=")) {
-                throw PRaiseNode.raiseUncached(node, NotImplementedError, toTruffleStringUncached("@SECLEVEL not implemented"));
+                handleSecurityLevel(node, cipherString);
             } else {
-                throw PConstructAndRaiseNode.raiseUncachedSSLError(ErrorMessages.NO_CIPHER_CAN_BE_SELECTED);
+                EncapsulatingNodeReference nodeRef = null;
+                Node prev = null;
+                if (node != null && node.isAdoptable()) {
+                    nodeRef = EncapsulatingNodeReference.getCurrent();
+                    prev = nodeRef.set(node);
+                }
+                try {
+                    throw PConstructAndRaiseNode.raiseUncachedSSLError(ErrorMessages.NO_CIPHER_CAN_BE_SELECTED);
+                } finally {
+                    if (nodeRef != null) {
+                        nodeRef.set(prev);
+                    }
+                }
             }
         } else if (cipherString.equals("DEFAULT")) {
             selectCiphersFromList(node, "ALL:!COMPLEMENTOFDEFAULT:!eNULL", selected, deleted);
@@ -127,13 +152,41 @@ public class SSLCipherSelector {
         }
     }
 
+    private static void handleSecurityLevel(Node node, String cipherString) {
+        String levelString = cipherString.substring("@SECLEVEL=".length());
+        if ("1".equals(levelString)) {
+            return;
+        }
+        if (!isDecimalDigits(levelString)) {
+            throw PRaiseNode.raiseStatic(node,
+                            NotImplementedError,
+                            toTruffleStringUncached("Unsupported OpenSSL cipher string directive: " + cipherString));
+        }
+        throw PRaiseNode.raiseStatic(node,
+                        NotImplementedError,
+                        toTruffleStringUncached("Unsupported OpenSSL security level @SECLEVEL=" + levelString + "; only @SECLEVEL=1 is supported"));
+    }
+
+    private static boolean isDecimalDigits(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static List<SSLCipher> getCiphersForCipherString(Node node, String cipherString) {
         List<SSLCipher> result = null;
         for (String component : cipherString.split("\\+")) {
             List<SSLCipher> ciphers = SSLCipherStringMapping.get(component);
             if (ciphers == null) {
                 if (component.equals("PROFILE=SYSTEM")) {
-                    throw PRaiseNode.raiseUncached(node, NotImplementedError, toTruffleStringUncached("PROFILE=SYSTEM not implemented"));
+                    throw PRaiseNode.raiseStatic(node, NotImplementedError, toTruffleStringUncached("PROFILE=SYSTEM not implemented"));
                 }
                 return Collections.emptyList();
             }

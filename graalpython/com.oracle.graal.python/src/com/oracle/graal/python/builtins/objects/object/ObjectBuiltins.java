@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -26,6 +26,10 @@
 
 package com.oracle.graal.python.builtins.objects.object;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol.FUN_PY_OBJECT_NEW;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_OBJECT;
+import static com.oracle.graal.python.nodes.ErrorMessages.ATTR_NAME_MUST_BE_STRING;
 import static com.oracle.graal.python.nodes.PGuards.isDeleteMarker;
 import static com.oracle.graal.python.nodes.PGuards.isDict;
 import static com.oracle.graal.python.nodes.PGuards.isNoValue;
@@ -33,135 +37,146 @@ import static com.oracle.graal.python.nodes.PGuards.isPythonModule;
 import static com.oracle.graal.python.nodes.PGuards.isPythonObject;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___CLASS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DICT__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___ABSTRACTMETHODS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___CLASS__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DICT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J_RICHCMP;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___DELATTR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___DIR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EQ__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___FORMAT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETATTRIBUTE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___HASH__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETSTATE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT_SUBCLASS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___LT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE_EX__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETATTR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SIZEOF__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SUBCLASSHOOK__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T_UPDATE;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T_JOIN;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T_SORT;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___LEN__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___NE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___REDUCE__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_NONE;
-import static com.oracle.graal.python.runtime.exception.PythonErrorType.AttributeError;
-import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.nodes.StringLiterals.T_SINGLE_QUOTE_COMMA_SPACE;
 
+import java.lang.ref.Reference;
 import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinConstructorsFactory;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PNotImplemented;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
-import com.oracle.graal.python.builtins.objects.function.BuiltinMethodDescriptor;
-import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescrDeleteNode;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescrGetNode;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorBuiltins.DescrSetNode;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorDeleteMarker;
+import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.object.ObjectBuiltinsClinicProviders.FormatNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.object.ObjectBuiltinsClinicProviders.ReduceExNodeClinicProviderGen;
+import com.oracle.graal.python.builtins.objects.object.ObjectBuiltinsFactory.DictNodeFactory;
 import com.oracle.graal.python.builtins.objects.object.ObjectBuiltinsFactory.GetAttributeNodeFactory;
 import com.oracle.graal.python.builtins.objects.set.PSet;
+import com.oracle.graal.python.builtins.objects.set.SetBuiltins;
+import com.oracle.graal.python.builtins.objects.str.StringNodes.CastToTruffleStringChecked0Node;
+import com.oracle.graal.python.builtins.objects.str.StringNodes.CastToTruffleStringChecked1Node;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetCachedTpSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.TypeBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TypeFlags;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.CheckCompatibleForAssigmentNode;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetBaseClassNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.CallSlotDescrGet;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrSet;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotGetAttr.GetAttrBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.HashBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRepr.CallSlotReprNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSetAttr.SetAttrBuiltinNode;
+import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
+import com.oracle.graal.python.lib.PyObjectIsTrueNode;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
 import com.oracle.graal.python.lib.PyObjectSizeNode;
+import com.oracle.graal.python.lib.PyObjectStrAsObjectNode;
+import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.attributes.LookupAttributeInMRONode;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
 import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
 import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
+import com.oracle.graal.python.nodes.builtins.ListNodes;
+import com.oracle.graal.python.nodes.builtins.ListNodes.ConstructListNode;
 import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.CallTernaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupAndCallBinaryNode;
-import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
-import com.oracle.graal.python.nodes.expression.BinaryComparisonNode;
-import com.oracle.graal.python.nodes.expression.BinaryComparisonNodeFactory;
-import com.oracle.graal.python.nodes.expression.CoerceToBooleanNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinClassExactProfile;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinClassProfile;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsOtherBuiltinClassProfile;
 import com.oracle.graal.python.nodes.object.DeleteDictNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
 import com.oracle.graal.python.nodes.object.IsNode;
 import com.oracle.graal.python.nodes.object.SetDictNode;
-import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.nodes.util.SplitArgsNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.runtime.exception.PythonErrorType;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
-import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.UnexpectedResultException;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
+import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
-import com.oracle.truffle.api.profiles.ValueProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PythonObject)
 public final class ObjectBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = ObjectBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
@@ -174,68 +189,211 @@ public final class ObjectBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isNoValue(value)")
         static Object getClass(Object self, @SuppressWarnings("unused") PNone value,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached GetClassNode getClassNode) {
             return getClassNode.execute(inliningTarget, self);
         }
 
-        @Specialization(guards = "isNativeClass(klass)")
-        static Object setClass(@SuppressWarnings("unused") Object self, @SuppressWarnings("unused") Object klass,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.CLASS_ASSIGNMENT_ONLY_SUPPORTED_FOR_HEAP_TYPES_OR_MODTYPE_SUBCLASSES);
-        }
-
-        @Specialization(guards = "isPythonClass(value) || isPythonBuiltinClassType(value)")
-        static PNone setClass(VirtualFrame frame, PythonObject self, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @CachedLibrary(limit = "4") DynamicObjectLibrary dylib,
-                        @Cached IsOtherBuiltinClassProfile classProfile1,
-                        @Cached IsOtherBuiltinClassProfile classProfile2,
+        @Specialization(guards = "!isNoValue(value)")
+        static PNone setClass(VirtualFrame frame, Object self, Object value,
+                        @Bind Node inliningTarget,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached IsBuiltinClassProfile isModuleProfile,
+                        @Cached TypeNodes.GetTypeFlagsNode getTypeFlagsNode,
                         @Cached CheckCompatibleForAssigmentNode checkCompatibleForAssigmentNode,
                         @Exclusive @Cached GetClassNode getClassNode,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached SetClassNode setClassNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (!isTypeNode.execute(inliningTarget, value)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.CLASS_MUST_BE_SET_TO_CLASS, value);
+            }
             Object type = getClassNode.execute(inliningTarget, self);
-            if (isBuiltinClassNotModule(inliningTarget, value, classProfile1) || PGuards.isNativeClass(value) || isBuiltinClassNotModule(inliningTarget, type, classProfile2) ||
-                            PGuards.isNativeClass(type)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.CLASS_ASSIGNMENT_ONLY_SUPPORTED_FOR_HEAP_TYPES_OR_MODTYPE_SUBCLASSES);
+            boolean bothModuleSubtypes = isModuleProfile.profileClass(inliningTarget, type, PythonBuiltinClassType.PythonModule) &&
+                            isModuleProfile.profileClass(inliningTarget, value, PythonBuiltinClassType.PythonModule);
+            boolean bothMutable = (getTypeFlagsNode.execute(type) & TypeFlags.IMMUTABLETYPE) == 0 && (getTypeFlagsNode.execute(value) & TypeFlags.IMMUTABLETYPE) == 0;
+            if (!bothModuleSubtypes && !bothMutable) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.CLASS_ASSIGNMENT_ONLY_SUPPORTED_FOR_HEAP_TYPES_OR_MODTYPE_SUBCLASSES);
             }
 
             checkCompatibleForAssigmentNode.execute(frame, type, value);
-            self.setPythonClass(value, dylib);
+            setClassNode.execute(inliningTarget, self, value);
+
             return PNone.NONE;
         }
 
-        private static boolean isBuiltinClassNotModule(Node inliningTarget, Object type, IsOtherBuiltinClassProfile classProfile) {
-            return classProfile.profileIsOtherBuiltinClass(inliningTarget, type, PythonBuiltinClassType.PythonModule);
-        }
+        @GenerateInline
+        @GenerateCached(false)
+        abstract static class SetClassNode extends Node {
+            public abstract void execute(Node inliningTarget, Object self, Object newClass);
 
-        @Specialization(guards = {"isPythonClass(value) || isPythonBuiltinClassType(value)", "!isPythonObject(self)"})
-        static Object getClass(@SuppressWarnings("unused") Object self, @SuppressWarnings("unused") Object value,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.CLASS_ASSIGNMENT_ONLY_SUPPORTED_FOR_HEAP_TYPES_OR_MODTYPE_SUBCLASSES);
-        }
+            @Specialization
+            static void doPythonObject(PythonObject self, Object newClass,
+                            @Cached DynamicObject.SetDynamicTypeNode setDynamicTypeNode) {
+                // Clear the dynamic type when setting the class, so further class changes do not
+                // create new shapes
+                setDynamicTypeNode.execute(self, PNone.NO_VALUE);
+                self.setPythonClass(newClass);
+            }
 
-        @Fallback
-        static Object getClassError(@SuppressWarnings("unused") Object self, Object value,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.CLASS_MUST_BE_SET_TO_CLASS, value);
+            @Specialization
+            static void doNative(PythonAbstractNativeObject self, Object newClass,
+                            @Cached(inline = false) CStructAccess.WriteObjectNewRefNode writeObjectNewRefNode) {
+                writeObjectNewRefNode.writeToObject(self, CFields.PyObject__ob_type, newClass);
+            }
         }
     }
 
-    @Builtin(name = J___INIT__, takesVarArgs = true, minNumOfPositionalArgs = 1, takesVarKeywordArgs = true)
+    // object()
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_OBJECT, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
-    @ImportStatic(SpecialMethodSlot.class)
-    public abstract static class InitNode extends PythonVarargsBuiltinNode {
-        @Child private SplitArgsNode splitArgsNode;
+    public abstract static class ObjectNode extends PythonVarargsBuiltinNode {
 
-        @Override
-        public final Object varArgExecute(VirtualFrame frame, @SuppressWarnings("unused") Object self, Object[] arguments, PKeyword[] keywords) throws VarargsBuiltinDirectInvocationNotSupported {
-            if (splitArgsNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                splitArgsNode = insert(SplitArgsNode.create());
+        @Child private ReportAbstractClassNode reportAbstractClassNode;
+
+        @GenerateInline(false) // Used lazily
+        abstract static class ReportAbstractClassNode extends PNodeWithContext {
+            public abstract PException execute(VirtualFrame frame, Object type);
+
+            @Specialization
+            static PException report(VirtualFrame frame, Object type,
+                            @Bind Node inliningTarget,
+                            @Cached PyObjectCallMethodObjArgs callSort,
+                            @Cached PyObjectCallMethodObjArgs callJoin,
+                            @Cached PyObjectSizeNode sizeNode,
+                            @Cached ReadAttributeFromObjectNode readAttributeFromObjectNode,
+                            @Cached CastToTruffleStringNode cast,
+                            @Cached ListNodes.ConstructListNode constructListNode,
+                            @Cached PRaiseNode raiseNode) {
+                PList list = constructListNode.execute(frame, readAttributeFromObjectNode.execute(type, T___ABSTRACTMETHODS__));
+                int methodCount = sizeNode.execute(frame, inliningTarget, list);
+                callSort.execute(frame, inliningTarget, list, T_SORT);
+                TruffleString joined = cast.execute(inliningTarget, callJoin.execute(frame, inliningTarget, T_SINGLE_QUOTE_COMMA_SPACE, T_JOIN, list));
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.CANT_INSTANTIATE_ABSTRACT_CLASS_WITH_ABSTRACT_METHODS, type, methodCount > 1 ? "s" : "", joined);
             }
-            return execute(frame, arguments[0], splitArgsNode.executeCached(arguments), keywords);
         }
+
+        @GenerateInline
+        @GenerateCached(false)
+        abstract static class CheckExcessArgsNode extends Node {
+            abstract void execute(Node inliningTarget, Object type, Object[] args, PKeyword[] kwargs);
+
+            @Specialization(guards = {"args.length == 0", "kwargs.length == 0"})
+            @SuppressWarnings("unused")
+            static void doNothing(Object type, Object[] args, PKeyword[] kwargs) {
+            }
+
+            @Fallback
+            @SuppressWarnings("unused")
+            static void check(Node inliningTarget, Object type, Object[] args, PKeyword[] kwargs,
+                            @Cached GetCachedTpSlotsNode getSlots,
+                            @Cached PRaiseNode raiseNode) {
+                TpSlots slots = getSlots.execute(inliningTarget, type);
+                if (slots.tp_new() != SLOTS.tp_new()) {
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.NEW_TAKES_ONE_ARG);
+                }
+                if (slots.tp_init() == SLOTS.tp_init()) {
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.NEW_TAKES_NO_ARGS, type);
+                }
+            }
+        }
+
+        @Specialization(guards = {"!self.needsNativeAllocation()"})
+        Object doManagedObject(VirtualFrame frame, PythonManagedClass self, Object[] varargs, PKeyword[] kwargs,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached CheckExcessArgsNode checkExcessArgsNode,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            checkExcessArgsNode.execute(inliningTarget, self, varargs, kwargs);
+            if (self.isAbstractClass()) {
+                throw reportAbstractClass(frame, self);
+            }
+            return PFactory.createPythonObject(self, getInstanceShape.execute(self));
+        }
+
+        @Specialization
+        static Object doBuiltinTypeType(PythonBuiltinClassType self, Object[] varargs, PKeyword[] kwargs,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached CheckExcessArgsNode checkExcessArgsNode,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            checkExcessArgsNode.execute(inliningTarget, self, varargs, kwargs);
+            return PFactory.createPythonObject(self, getInstanceShape.execute(self));
+        }
+
+        @Specialization(guards = "self.needsNativeAllocation()")
+        @SuppressWarnings("truffle-static-method")
+        @InliningCutoff
+        Object doNativeObjectIndirect(VirtualFrame frame, PythonManagedClass self, Object[] varargs, PKeyword[] kwargs,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached CheckExcessArgsNode checkExcessArgsNode,
+                        @Shared @Cached CallNativeGenericNewNode callNativeGenericNewNode) {
+            checkExcessArgsNode.execute(inliningTarget, self, varargs, kwargs);
+            if (self.isAbstractClass()) {
+                throw reportAbstractClass(frame, self);
+            }
+            return callNativeGenericNewNode.execute(inliningTarget, self);
+        }
+
+        @Specialization(guards = "isNativeClass(self)")
+        @SuppressWarnings("truffle-static-method")
+        @InliningCutoff
+        Object doNativeObjectDirect(VirtualFrame frame, Object self, Object[] varargs, PKeyword[] kwargs,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached CheckExcessArgsNode checkExcessArgsNode,
+                        @Exclusive @Cached TypeNodes.GetTypeFlagsNode getTypeFlagsNode,
+                        @Shared @Cached CallNativeGenericNewNode callNativeGenericNewNode) {
+            checkExcessArgsNode.execute(inliningTarget, self, varargs, kwargs);
+            if ((getTypeFlagsNode.execute(self) & TypeFlags.IS_ABSTRACT) != 0) {
+                throw reportAbstractClass(frame, self);
+            }
+            return callNativeGenericNewNode.execute(inliningTarget, self);
+        }
+
+        @GenerateInline
+        @GenerateCached(false)
+        protected abstract static class CallNativeGenericNewNode extends Node {
+            private static final CApiTiming C_API_TIMING = CApiTiming.create(true, FUN_PY_OBJECT_NEW);
+
+            abstract Object execute(Node inliningTarget, Object cls);
+
+            @Specialization
+            static Object call(Node inliningTarget, Object cls,
+                            @Cached CApiTransitions.PythonToNativeInternalNode toNativeNode,
+                            @Cached CApiTransitions.NativeToPythonInternalNode toPythonNode) {
+                assert EnsurePythonObjectNode.doesNotNeedPromotion(cls);
+                long clsPointer = toNativeNode.execute(inliningTarget, cls);
+                try {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    var callable = CApiContext.getNativeSymbol(inliningTarget, FUN_PY_OBJECT_NEW);
+                    long nativeResult = ExternalFunctionInvoker.invokePY_OBJECT_NEW(null, C_API_TIMING,
+                                    context.ensureNativeContext(), BoundaryCallData.getUncached(),
+                                    context.getThreadState(context.getLanguage(inliningTarget)), callable, clsPointer);
+                    return toPythonNode.executeTransfer(inliningTarget, nativeResult);
+                } finally {
+                    Reference.reachabilityFence(cls);
+                }
+            }
+        }
+
+        @SuppressWarnings("unused")
+        @Fallback
+        Object fallback(Object o, Object[] varargs, PKeyword[] kwargs) {
+            throw PRaiseNode.raiseStatic(this, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "object.__new__(X): X", o);
+        }
+
+        @InliningCutoff
+        private PException reportAbstractClass(VirtualFrame frame, Object type) {
+            if (reportAbstractClassNode == null) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                reportAbstractClassNode = insert(ObjectBuiltinsFactory.ObjectNodeFactory.ReportAbstractClassNodeGen.create());
+            }
+            return reportAbstractClassNode.execute(frame, type);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(takesVarArgs = true, minNumOfPositionalArgs = 1, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class InitNode extends PythonVarargsBuiltinNode {
 
         @Specialization(guards = {"arguments.length == 0", "keywords.length == 0"})
         @SuppressWarnings("unused")
@@ -244,81 +402,49 @@ public final class ObjectBuiltins extends PythonBuiltins {
         }
 
         @Specialization(replaces = "initNoArgs")
-        @SuppressWarnings({"unused", "truffle-static-method"})
-        PNone init(Object self, Object[] arguments, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+        @SuppressWarnings("unused")
+        static PNone init(Object self, Object[] arguments, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
-                        @Cached InlinedConditionProfile overridesNew,
-                        @Cached InlinedConditionProfile overridesInit,
-                        @Cached("create(Init)") LookupCallableSlotInMRONode lookupInit,
-                        @Cached(value = "createLookupProfile(getClassNode)", inline = false) ValueProfile profileInit,
-                        @Cached(value = "createClassProfile()", inline = false) ValueProfile profileInitFactory,
-                        @Cached("create(New)") LookupCallableSlotInMRONode lookupNew,
-                        @Cached(value = "createLookupProfile(getClassNode)", inline = false) ValueProfile profileNew,
-                        @Cached(value = "createClassProfile()", inline = false) ValueProfile profileNewFactory) {
+                        @Cached GetCachedTpSlotsNode getSlots,
+                        @Cached PRaiseNode raiseNode) {
             if (arguments.length != 0 || keywords.length != 0) {
                 Object type = getClassNode.execute(inliningTarget, self);
-                if (overridesNew.profile(inliningTarget, overridesBuiltinMethod(type, profileInit, lookupInit, profileInitFactory, ObjectBuiltinsFactory.InitNodeFactory.class))) {
-                    throw raise(TypeError, ErrorMessages.INIT_TAKES_ONE_ARG_OBJECT);
+                TpSlots slots = getSlots.execute(inliningTarget, type);
+                if (slots.tp_init() != SLOTS.tp_init()) {
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.INIT_TAKES_ONE_ARG_OBJECT);
                 }
 
-                if (overridesInit.profile(inliningTarget, !overridesBuiltinMethod(type, profileNew, lookupNew, profileNewFactory, BuiltinConstructorsFactory.ObjectNodeFactory.class))) {
-                    throw raise(TypeError, ErrorMessages.INIT_TAKES_ONE_ARG, type);
+                if (slots.tp_new() == SLOTS.tp_new()) {
+                    throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.INIT_TAKES_ONE_ARG, type);
                 }
             }
             return PNone.NONE;
         }
-
-        protected static ValueProfile createLookupProfile(Node node) {
-            if (PythonLanguage.get(node).isSingleContext()) {
-                return ValueProfile.createIdentityProfile();
-            } else {
-                return ValueProfile.createClassProfile();
-            }
-        }
-
-        /**
-         * Simple utility method to check if a method was overridden. The {@code profile} parameter
-         * must {@emph not} be an identity profile when AST sharing is enabled.
-         */
-        public static <T extends NodeFactory<? extends PythonBuiltinBaseNode>> boolean overridesBuiltinMethod(Object type, ValueProfile profile, LookupCallableSlotInMRONode lookup,
-                        ValueProfile factoryProfile, Class<T> builtinNodeFactoryClass) {
-            Object method = profile.profile(lookup.execute(type));
-            if (method instanceof PBuiltinFunction) {
-                NodeFactory<? extends PythonBuiltinBaseNode> factory = factoryProfile.profile(((PBuiltinFunction) method).getBuiltinNodeFactory());
-                return !builtinNodeFactoryClass.isInstance(factory);
-            } else if (method instanceof PBuiltinMethod) {
-                NodeFactory<? extends PythonBuiltinBaseNode> factory = factoryProfile.profile(((PBuiltinMethod) method).getBuiltinFunction().getBuiltinNodeFactory());
-                return !builtinNodeFactoryClass.isInstance(factory);
-            } else if (method instanceof BuiltinMethodDescriptor) {
-                return !((BuiltinMethodDescriptor) method).isSameFactory(builtinNodeFactoryClass);
-            }
-            return true;
-        }
     }
 
-    @Builtin(name = J___HASH__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class HashNode extends PythonUnaryBuiltinNode {
+    public abstract static class HashNode extends HashBuiltinNode {
         @Specialization
-        public int hash(PythonBuiltinClassType self) {
+        public long hash(PythonBuiltinClassType self) {
             return hash(getContext().lookupType(self));
         }
 
         @TruffleBoundary
         @Specialization(guards = "!isPythonBuiltinClassType(self)")
-        public static int hash(Object self) {
+        public static long hash(Object self) {
             return self.hashCode();
         }
     }
 
-    @Builtin(name = J___EQ__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class EqNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static Object eq(Object self, Object other,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile isEq,
+    public abstract static class EqNode extends TpSlotRichCompare.RichCmpBuiltinNode {
+        @Specialization(guards = "op.isEq()")
+        static Object eq(Object self, Object other, RichCmpOp op,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached InlinedConditionProfile isEq,
                         @Cached IsNode isNode) {
             if (isEq.profile(inliningTarget, isNode.execute(self, other))) {
                 return true;
@@ -328,63 +454,51 @@ public final class ObjectBuiltins extends PythonBuiltins {
                 return PNotImplemented.NOT_IMPLEMENTED;
             }
         }
-    }
 
-    @Builtin(name = J___NE__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    public abstract static class NeNode extends PythonBinaryBuiltinNode {
-
-        @Child private LookupAndCallBinaryNode eqNode;
-        @Child private CoerceToBooleanNode ifFalseNode;
-
-        @Specialization
-        static boolean ne(PythonAbstractNativeObject self, PythonAbstractNativeObject other,
-                        @Cached CExtNodes.PointerCompareNode nativeNeNode) {
-            return nativeNeNode.execute(T___NE__, self, other);
+        @Specialization(guards = "op.isNe()")
+        static Object ne(VirtualFrame frame, Object self, Object other, RichCmpOp op,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached InlinedConditionProfile isEq,
+                        @Cached GetObjectSlotsNode getSlotsNode,
+                        @Cached TpSlotRichCompare.CallSlotRichCmpNode callSlotRichCmp,
+                        @Cached PyObjectIsTrueNode isTrueNode) {
+            // By default, __ne__() delegates to __eq__() and inverts the result, unless the latter
+            // returns NotImplemented
+            TpSlot selfRichCmp = getSlotsNode.execute(inliningTarget, self).tp_richcmp();
+            if (selfRichCmp == null) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            Object result = callSlotRichCmp.execute(frame, inliningTarget, selfRichCmp, self, other, RichCmpOp.Py_EQ);
+            if (result != PNotImplemented.NOT_IMPLEMENTED) {
+                return !isTrueNode.execute(frame, result);
+            }
+            return PNotImplemented.NOT_IMPLEMENTED;
         }
 
         @Fallback
-        Object ne(VirtualFrame frame, Object self, Object other) {
-            if (eqNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                eqNode = insert(LookupAndCallBinaryNode.create(SpecialMethodSlot.Eq));
-            }
-            Object result = eqNode.executeObject(frame, self, other);
-            if (result == PNotImplemented.NOT_IMPLEMENTED) {
-                return result;
-            }
-            if (ifFalseNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                ifFalseNode = insert(CoerceToBooleanNode.createIfFalseNode());
-            }
-            return ifFalseNode.executeBooleanCached(frame, result);
-        }
-    }
-
-    @Builtin(name = J___LT__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___LE__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___GT__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___GE__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    public abstract static class LtLeGtGeNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        @SuppressWarnings("unused")
-        static Object notImplemented(Object self, Object other) {
+        static Object doOthers(Object self, Object other, RichCmpOp op) {
             return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
 
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1, doc = "Return str(self).")
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     abstract static class StrNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object str(VirtualFrame frame, Object self,
-                        @Cached("create(Repr)") LookupAndCallUnaryNode reprNode) {
-            return reprNode.executeObject(frame, self);
+                        @Bind Node inliningTarget,
+                        @Cached GetObjectSlotsNode getSlots,
+                        @Cached CallSlotReprNode callSlot,
+                        @Cached ObjectNodes.DefaultObjectReprNode defaultRepr) {
+            TpSlots slots = getSlots.execute(inliningTarget, self);
+            if (slots.tp_repr() != null) {
+                return callSlot.execute(frame, inliningTarget, slots.tp_repr(), self);
+            }
+            return defaultRepr.execute(frame, inliningTarget, self);
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
 
@@ -395,131 +509,73 @@ public final class ObjectBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNone(self)")
         static TruffleString repr(VirtualFrame frame, Object self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ObjectNodes.DefaultObjectReprNode defaultReprNode) {
             return defaultReprNode.execute(frame, inliningTarget, self);
         }
     }
 
     @ImportStatic(PGuards.class)
-    @Builtin(name = J___GETATTRIBUTE__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_getattro, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class GetAttributeNode extends PythonBinaryBuiltinNode {
-        @CompilationFinal private int profileFlags = 0;
-        private static final int HAS_DESCR = 1;
-        private static final int HAS_DATA_DESCR = 2;
-        private static final int HAS_VALUE = 4;
-        private static final int HAS_NO_VALUE = 8;
-
-        @Child private LookupCallableSlotInMRONode lookupGetNode;
-        @Child private LookupCallableSlotInMRONode lookupSetNode;
-        @Child private LookupCallableSlotInMRONode lookupDeleteNode;
-        @Child private CallTernaryMethodNode dispatchGet;
+    public abstract static class GetAttributeNode extends GetAttrBuiltinNode {
+        @Child private CallSlotDescrGet callSlotDescrGet;
         @Child private ReadAttributeFromObjectNode attrRead;
-        @Child private GetClassNode getDescClassNode;
 
-        @Idempotent
-        protected static int tsLen(TruffleString ts) {
-            CompilerAsserts.neverPartOfCompilation();
-            return TruffleString.CodePointLengthNode.getUncached().execute(ts, TS_ENCODING) + 1;
-        }
-
-        // Shortcut, only useful for interpreter performance, but doesn't hurt peak
-        @Specialization(guards = {"keyObj == cachedKey", "tsLen(cachedKey) < 32"}, limit = "1")
-        @SuppressWarnings("truffle-static-method")
-        Object doItTruffleString(VirtualFrame frame, Object object, @SuppressWarnings("unused") TruffleString keyObj,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Cached("keyObj") TruffleString cachedKey,
-                        @Exclusive @Cached GetClassNode getClassNode,
-                        @Cached("create(cachedKey)") LookupAttributeInMRONode lookup,
-                        @Exclusive @Cached PythonObjectFactory.Lazy factory,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            Object type = getClassNode.execute(inliningTarget, object);
-            Object descr = lookup.execute(type);
-            return fullLookup(frame, inliningTarget, object, cachedKey, type, descr, factory, raiseNode);
-        }
-
+        /**
+         * Keep in sync with
+         * {@link com.oracle.graal.python.builtins.objects.type.TypeBuiltins.GetattributeNode} and
+         * {@link com.oracle.graal.python.builtins.objects.thread.ThreadLocalBuiltins.GetAttributeNode}
+         * and
+         * {@link com.oracle.graal.python.nodes.attributes.MergedObjectTypeModuleGetFixedAttributeNode}
+         */
         @Specialization
         @SuppressWarnings("truffle-static-method")
         Object doIt(VirtualFrame frame, Object object, Object keyObj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Cached GetClassNode getClassNode,
+                        @Cached GetObjectSlotsNode getDescrSlotsNode,
                         @Cached LookupAttributeInMRONode.Dynamic lookup,
-                        @Exclusive @Cached GetClassNode getClassNode,
-                        @Cached CastToTruffleStringNode castKeyToStringNode,
-                        @Exclusive @Cached PythonObjectFactory.Lazy factory,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            TruffleString key;
-            try {
-                key = castKeyToStringNode.execute(inliningTarget, keyObj);
-            } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.ATTR_NAME_MUST_BE_STRING, keyObj);
-            }
+                        @Cached CastToTruffleStringChecked1Node castToString,
+                        @Cached InlinedConditionProfile hasDescProfile,
+                        @Cached InlinedConditionProfile hasDescrGetProfile,
+                        @Cached InlinedConditionProfile hasValueProfile,
+                        @Cached PRaiseNode raiseNode) {
+            TruffleString key = castToString.cast(inliningTarget, keyObj, ErrorMessages.ATTR_NAME_MUST_BE_STRING, keyObj);
 
             Object type = getClassNode.execute(inliningTarget, object);
             Object descr = lookup.execute(type, key);
-            return fullLookup(frame, inliningTarget, object, key, type, descr, factory, raiseNode);
-        }
+            boolean hasDescr = hasDescProfile.profile(inliningTarget, descr != PNone.NO_VALUE);
 
-        private Object fullLookup(VirtualFrame frame, Node inliningTarget, Object object, TruffleString key, Object type, Object descr, PythonObjectFactory.Lazy factory, PRaiseNode.Lazy raiseNode) {
-            Object dataDescClass = null;
-            boolean hasDescr = descr != PNone.NO_VALUE;
-            if (hasDescr && (profileFlags & HAS_DESCR) == 0) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                profileFlags |= HAS_DESCR;
-            }
+            TpSlot get = null;
+            boolean hasDescrGet = false;
             if (hasDescr) {
-                dataDescClass = getDescClass(descr);
-                Object delete = PNone.NO_VALUE;
-                Object set = lookupSet(dataDescClass);
-                if (set == PNone.NO_VALUE) {
-                    delete = lookupDelete(dataDescClass);
-                }
-                boolean hasDataDescr = set != PNone.NO_VALUE || delete != PNone.NO_VALUE;
-                if (hasDataDescr && (profileFlags & HAS_DATA_DESCR) == 0) {
-                    CompilerDirectives.transferToInterpreterAndInvalidate();
-                    profileFlags |= HAS_DATA_DESCR;
-                }
-                if (hasDataDescr) {
-                    Object get = lookupGet(dataDescClass);
-                    if (PGuards.isCallableOrDescriptor(get)) {
-                        // Only override if __get__ is defined, too, for compatibility with CPython.
-                        return dispatch(frame, object, type, descr, get);
-                    }
+                var descrSlots = getDescrSlotsNode.execute(inliningTarget, descr);
+                get = descrSlots.tp_descr_get();
+                hasDescrGet = hasDescrGetProfile.profile(inliningTarget, get != null);
+                if (hasDescrGet && TpSlotDescrSet.PyDescr_IsData(descrSlots)) {
+                    return dispatchDescrGet(frame, object, type, descr, get);
                 }
             }
-            Object value = readAttribute(object, key);
-            boolean hasValue = value != PNone.NO_VALUE;
-            if (hasValue && (profileFlags & HAS_VALUE) == 0) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                profileFlags |= HAS_VALUE;
-            }
-            if (hasValue) {
+
+            // The only difference between all 3 nodes
+            Object value = readAttributeOfObject(object, key);
+            if (hasValueProfile.profile(inliningTarget, value != PNone.NO_VALUE)) {
                 return value;
             }
-            if ((profileFlags & HAS_NO_VALUE) == 0) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                profileFlags |= HAS_NO_VALUE;
-            }
+
             if (hasDescr) {
-                if (object == PNone.NONE) {
-                    if (descr instanceof PBuiltinFunction) {
-                        // Special case for None object. We cannot call function.__get__(None,
-                        // type(None)),
-                        // because that would return an unbound method
-                        return factory.get(inliningTarget).createBuiltinMethod(PNone.NONE, (PBuiltinFunction) descr);
-                    }
-                }
-                Object get = lookupGet(dataDescClass);
-                if (get == PNone.NO_VALUE) {
+                if (!hasDescrGet) {
                     return descr;
-                } else if (PGuards.isCallableOrDescriptor(get)) {
-                    return dispatch(frame, object, type, descr, get);
+                } else {
+                    return dispatchDescrGet(frame, object, type, descr, get);
                 }
             }
-            throw raiseNode.get(inliningTarget).raise(AttributeError, ErrorMessages.OBJ_P_HAS_NO_ATTR_S, object, key);
+
+            throw raiseNode.raiseAttributeError(inliningTarget, ErrorMessages.OBJ_P_HAS_NO_ATTR_S, object, key);
         }
 
-        private Object readAttribute(Object object, Object key) {
+        private Object readAttributeOfObject(Object object, TruffleString key) {
             if (attrRead == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 attrRead = insert(ReadAttributeFromObjectNode.create());
@@ -527,44 +583,12 @@ public final class ObjectBuiltins extends PythonBuiltins {
             return attrRead.execute(object, key);
         }
 
-        private Object dispatch(VirtualFrame frame, Object object, Object type, Object descr, Object get) {
-            if (dispatchGet == null) {
+        private Object dispatchDescrGet(VirtualFrame frame, Object object, Object type, Object descr, TpSlot getSlot) {
+            if (callSlotDescrGet == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                dispatchGet = insert(CallTernaryMethodNode.create());
+                callSlotDescrGet = insert(CallSlotDescrGet.create());
             }
-            return dispatchGet.execute(frame, get, descr, object, type);
-        }
-
-        private Object getDescClass(Object desc) {
-            if (getDescClassNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                getDescClassNode = insert(GetClassNode.create());
-            }
-            return getDescClassNode.executeCached(desc);
-        }
-
-        private Object lookupGet(Object dataDescClass) {
-            if (lookupGetNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                lookupGetNode = insert(LookupCallableSlotInMRONode.create(SpecialMethodSlot.Get));
-            }
-            return lookupGetNode.execute(dataDescClass);
-        }
-
-        private Object lookupDelete(Object dataDescClass) {
-            if (lookupDeleteNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                lookupDeleteNode = insert(LookupCallableSlotInMRONode.create(SpecialMethodSlot.Delete));
-            }
-            return lookupDeleteNode.execute(dataDescClass);
-        }
-
-        private Object lookupSet(Object dataDescClass) {
-            if (lookupSetNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                lookupSetNode = insert(LookupCallableSlotInMRONode.create(SpecialMethodSlot.Set));
-            }
-            return lookupSetNode.execute(dataDescClass);
+            return callSlotDescrGet.executeCached(frame, getSlot, descr, object, type);
         }
 
         // Note: we need this factory method as a workaround of a Truffle DSL bug
@@ -574,17 +598,17 @@ public final class ObjectBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___SETATTR__, minNumOfPositionalArgs = 3)
+    @Slot(value = SlotKind.tp_setattro, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class SetattrNode extends PythonTernaryBuiltinNode {
-
+    public abstract static class SetattrNode extends SetAttrBuiltinNode {
         @Specialization
-        Object set(VirtualFrame frame, Object object, Object key, Object value,
-                        @Bind("this") Node inliningTarget,
+        void set(VirtualFrame frame, Object object, Object keyObject, Object value,
+                        @Bind Node inliningTarget,
+                        @Cached CastToTruffleStringChecked0Node castKeyNode,
                         @Cached ObjectNodes.GenericSetAttrNode genericSetAttrNode,
                         @Cached WriteAttributeToObjectNode write) {
+            TruffleString key = castKeyNode.cast(inliningTarget, keyObject, ATTR_NAME_MUST_BE_STRING);
             genericSetAttrNode.execute(inliningTarget, frame, object, key, value, write);
-            return PNone.NONE;
         }
 
         @NeverDefault
@@ -593,53 +617,8 @@ public final class ObjectBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___DELATTR__, minNumOfPositionalArgs = 2)
+    @Builtin(name = J___DICT__, autoRegister = false, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, isGetter = true, isSetter = true)
     @GenerateNodeFactory
-    public abstract static class DelattrNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        static PNone doIt(VirtualFrame frame, Object object, Object keyObj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached LookupAttributeInMRONode.Dynamic getExisting,
-                        @Cached GetClassNode getClassNode,
-                        @Cached GetClassNode getDescClassNode,
-                        @Cached("create(T___DELETE__)") LookupAttributeInMRONode lookupDeleteNode,
-                        @Cached CallBinaryMethodNode callSetNode,
-                        @Cached ReadAttributeFromObjectNode attrRead,
-                        @Cached WriteAttributeToObjectNode writeNode,
-                        @Cached CastToTruffleStringNode castKeyToStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            TruffleString key;
-            try {
-                key = castKeyToStringNode.execute(inliningTarget, keyObj);
-            } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.ATTR_NAME_MUST_BE_STRING, keyObj);
-            }
-
-            Object type = getClassNode.execute(inliningTarget, object);
-            Object descr = getExisting.execute(type, key);
-            if (descr != PNone.NO_VALUE) {
-                Object dataDescClass = getDescClassNode.execute(inliningTarget, descr);
-                Object set = lookupDeleteNode.execute(dataDescClass);
-                if (PGuards.isCallable(set)) {
-                    callSetNode.executeObject(frame, set, descr, object);
-                    return PNone.NONE;
-                }
-            }
-            Object currentValue = attrRead.execute(object, key);
-            if (currentValue != PNone.NO_VALUE) {
-                if (writeNode.execute(object, key, PNone.NO_VALUE)) {
-                    return PNone.NONE;
-                }
-            }
-            if (descr != PNone.NO_VALUE) {
-                throw raiseNode.get(inliningTarget).raise(AttributeError, ErrorMessages.ATTR_S_READONLY, key);
-            } else {
-                throw raiseNode.get(inliningTarget).raise(AttributeError, ErrorMessages.OBJ_P_HAS_NO_ATTR_S, object, key);
-            }
-        }
-    }
-
-    @Builtin(name = J___DICT__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, isGetter = true, isSetter = true)
     public abstract static class DictNode extends PythonBinaryBuiltinNode {
 
         protected static boolean isExactObject(Node inliningTarget, IsBuiltinClassExactProfile profile, Object clazz) {
@@ -654,7 +633,7 @@ public final class ObjectBuiltins extends PythonBuiltins {
         @Specialization(guards = {"!isAnyBuiltinButModule(inliningTarget, otherBuiltinClassProfile, selfClass)", //
                         "!isExactObject(inliningTarget, isBuiltinClassProfile, selfClass)", "isNoValue(none)"}, limit = "1")
         static Object dict(VirtualFrame frame, Object self, @SuppressWarnings("unused") PNone none,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached IsOtherBuiltinClassProfile otherBuiltinClassProfile,
                         @SuppressWarnings("unused") @Exclusive @Cached IsBuiltinClassExactProfile isBuiltinClassProfile,
                         @SuppressWarnings("unused") @Exclusive @Cached GetClassNode getClassNode,
@@ -677,7 +656,7 @@ public final class ObjectBuiltins extends PythonBuiltins {
         @Specialization(guards = {"!isAnyBuiltinButModule(inliningTarget, otherBuiltinClassProfile, selfClass)", //
                         "!isExactObject(inliningTarget, isBuiltinClassProfile, selfClass)", "!isPythonModule(self)"}, limit = "1")
         static Object dict(VirtualFrame frame, Object self, PDict dict,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached IsOtherBuiltinClassProfile otherBuiltinClassProfile,
                         @SuppressWarnings("unused") @Exclusive @Cached IsBuiltinClassExactProfile isBuiltinClassProfile,
                         @Exclusive @Cached GetClassNode getClassNode,
@@ -700,7 +679,7 @@ public final class ObjectBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object dict(VirtualFrame frame, PythonObject self, @SuppressWarnings("unused") DescriptorDeleteMarker marker,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached GetClassNode getClassNode,
                         @Exclusive @Cached GetBaseClassNode getBaseNode,
                         @Shared @Cached("createForLookupOfUnmanagedClasses(T___DICT__)") LookupAttributeInMRONode getDescrNode,
@@ -738,19 +717,18 @@ public final class ObjectBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!isNoValue(mapping)", "!isDict(mapping)", "!isDeleteMarker(mapping)"})
         static Object dict(@SuppressWarnings("unused") Object self, Object mapping,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
         }
 
         @Specialization(guards = "isFallback(self, mapping, inliningTarget, getClassNode, otherBuiltinClassProfile, isBuiltinClassProfile)", limit = "1")
         @SuppressWarnings("unused")
         static Object raise(Object self, Object mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached IsOtherBuiltinClassProfile otherBuiltinClassProfile,
                         @Exclusive @Cached IsBuiltinClassExactProfile isBuiltinClassProfile,
-                        @Exclusive @Cached GetClassNode getClassNode,
-                        @Shared @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(AttributeError, ErrorMessages.OBJ_P_HAS_NO_ATTR_S, self, "__dict__");
+                        @Exclusive @Cached GetClassNode getClassNode) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonErrorType.AttributeError, ErrorMessages.OBJ_P_HAS_NO_ATTR_S, self, "__dict__");
         }
 
         static boolean isFallback(Object self, Object mapping, Node inliningTarget,
@@ -763,6 +741,11 @@ public final class ObjectBuiltins extends PythonBuiltins {
                             (classFilter && !isPythonModule(self) && isDict(mapping)) ||
                             (isPythonObject(self) && isDeleteMarker(mapping)) ||
                             (!isNoValue(mapping) && !isDict(mapping) && !isDeleteMarker(mapping)));
+        }
+
+        @NeverDefault
+        public static DictNode create() {
+            return DictNodeFactory.create();
         }
     }
 
@@ -777,60 +760,15 @@ public final class ObjectBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!formatString.isEmpty()")
         static Object format(Object self, @SuppressWarnings("unused") TruffleString formatString,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.TypeError, ErrorMessages.UNSUPPORTED_FORMAT_STRING_PASSED_TO_P_FORMAT, self);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.UNSUPPORTED_FORMAT_STRING_PASSED_TO_P_FORMAT, self);
         }
 
         @Specialization(guards = "formatString.isEmpty()")
         static Object format(VirtualFrame frame, Object self, @SuppressWarnings("unused") TruffleString formatString,
-                        @Cached("create(Str)") LookupAndCallUnaryNode strCall) {
-            return strCall.executeObject(frame, self);
-        }
-    }
-
-    @Builtin(name = J_RICHCMP, minNumOfPositionalArgs = 3)
-    @GenerateNodeFactory
-    abstract static class RichCompareNode extends PythonTernaryBuiltinNode {
-        protected static final int NO_SLOW_PATH = Integer.MAX_VALUE;
-        @CompilationFinal private boolean seenNonBoolean = false;
-
-        static BinaryComparisonNode createOp(int op) {
-            switch (op) {
-                case 0:
-                    return BinaryComparisonNodeFactory.LtNodeGen.create();
-                case 4:
-                    return BinaryComparisonNodeFactory.GtNodeGen.create();
-                case 2:
-                    return BinaryComparisonNodeFactory.EqNodeGen.create();
-                case 5:
-                    return BinaryComparisonNodeFactory.GeNodeGen.create();
-                case 1:
-                    return BinaryComparisonNodeFactory.LeNodeGen.create();
-                case 3:
-                    return BinaryComparisonNodeFactory.NeNodeGen.create();
-                default:
-                    throw new RuntimeException("unexpected operation: " + op);
-            }
-        }
-
-        @Specialization(guards = "op == cachedOp", limit = "NO_SLOW_PATH")
-        @SuppressWarnings("truffle-static-method")
-        boolean richcmp(VirtualFrame frame, Object left, Object right, @SuppressWarnings("unused") int op,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Cached("op") int cachedOp,
-                        @Cached("createOp(op)") BinaryComparisonNode node,
-                        @Cached CoerceToBooleanNode.YesNode castToBooleanNode) {
-            if (!seenNonBoolean) {
-                try {
-                    return node.executeBool(frame, left, right);
-                } catch (UnexpectedResultException e) {
-                    CompilerDirectives.transferToInterpreterAndInvalidate();
-                    seenNonBoolean = true;
-                    return castToBooleanNode.executeBoolean(frame, inliningTarget, e.getResult());
-                }
-            } else {
-                return castToBooleanNode.executeBoolean(frame, inliningTarget, node.executeObject(frame, left, right));
-            }
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectStrAsObjectNode str) {
+            return str.execute(frame, inliningTarget, self);
         }
     }
 
@@ -852,10 +790,6 @@ public final class ObjectBuiltins extends PythonBuiltins {
             return PNotImplemented.NOT_IMPLEMENTED;
         }
 
-        @Override
-        public Object varArgExecute(VirtualFrame frame, Object self, Object[] arguments, PKeyword[] keywords) throws VarargsBuiltinDirectInvocationNotSupported {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
     }
 
     @Builtin(name = J___SIZEOF__, minNumOfPositionalArgs = 1)
@@ -863,7 +797,7 @@ public final class ObjectBuiltins extends PythonBuiltins {
     public abstract static class SizeOfNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object doit(VirtualFrame frame, Object obj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached PyObjectSizeNode sizeNode,
                         @Cached PyObjectLookupAttr lookupAttr,
@@ -891,7 +825,7 @@ public final class ObjectBuiltins extends PythonBuiltins {
         @Specialization
         @SuppressWarnings("unused")
         static Object doit(VirtualFrame frame, Object obj, @SuppressWarnings("unused") Object ignored,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ObjectNodes.CommonReduceNode commonReduceNode) {
             return commonReduceNode.execute(frame, inliningTarget, obj, 0);
         }
@@ -913,7 +847,7 @@ public final class ObjectBuiltins extends PythonBuiltins {
         @Specialization
         @SuppressWarnings("unused")
         static Object doit(VirtualFrame frame, Object obj, int proto,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectLookupAttr lookupAttr,
                         @Cached CallNode callNode,
                         @Cached InlinedConditionProfile reduceProfile,
@@ -935,25 +869,40 @@ public final class ObjectBuiltins extends PythonBuiltins {
     public abstract static class DirNode extends PythonBuiltinNode {
         @Specialization
         static Object dir(VirtualFrame frame, Object obj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached SetBuiltins.UpdateSingleNode updateSetNode,
                         @Cached PyObjectLookupAttr lookupAttrNode,
-                        @Cached CallNode callNode,
                         @Cached GetClassNode getClassNode,
                         @Cached IsSubtypeNode isSubtypeNode,
-                        @Cached com.oracle.graal.python.builtins.objects.type.TypeBuiltins.DirNode dirNode,
-                        @Cached PythonObjectFactory factory) {
-            PSet names = factory.createSet();
-            Object updateCallable = lookupAttrNode.execute(frame, inliningTarget, names, T_UPDATE);
+                        @Cached ConstructListNode constructListNode,
+                        @Bind PythonLanguage language) {
+            PSet names = PFactory.createSet(language);
             Object ns = lookupAttrNode.execute(frame, inliningTarget, obj, T___DICT__);
-            if (isSubtypeNode.execute(frame, getClassNode.execute(inliningTarget, ns), PythonBuiltinClassType.PDict)) {
-                callNode.execute(frame, updateCallable, ns);
+            if (isSubtypeNode.execute(getClassNode.execute(inliningTarget, ns), PythonBuiltinClassType.PDict)) {
+                updateSetNode.execute(frame, names, ns);
             }
             Object klass = lookupAttrNode.execute(frame, inliningTarget, obj, T___CLASS__);
             if (klass != PNone.NO_VALUE) {
-                callNode.execute(frame, updateCallable, dirNode.execute(frame, klass));
+                Object state = BoundaryCallContext.enter(frame, boundaryCallData);
+                try {
+                    TypeBuiltins.DirNode.dir(names, klass);
+                } finally {
+                    BoundaryCallContext.exit(frame, boundaryCallData, state);
+                }
             }
-            return names;
+            return constructListNode.execute(frame, names);
         }
     }
 
+    @Builtin(name = J___GETSTATE__, minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    public abstract static class GetStateNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static Object getstate(VirtualFrame frame, Object self,
+                        @Bind Node inliningTarget,
+                        @Cached ObjectNodes.ObjectGetStateDefaultNode getstateDefaultNode) {
+            return getstateDefaultNode.execute(frame, inliningTarget, self, false);
+        }
+    }
 }

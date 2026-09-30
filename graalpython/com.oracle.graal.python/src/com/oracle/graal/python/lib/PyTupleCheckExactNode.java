@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,31 +40,60 @@
  */
 package com.oracle.graal.python.lib;
 
+import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyObject__ob_type;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readPtrField;
+
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectExactProfile;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
 /**
  * Equivalent of CPython's {@code PyTuple_CheckExact}.
  */
 @GenerateUncached
-@GenerateInline
 @GenerateCached(false)
-public abstract class PyTupleCheckExactNode extends Node {
-    public static boolean executeUncached(Object obj) {
-        return PyTupleCheckExactNodeGen.getUncached().execute(null, obj);
+@GenerateInline
+@ImportStatic(PGuards.class)
+public abstract class PyTupleCheckExactNode extends PNodeWithContext {
+    @TruffleBoundary
+    public static boolean executeUncached(Object object) {
+        return PyTupleCheckExactNodeGen.getUncached().execute(null, object);
     }
 
     public abstract boolean execute(Node inliningTarget, Object object);
 
     @Specialization
-    static boolean doGeneric(Node inliningTarget, Object object,
-                    @Cached IsBuiltinObjectExactProfile isBuiltin) {
-        return isBuiltin.profileObject(inliningTarget, object, PythonBuiltinClassType.PTuple);
+    public static boolean doGeneric(Node inliningTarget, Object object,
+                    @Cached InlinedBranchProfile isPTupleProfile,
+                    @Cached InlinedBranchProfile isNativeProfile) {
+        if (object instanceof PTuple tuple) {
+            isPTupleProfile.enter(inliningTarget);
+            return PGuards.isBuiltinTuple(tuple);
+        }
+        if (object instanceof PythonAbstractNativeObject nativeObject) {
+            isNativeProfile.enter(inliningTarget);
+            return checkNative(PythonContext.get(inliningTarget), nativeObject);
+        }
+        return false;
+    }
+
+    public static boolean checkNative(PythonContext context, PythonAbstractNativeObject nativeObject) {
+        long obType = readPtrField(nativeObject.pointer, PyObject__ob_type);
+        boolean isTupleExact = obType == context.lookupType(PythonBuiltinClassType.PTuple).getNativePointer();
+        assert IsBuiltinObjectExactProfile.profileObjectUncached(nativeObject, PythonBuiltinClassType.PTuple) == isTupleExact;
+        return isTupleExact;
     }
 }

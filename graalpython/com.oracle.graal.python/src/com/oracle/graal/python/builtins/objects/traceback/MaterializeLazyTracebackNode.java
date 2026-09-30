@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,8 +40,9 @@
  */
 package com.oracle.graal.python.builtins.objects.traceback;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
@@ -63,7 +64,7 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
  * the frames captured during the unwinding and then the frames that are currently on stack, i.e. it
  * expects to be called in an exception handler, otherwise the stacktrace is incorrect - it would
  * contain frames from the place where you asked for the stacktrace not the place where the
- * exception occured. Additionally, the stacktrace is frozen on the first access and from then on,
+ * exception occurred. Additionally, the stacktrace is frozen on the first access and from then on,
  * Truffle always returns its cached copy.
  * </p>
  * <p>
@@ -71,7 +72,7 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
  * frames that the exception has passed through during the unwinding plus the frame where it was
  * caught. It doesn't include the frames above it (to the top). Secondly, the traceback is never
  * frozen. The traceback accumulates more frames when the exception gets reraised. To correct the
- * mismatch between Truffle and Python eception handling, we need to wrap {@link PException}s in
+ * mismatch between Truffle and Python exception handling, we need to wrap {@link PException}s in
  * {@link LazyTraceback} objects when caught and adhere to particular rules of exception handling
  * mentioned below.
  * </p>
@@ -84,7 +85,7 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
  * exception gets reraised, either explicitly (raise statement) or implicitly (for example, at the
  * end of finally). Each of these segments needs to have their own distinct {@link PException} to
  * avoid interference, therefore a caught {@link PException} must never be rethrown after being
- * added to the traceback and it must never be added to the traceback multiple times.
+ * added to the traceback, and it must never be added to the traceback multiple times.
  * </p>
  *
  * <p>
@@ -106,7 +107,7 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
  * Try to avoid the {@link PException#getUnreifiedException()} method unless you know what you're
  * doing.</li>
  * <li>{@link PException PException} must never be rethrown after it has been possibly exposed to
- * the program, because its Truffle stacktrace may already be frozen and it would not capture more
+ * the program, because its Truffle stacktrace may already be frozen, and it would not capture more
  * frames. If you need to rethrow without the catching site appearing in the traceback, use
  * {@link PException#getExceptionForReraise(boolean)} method to obtain a fresh {@link PException
  * PException} to throw</li>
@@ -134,7 +135,6 @@ public abstract class MaterializeLazyTracebackNode extends Node {
 
     @Fallback
     static PTraceback getTraceback(Node inliningTarget, LazyTraceback tb,
-                    @Cached(inline = false) PythonObjectFactory factory,
                     @Cached InlinedLoopConditionProfile loopConditionProfile) {
         PTraceback newTraceback = null;
         LazyTraceback current = tb;
@@ -143,7 +143,7 @@ public abstract class MaterializeLazyTracebackNode extends Node {
                 if (current.isMaterialized()) {
                     newTraceback = current.getTraceback();
                 } else {
-                    newTraceback = factory.createTraceback(current);
+                    newTraceback = PFactory.createTraceback(PythonLanguage.get(inliningTarget), current);
                 }
                 break;
             }

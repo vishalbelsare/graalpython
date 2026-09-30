@@ -1,45 +1,36 @@
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_abc
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_add
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_and
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_clear
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_constructor_identity
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_contains
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_copy
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_difference
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_difference_update
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_discard
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_eq
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_gc
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_gt
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_hash
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_iand
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_init
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_inplace_on_self
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_intersection
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_intersection_update
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_ior
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_isdisjoint
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_isub
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_ixor
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_len
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_len_cycles
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_len_race
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_lt
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_methods
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_ne
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_new_or_init
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_or
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_pop
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_remove
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_repr
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_sub
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_sub_and_super
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_subclass_with_custom_hash
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_symmetric_difference
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_symmetric_difference_update
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_union
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_update
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_update_set
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_weak_destroy_and_mutate_while_iterating
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_weak_destroy_while_iterating
-*graalpython.lib-python.3.test.test_weakset.TestWeakSet.test_xor
+test.test_weakset.TestWeakSet.test_abc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_and @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_clear @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_constructor_identity @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_copy @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_copying @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_difference @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_difference_update @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_discard @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_eq @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_gc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_gt @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_hash @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_iand @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_init @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_inplace_on_self @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_intersection_update @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_ior @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_isdisjoint @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_isub @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_ixor @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_lt @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_methods @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_ne @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_new_or_init @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_or @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_pop @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_remove @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_sub @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_sub_and_super @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_subclass_with_custom_hash @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_symmetric_difference_update @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_update @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_update_set @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_weakset.TestWeakSet.test_xor @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

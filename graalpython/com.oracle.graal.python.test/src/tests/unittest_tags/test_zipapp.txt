@@ -1,31 +1,34 @@
-*graalpython.lib-python.3.test.test_zipapp.ZipAppCmdlineTest.test_cmdline_copy
-*graalpython.lib-python.3.test.test_zipapp.ZipAppCmdlineTest.test_cmdline_copy_change_main
-*graalpython.lib-python.3.test.test_zipapp.ZipAppCmdlineTest.test_cmdline_copy_inplace
-*graalpython.lib-python.3.test.test_zipapp.ZipAppCmdlineTest.test_cmdline_create
-*graalpython.lib-python.3.test.test_zipapp.ZipAppCmdlineTest.test_info_command
-*graalpython.lib-python.3.test.test_zipapp.ZipAppCmdlineTest.test_info_error
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_content_of_copied_archive
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive_default_target
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive_filter_exclude_dir
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive_with_compression
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive_with_filter
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive_with_pathlib
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_create_archive_with_subdirs
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_custom_interpreter
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_default_no_shebang
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_main_and_main_py
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_main_only_written_once
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_main_validation
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_main_written
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_modify_shebang
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_no_main
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_no_shebang_is_not_executable
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_pack_to_fileobj
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_read_from_fileobj
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_read_from_pathobj
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_read_missing_shebang
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_read_shebang
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_remove_shebang
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_shebang_is_executable
-*graalpython.lib-python.3.test.test_zipapp.ZipAppTest.test_write_shebang_to_fileobj
+test.test_zipapp.ZipAppCmdlineTest.test_cmdline_copy @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppCmdlineTest.test_cmdline_copy_change_main @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppCmdlineTest.test_cmdline_copy_inplace @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppCmdlineTest.test_cmdline_create @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppCmdlineTest.test_info_command @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppCmdlineTest.test_info_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_content_of_copied_archive @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_default_target @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_filter_exclude_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_self_insertion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_with_compression @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_with_filter @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_with_pathlib @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_archive_with_subdirs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_create_sorted_archive @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_custom_interpreter @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_default_no_shebang @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_main_and_main_py @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_main_only_written_once @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_main_validation @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_main_written @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_modify_shebang @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_no_main @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_no_shebang_is_not_executable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_zipapp.ZipAppTest.test_pack_to_fileobj @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_read_from_fileobj @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_read_from_pathlike_obj @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_read_missing_shebang @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_read_shebang @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_remove_shebang @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_shebang_is_executable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_zipapp.ZipAppTest.test_target_overwrites_source_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_zipapp.ZipAppTest.test_write_shebang_to_fileobj @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

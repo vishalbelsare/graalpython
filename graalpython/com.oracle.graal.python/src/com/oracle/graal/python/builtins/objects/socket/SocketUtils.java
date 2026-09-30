@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,7 +49,9 @@ import static com.oracle.graal.python.util.PythonUtils.EMPTY_INT_ARRAY;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.runtime.GilNode;
+import com.oracle.graal.python.runtime.PosixConstants;
 import com.oracle.graal.python.runtime.PosixSupportLibrary;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixErrnoException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.SelectResult;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.Timeval;
@@ -101,19 +103,33 @@ public class SocketUtils {
                 try {
                     gil.release(true);
                     try {
-                        int[] fds = new int[]{socket.getFd()};
-                        int[] readfds = writing ? EMPTY_INT_ARRAY : fds;
-                        int[] writefds = writing ? fds : EMPTY_INT_ARRAY;
-                        SelectResult selectResult = posixLib.select(posixSupport, readfds, writefds, EMPTY_INT_ARRAY, selectTimeout);
-                        boolean[] resultFds = writing ? selectResult.getWriteFds() : selectResult.getReadFds();
-                        if (resultFds.length == 0 || !resultFds[0]) {
+                        boolean ready;
+                        if (PosixConstants.IS_WIN32) {
+                            int[] errorfds = connect ? new int[]{socket.getFd()} : EMPTY_INT_ARRAY;
+                            if (writing) {
+                                SelectResult selected = posixLib.select(posixSupport, EMPTY_INT_ARRAY, new int[]{socket.getFd()}, errorfds, selectTimeout);
+                                ready = selected.getWriteFds()[0] || connect && selected.getErrorFds()[0];
+                            } else {
+                                SelectResult selected = posixLib.select(posixSupport, new int[]{socket.getFd()}, EMPTY_INT_ARRAY, errorfds, selectTimeout);
+                                ready = selected.getReadFds()[0] || connect && selected.getErrorFds()[0];
+                            }
+                        } else {
+                            int event = (writing ? PosixConstants.POLLOUT : PosixConstants.POLLIN).getValueIfDefined();
+                            if (connect) {
+                                event |= PosixConstants.POLLERR.getValueIfDefined();
+                            }
+                            int[] revents = new int[1];
+                            posixLib.poll(posixSupport, new int[]{socket.getFd()}, new int[]{event}, revents, pollTimeout(selectTimeout));
+                            ready = revents[0] != 0;
+                        }
+                        if (!ready) {
                             throw constructAndRaiseNode.get(inliningTarget).raiseTimeoutError(frame, ErrorMessages.TIMED_OUT);
                         }
                     } finally {
                         gil.acquire();
                     }
-                } catch (PosixException e) {
-                    if (e.getErrorCode() == EINTR.getNumber()) {
+                } catch (PosixErrnoException e) {
+                    if (e.hasErrno(EINTR)) {
                         PythonContext.triggerAsyncActions(constructAndRaiseNode);
                         continue;
                     }
@@ -129,12 +145,12 @@ public class SocketUtils {
                     } finally {
                         gil.acquire();
                     }
-                } catch (PosixException e) {
-                    if (e.getErrorCode() == EINTR.getNumber()) {
+                } catch (PosixErrnoException e) {
+                    if (e.hasErrno(EINTR)) {
                         PythonContext.triggerAsyncActions(constructAndRaiseNode);
                         continue;
                     }
-                    if (timeoutHelper != null && (e.getErrorCode() == EWOULDBLOCK.getNumber() || e.getErrorCode() == EAGAIN.getNumber())) {
+                    if (timeoutHelper != null && (e.hasErrno(EWOULDBLOCK) || e.hasErrno(EAGAIN))) {
                         /*
                          * False positive: sock_func() failed with EWOULDBLOCK or EAGAIN. For
                          * example, select() could indicate a socket is ready for reading, but the
@@ -147,6 +163,14 @@ public class SocketUtils {
                 }
             }
         }
+    }
+
+    private static int pollTimeout(Timeval timeout) {
+        if (timeout == null) {
+            return -1;
+        }
+        long milliseconds = timeout.getSeconds() * 1000 + (timeout.getMicroseconds() + 999) / 1000;
+        return milliseconds > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) milliseconds;
     }
 
     public static class TimeoutHelper {

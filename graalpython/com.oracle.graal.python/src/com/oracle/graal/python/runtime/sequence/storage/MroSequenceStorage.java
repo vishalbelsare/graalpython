@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,15 +40,12 @@
  */
 package com.oracle.graal.python.runtime.sequence.storage;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.function.Predicate;
 
 import com.oracle.graal.python.builtins.objects.type.PythonAbstractClass;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.util.LazyCyclicAssumption;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
@@ -56,25 +53,73 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.dsl.NonIdempotent;
 import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.utilities.CyclicAssumption;
+import com.oracle.truffle.api.utilities.TruffleWeakReference;
 
-public final class MroSequenceStorage extends TypedSequenceStorage {
+public final class MroSequenceStorage extends ArrayBasedSequenceStorage {
+
+    private static final int LOOKUP_STABLE_INVALIDATIONS_MAX = Integer.getInteger("org.graalvm.python.internal.lookupStableInvalidationsMax", 3);
 
     private final TruffleString className;
     /**
      * This assumption will be invalidated whenever the mro changes.
      */
-    private final CyclicAssumption lookupStableAssumption;
+    private final LazyCyclicAssumption lookupStableAssumption;
 
     /**
      * These assumptions will be invalidated whenever the value of the given slot changes. All
      * assumptions will be invalidated if the mro changes.
      */
-    private final Map<TruffleString, List<Assumption>> attributesInMROFinalAssumptions;
-    private boolean hasAttributesInMROFinalAssumptions;
+    private Map<TruffleString, FinalAttributeAssumptionPair> attributesInMROFinalAssumptions;
+
+    public static final class FinalAttributeAssumptionPair {
+        @CompilationFinal private Assumption assumption;
+        @CompilationFinal private TruffleWeakReference<Object> value;
+        private Object valueStrongReference;
+
+        public FinalAttributeAssumptionPair() {
+            this.assumption = Truffle.getRuntime().createAssumption("attribute in MRO final");
+        }
+
+        public void invalidate() {
+            if (assumption != null) {
+                assumption.invalidate("MRO entry not final");
+            }
+            assumption = null;
+            value = null;
+        }
+
+        @NonIdempotent
+        public Object getValue() {
+            assert value != null;
+            return value.get();
+        }
+
+        public void setValue(Object value) {
+            if (PythonUtils.isPrimitive(value)) {
+                // DynamicObjectStorage does not store the boxed object, but the raw primitive
+                // value, so we must protect the boxed object from GC ourselves
+                valueStrongReference = value;
+            }
+            this.value = new TruffleWeakReference<>(value);
+        }
+
+        @NonIdempotent
+        public Assumption getAssumption() {
+            return assumption;
+        }
+    }
 
     @CompilationFinal(dimensions = 1) private final PythonAbstractClass[] values;
+
+    /**
+     * We cannot simply replace an {@code MroSequenceStorage} with a {@link NativeSequenceStorage}
+     * because we still need the <emph>managed</emph> one due to the assumptions. Therefore, if an
+     * {@code MroSequenceStorage} goes to native, we will create an additional
+     * {@link NativeSequenceStorage} and link to it.
+     */
+    private NativeSequenceStorage nativeMirror;
 
     @TruffleBoundary
     public MroSequenceStorage(TruffleString className, PythonAbstractClass[] elements) {
@@ -82,7 +127,7 @@ public final class MroSequenceStorage extends TypedSequenceStorage {
         this.values = elements;
         this.capacity = elements.length;
         this.length = elements.length;
-        this.lookupStableAssumption = new CyclicAssumption(className.toJavaStringUncached());
+        this.lookupStableAssumption = new LazyCyclicAssumption(className.toJavaStringUncached());
         this.attributesInMROFinalAssumptions = new HashMap<>();
     }
 
@@ -92,50 +137,12 @@ public final class MroSequenceStorage extends TypedSequenceStorage {
         this.values = new PythonAbstractClass[capacity];
         this.capacity = capacity;
         this.length = 0;
-        this.lookupStableAssumption = new CyclicAssumption(className.toJavaStringUncached());
+        this.lookupStableAssumption = new LazyCyclicAssumption(className.toJavaStringUncached());
         this.attributesInMROFinalAssumptions = new HashMap<>();
     }
 
-    @Override
-    public final PythonAbstractClass getItemNormalized(int idx) {
+    public PythonAbstractClass getPythonClassItemNormalized(int idx) {
         return values[idx];
-    }
-
-    @Override
-    @SuppressWarnings("unused")
-    public void setItemNormalized(int idx, Object value) {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new IllegalStateException("should not be reached");
-    }
-
-    @Override
-    @SuppressWarnings("unused")
-    public void insertItem(int idx, Object value) {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new IllegalStateException("should not be reached");
-    }
-
-    @Override
-    @SuppressWarnings("unused")
-    public void copyItem(int idxTo, int idxFrom) {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new IllegalStateException("should not be reached");
-    }
-
-    @Override
-    public MroSequenceStorage getSliceInBound(int start, int stop, int step, int sliceLength) {
-        PythonAbstractClass[] newArray = new PythonAbstractClass[sliceLength];
-
-        if (step == 1) {
-            PythonUtils.arraycopy(values, start, newArray, 0, sliceLength);
-            return new MroSequenceStorage(getClassName(), newArray);
-        }
-
-        for (int i = start, j = 0; j < sliceLength; i += step, j++) {
-            newArray[j] = values[i];
-        }
-
-        return new MroSequenceStorage(getClassName(), newArray);
     }
 
     public TruffleString getClassName() {
@@ -143,54 +150,17 @@ public final class MroSequenceStorage extends TypedSequenceStorage {
     }
 
     @Override
-    public SequenceStorage copy() {
-        return new MroSequenceStorage(getClassName(), PythonUtils.arrayCopyOf(values, length));
-    }
-
-    @Override
-    public SequenceStorage createEmpty(int newCapacity) {
+    public MroSequenceStorage createEmpty(int newCapacity) {
         return new MroSequenceStorage(getClassName(), newCapacity);
     }
 
-    @Override
-    public Object[] getInternalArray() {
+    public PythonAbstractClass[] getInternalClassArray() {
         return values;
-    }
-
-    public final PythonAbstractClass[] getInternalClassArray() {
-        return values;
-    }
-
-    @SuppressWarnings("unused")
-    @Override
-    public void increaseCapacityExactWithCopy(int newCapacity) {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new IllegalStateException("should not be reached");
-    }
-
-    @SuppressWarnings("unused")
-    @Override
-    public void increaseCapacityExact(int newCapacity) {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new IllegalStateException("should not be reached");
-    }
-
-    @SuppressWarnings("unused")
-    @Override
-    public void reverse() {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw new IllegalStateException("should not be reached");
     }
 
     @Override
     public Object getIndicativeValue() {
         return null;
-    }
-
-    @Override
-    public boolean equals(SequenceStorage other) {
-        Object[] otherArray = other.getInternalArray();
-        return Arrays.equals(values, otherArray);
     }
 
     @Override
@@ -200,7 +170,11 @@ public final class MroSequenceStorage extends TypedSequenceStorage {
 
     @Override
     public Object getCopyOfInternalArrayObject() {
-        return Arrays.copyOf(values, length);
+        return getCopyOfInternalArray();
+    }
+
+    public Object[] getCopyOfInternalArray() {
+        return PythonUtils.arrayCopyOf(values, length);
     }
 
     @SuppressWarnings("unused")
@@ -211,100 +185,60 @@ public final class MroSequenceStorage extends TypedSequenceStorage {
     }
 
     @Override
-    public ListStorageType getElementType() {
-        return ListStorageType.Generic;
+    public StorageType getElementType() {
+        return StorageType.Generic;
     }
 
     public Assumption getLookupStableAssumption() {
+        assert PythonContext.get(null).ownsGil();
         return lookupStableAssumption.getAssumption();
     }
 
-    public Assumption createAttributeInMROFinalAssumption(TruffleString name) {
+    public FinalAttributeAssumptionPair getFinalAttributeAssumption(TruffleString name) {
         CompilerAsserts.neverPartOfCompilation();
-        List<Assumption> attrAssumptions = attributesInMROFinalAssumptions.getOrDefault(name, null);
-        if (attrAssumptions == null) {
-            attrAssumptions = new ArrayList<>();
-            hasAttributesInMROFinalAssumptions = true;
-            attributesInMROFinalAssumptions.put(name, attrAssumptions);
+        if (attributesInMROFinalAssumptions != null) {
+            return attributesInMROFinalAssumptions.get(name);
         }
-
-        Assumption assumption = Truffle.getRuntime().createAssumption(name.toString());
-        attrAssumptions.add(assumption);
-        return assumption;
+        return null;
     }
 
-    public void addAttributeInMROFinalAssumption(TruffleString name, Assumption assumption) {
+    public void putFinalAttributeAssumption(TruffleString name, FinalAttributeAssumptionPair assumptionPair) {
         CompilerAsserts.neverPartOfCompilation();
-        List<Assumption> attrAssumptions = attributesInMROFinalAssumptions.getOrDefault(name, null);
-        if (attrAssumptions == null) {
-            attrAssumptions = new ArrayList<>();
-            hasAttributesInMROFinalAssumptions = true;
-            attributesInMROFinalAssumptions.put(name, attrAssumptions);
+        if (attributesInMROFinalAssumptions == null) {
+            attributesInMROFinalAssumptions = new HashMap<>();
         }
-
-        attrAssumptions.add(assumption);
+        assert attributesInMROFinalAssumptions.get(name) == null;
+        attributesInMROFinalAssumptions.put(name, assumptionPair);
     }
 
-    /**
-     * Returns {@code true} if some assumption was actually invalidated.
-     */
-    @TruffleBoundary
-    public boolean invalidateAttributeInMROFinalAssumptions(TruffleString name) {
-        List<Assumption> assumptions = attributesInMROFinalAssumptions.getOrDefault(name, Collections.emptyList());
-        // the empty check is just to avoid the StringBuilder allocation
-        if (!assumptions.isEmpty()) {
-            if (invalidateAttributesInMROFinalAssumptions(assumptions, getClassName() + "." + name)) {
-                // remove list
-                attributesInMROFinalAssumptions.remove(name);
-            }
-            return true;
+    public void invalidateFinalAttributeAssumption(TruffleString name) {
+        CompilerAsserts.neverPartOfCompilation();
+        FinalAttributeAssumptionPair assumptionPair = getFinalAttributeAssumption(name);
+        if (assumptionPair != null) {
+            assumptionPair.invalidate();
         }
-        return false;
     }
 
     public void lookupChanged() {
         CompilerAsserts.neverPartOfCompilation();
-        attributesInMROFinalAssumptions.values().removeIf(REMOVE_IF_LARGE);
-        lookupStableAssumption.invalidate();
-    }
-
-    private static final Predicate<List<Assumption>> REMOVE_IF_LARGE = new Predicate<>() {
-
-        @Override
-        public boolean test(List<Assumption> assumptions) {
-            return invalidateAttributesInMROFinalAssumptions(assumptions, "");
-        }
-    };
-
-    @TruffleBoundary
-    private static boolean invalidateAttributesInMROFinalAssumptions(List<Assumption> list, String reason) {
-        int n = list.size();
-        if (n > 0) {
-            for (Assumption assumption : list) {
-                assumption.invalidate(reason);
+        assert PythonContext.get(null).ownsGil();
+        if (attributesInMROFinalAssumptions != null) {
+            for (FinalAttributeAssumptionPair assumptionPair : attributesInMROFinalAssumptions.values()) {
+                assumptionPair.invalidate();
             }
         }
-
-        // clear assumptions to avoid memory leak; they are all invalidated, so we don't need
-        // them any longer
-        if (n < 16) {
-            // keep small lists; they don't hurt too much and we save allocations as well as GC
-            // pressure
-            list.clear();
-
-            // indicate to keep the list instance
-            return false;
-        }
-        // indicate that the list should completely be removed
-        return true;
+        lookupStableAssumption.invalidate(LOOKUP_STABLE_INVALIDATIONS_MAX);
     }
 
-    @Override
-    public Object[] getCopyOfInternalArray() {
-        return getInternalArray();
+    public NativeSequenceStorage getNativeMirror() {
+        return nativeMirror;
     }
 
-    public final boolean hasAttributeInMROFinalAssumptions() {
-        return hasAttributesInMROFinalAssumptions;
+    public void setNativeMirror(NativeSequenceStorage nativeMirror) {
+        this.nativeMirror = nativeMirror;
+    }
+
+    public boolean isNative() {
+        return nativeMirror != null;
     }
 }

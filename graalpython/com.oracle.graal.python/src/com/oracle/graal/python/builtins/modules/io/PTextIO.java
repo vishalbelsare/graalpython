@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,19 +41,15 @@
 package com.oracle.graal.python.builtins.modules.io;
 
 import static com.oracle.graal.python.builtins.objects.bytes.BytesUtils.append;
-import static com.oracle.graal.python.builtins.objects.bytes.BytesUtils.createOutputStream;
-import static com.oracle.graal.python.builtins.objects.bytes.BytesUtils.toByteArray;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
-import java.io.ByteArrayOutputStream;
-import java.math.BigInteger;
-
 import com.oracle.graal.python.builtins.objects.ints.IntBuiltins;
+import com.oracle.graal.python.builtins.objects.ints.IntNodes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.memory.ByteArraySupport;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
@@ -93,7 +89,7 @@ public final class PTextIO extends PTextIOBase {
     private int decodedCharsUsed; /* offset (in code points) into _decoded_chars for read() */
     private int decodedCharsLen; /* code point length of decodedChars */
 
-    private ByteArrayOutputStream pendingBytes;       // data waiting to be written.
+    private PendingBytesOutputStream pendingBytes;       // data waiting to be written.
 
     /*
      * snapshot is either NULL, or a tuple (dec_flags, next_input) where dec_flags is the second
@@ -112,7 +108,7 @@ public final class PTextIO extends PTextIOBase {
 
     public PTextIO(Object cls, Shape instanceShape) {
         super(cls, instanceShape);
-        pendingBytes = createOutputStream();
+        pendingBytes = new PendingBytesOutputStream();
     }
 
     @Override
@@ -324,11 +320,11 @@ public final class PTextIO extends PTextIOBase {
     }
 
     public void clearPendingBytes() {
-        pendingBytes = createOutputStream();
+        pendingBytes = new PendingBytesOutputStream();
     }
 
-    public byte[] getAndClearPendingBytes() {
-        byte[] b = toByteArray(pendingBytes);
+    public PendingBytesOutputStream getAndClearPendingBytes() {
+        PendingBytesOutputStream b = pendingBytes;
         clearPendingBytes();
         return b;
     }
@@ -413,23 +409,23 @@ public final class PTextIO extends PTextIOBase {
             this.needEOF = 0;
         }
 
-        public static PInt build(CookieType cookie, PythonObjectFactory factory) {
+        @TruffleBoundary
+        public static Object build(CookieType cookie) {
             byte[] buffer = new byte[COOKIE_BUF_LEN];
             SERIALIZE.putLong(buffer, 0, cookie.startPos);
             SERIALIZE.putInt(buffer, Long.BYTES, cookie.decFlags);
             SERIALIZE.putInt(buffer, Long.BYTES + Integer.BYTES, cookie.bytesToFeed);
             SERIALIZE.putInt(buffer, Long.BYTES + Integer.BYTES * 2, cookie.charsToSkip);
             SERIALIZE.putByte(buffer, Long.BYTES + Integer.BYTES * 3, cookie.needEOF);
-            BigInteger v = IntBuiltins.FromBytesNode.createBigInteger(buffer, false, false);
-            return factory.createInt(v);
+            return IntNodes.PyLongFromByteArray.executeUncached(buffer, true, false);
         }
 
-        public static CookieType parse(long v, Node inliningTarget, InlinedConditionProfile overflow, PRaiseNode.Lazy raise) {
+        public static CookieType parse(long v, Node inliningTarget, InlinedConditionProfile overflow, PRaiseNode raise) {
             byte[] buffer = IntBuiltins.ToBytesNode.fromLong(v, COOKIE_BUF_LEN, false, false, inliningTarget, overflow, raise);
             return parse(buffer);
         }
 
-        public static CookieType parse(PInt v, Node inliningTarget, InlinedConditionProfile overflow, PRaiseNode.Lazy raise) {
+        public static CookieType parse(PInt v, Node inliningTarget, InlinedConditionProfile overflow, PRaiseNode raise) {
             byte[] buffer = IntBuiltins.ToBytesNode.fromBigInteger(v, COOKIE_BUF_LEN, false, false, inliningTarget, overflow, raise);
             return parse(buffer);
         }

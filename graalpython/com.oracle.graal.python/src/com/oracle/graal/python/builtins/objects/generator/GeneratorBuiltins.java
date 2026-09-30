@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -31,14 +31,14 @@ import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___QUALNAME__
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___QUALNAME__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueError;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -48,14 +48,19 @@ import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.str.StringNodes;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.bytecode.FrameInfo;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLFrameInfo;
 import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
+import com.oracle.graal.python.nodes.frame.ReadFrameNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.CallerFlags;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.bytecode.BytecodeLocation;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -64,20 +69,12 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PGenerator)
 public final class GeneratorBuiltins extends PythonBuiltins {
 
-    private static void checkResumable(Node inliningTarget, PGenerator self, PRaiseNode.Lazy raiseNode) {
-        if (self.isFinished()) {
-            throw raiseNode.get(inliningTarget).raiseStopIteration();
-        }
-        if (self.isRunning()) {
-            throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
-        }
-    }
+    public static final TpSlots SLOTS = GeneratorBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
@@ -100,8 +97,8 @@ public final class GeneratorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNoValue(value)")
         static Object setName(PGenerator self, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached StringNodes.CastToTruffleStringCheckedNode cast) {
+                        @Bind Node inliningTarget,
+                        @Cached StringNodes.CastToTruffleStringChecked2Node cast) {
             return setName(self, cast.cast(inliningTarget, value, ErrorMessages.MUST_BE_SET_TO_S_OBJ, T___NAME__, "string"));
         }
     }
@@ -122,13 +119,13 @@ public final class GeneratorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNoValue(value)")
         static Object setQualname(PGenerator self, Object value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached StringNodes.CastToTruffleStringCheckedNode cast) {
+                        @Bind Node inliningTarget,
+                        @Cached StringNodes.CastToTruffleStringChecked2Node cast) {
             return setQualname(self, cast.cast(inliningTarget, value, ErrorMessages.MUST_BE_SET_TO_S_OBJ, T___QUALNAME__, "string"));
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
 
@@ -138,15 +135,20 @@ public final class GeneratorBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1, doc = "Implement next(self).")
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object next(VirtualFrame frame, PGenerator self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CommonGeneratorBuiltins.ResumeGeneratorNode resumeGeneratorNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            checkResumable(inliningTarget, self, raiseNode);
+                        @Cached PRaiseNode raiseNode) {
+            if (self.isFinished()) {
+                throw iteratorExhausted();
+            }
+            if (self.isRunning()) {
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.GENERATOR_ALREADY_EXECUTING);
+            }
             return resumeGeneratorNode.execute(frame, inliningTarget, self, null);
         }
     }
@@ -155,11 +157,8 @@ public final class GeneratorBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetCodeNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static Object getCode(PGenerator self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile hasCodeProfile,
-                        @Cached PythonObjectFactory.Lazy factory) {
-            return self.getOrCreateCode(inliningTarget, hasCodeProfile, factory);
+        static Object getCode(PGenerator self) {
+            return self.getGeneratorFunction().getCode();
         }
     }
 
@@ -173,28 +172,51 @@ public final class GeneratorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!isNoValue(obj)")
         static Object setRunning(@SuppressWarnings("unused") PGenerator self, @SuppressWarnings("unused") Object obj,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(AttributeError, ErrorMessages.ATTRIBUTE_S_OF_P_OBJECTS_IS_NOT_WRITABLE, "gi_running", self);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, AttributeError, ErrorMessages.ATTRIBUTE_S_OF_P_OBJECTS_IS_NOT_WRITABLE, "gi_running", self);
         }
     }
 
     @Builtin(name = "gi_frame", minNumOfPositionalArgs = 1, isGetter = true)
     @GenerateNodeFactory
     public abstract static class GetFrameNode extends PythonUnaryBuiltinNode {
+
         @Specialization
-        static Object getFrame(PGenerator self,
-                        @Cached PythonObjectFactory factory) {
+        static Object getFrame(VirtualFrame frame, PGenerator self,
+                        @Cached ReadFrameNode readFrameNode) {
             if (self.isFinished()) {
                 return PNone.NONE;
             } else {
-                MaterializedFrame generatorFrame = PArguments.getGeneratorFrame(self.getArguments());
-                Node location = ((FrameInfo) generatorFrame.getFrameDescriptor().getInfo()).getRootNode();
-                PFrame frame = MaterializeFrameNode.materializeGeneratorFrame(location, generatorFrame, PFrame.Reference.EMPTY, factory);
-                FrameInfo info = (FrameInfo) generatorFrame.getFrameDescriptor().getInfo();
-                int bci = self.getBci();
-                frame.setLasti(bci);
-                frame.setLine(info.getRootNode().bciToLine(bci));
-                return frame;
+                MaterializedFrame generatorFrame = self.getGeneratorFrame();
+                PFrame.Reference currentRef = PArguments.getCurrentFrameInfo(generatorFrame.getArguments());
+                if (self.isRunning()) {
+                    PFrame pyFrame = readFrameNode.getFrameForReference(frame, currentRef, 0, CallerFlags.NEEDS_PFRAME);
+                    pyFrame.getRef().markAsEscaped();
+                    return pyFrame;
+                }
+                PFrame pyFrame = currentRef.getPyFrame();
+                if (currentRef.isEscaped() && currentRef.getPyFrame() != null) {
+                    // If it's escaped, we synced at every exit
+                    return pyFrame;
+                }
+                BytecodeDSLFrameInfo info = (BytecodeDSLFrameInfo) generatorFrame.getFrameDescriptor().getInfo();
+                if (pyFrame == null) {
+                    pyFrame = MaterializeFrameNode.materializeGeneratorFrame(PythonLanguage.get(readFrameNode), self.getBytecodeNode(), generatorFrame, self.getGeneratorFunction(),
+                                    self.getGlobals(), currentRef);
+                }
+                BytecodeLocation location = self.getCurrentLocation();
+                if (location != null) {
+                    pyFrame.setBci(location.getBytecodeIndex());
+                    pyFrame.setBytecodeNode(location.getBytecodeNode());
+                    pyFrame.resetLine();
+                } else {
+                    pyFrame.setBci(0);
+                    pyFrame.setLine(info.getRootNode().getFirstLineno());
+                }
+                pyFrame.setLastCallerFlags(CallerFlags.ALL_FRAME_FLAGS);
+                assert currentRef.getPyFrame() == pyFrame;
+                currentRef.markAsEscaped();
+                return pyFrame;
             }
         }
     }
@@ -209,13 +231,22 @@ public final class GeneratorBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Builtin(name = "gi_suspended", minNumOfPositionalArgs = 1, isGetter = true)
+    @GenerateNodeFactory
+    abstract static class GetSuspendedNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static boolean suspended(PGenerator self) {
+            return self.isStarted() && !self.isRunning() && !self.isFinished();
+        }
+    }
+
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         static TruffleString repr(PGenerator self,
                         @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
-            return simpleTruffleStringFormatNode.format("<generator object %s at %d>", self.getName(), PythonAbstractObject.objectHashCode(self));
+            return simpleTruffleStringFormatNode.format("<generator object %s at 0x%d>", self.getQualname(), PythonAbstractObject.objectHashCode(self));
         }
     }
 
@@ -224,8 +255,8 @@ public final class GeneratorBuiltins extends PythonBuiltins {
     public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object classGetItem(Object cls, Object key,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createGenericAlias(cls, key);
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

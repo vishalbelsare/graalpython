@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,26 +47,31 @@ import static com.oracle.graal.python.nodes.ErrorMessages.INDEX_OUT_OF_RANGE;
 import static com.oracle.graal.python.nodes.ErrorMessages.INTEGER_REQUIRED_GOT;
 import static com.oracle.graal.python.nodes.ErrorMessages.IS_NOT_A;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___COPY__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___COPY__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinFunctions;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedSetStateBuiltin;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins.LenNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
@@ -75,10 +80,10 @@ import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaIntLossyNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
@@ -91,27 +96,29 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PTee})
 public final class TeeBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = TeeBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return TeeBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
     public abstract static class NewNode extends PythonBinaryBuiltinNode {
         @Specialization
-        static Object newTee(VirtualFrame frame, @SuppressWarnings("unused") Object cls, Object iterable,
-                        @Bind("this") Node inliningTarget,
+        public static PTee teeFromIterable(VirtualFrame frame, @SuppressWarnings("unused") Object cls, Object iterable,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetIter getIter,
-                        @Cached("createCopyNode()") LookupAndCallUnaryNode copyNode,
                         @Cached InlinedConditionProfile isTeeInstanceProfile,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object it = getIter.execute(frame, inliningTarget, iterable);
             if (isTeeInstanceProfile.profile(inliningTarget, it instanceof PTee)) {
-                return copyNode.executeObject(frame, it);
+                return CopyNode.copy((PTee) it, language);
             } else {
-                PTeeDataObject dataObj = factory.createTeeDataObject(it);
-                return factory.createTee(dataObj, 0);
+                PTeeDataObject dataObj = PFactory.createTeeDataObject(language, it);
+                return PFactory.createTee(language, dataObj, 0);
             }
         }
 
@@ -125,13 +132,13 @@ public final class TeeBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class CopyNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static Object copy(PTee self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createTee(self.getDataobj(), self.getIndex());
+        public static PTee copy(PTee self,
+                        @Bind PythonLanguage language) {
+            return PFactory.createTee(language, self.getDataobj(), self.getIndex());
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -140,81 +147,68 @@ public final class TeeBuiltins extends PythonBuiltins {
         }
     }
 
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @ImportStatic(TeeDataObjectBuiltins.class)
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
-        @Specialization(guards = "self.getIndex() < LINKCELLS")
-        static Object next(VirtualFrame frame, PTee self,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached BuiltinFunctions.NextNode nextNode,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+    public abstract static class NextNode extends TpIterNextBuiltin {
+        @Specialization
+        static Object doIt(VirtualFrame frame, PTee self,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached InlinedConditionProfile indexConditionProfile,
+                        @Cached PyIterNextNode nextNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (indexConditionProfile.profile(inliningTarget, self.getIndex() >= LINKCELLS)) {
+                self.setDataObj(self.getDataobj().jumplink(language));
+                self.setIndex(0);
+            }
             Object value = self.getDataobj().getItem(frame, inliningTarget, self.getIndex(), nextNode, raiseNode);
             self.setIndex(self.getIndex() + 1);
-            return value;
-        }
-
-        @Specialization(guards = "self.getIndex() >= LINKCELLS")
-        static Object nextNext(VirtualFrame frame, PTee self,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached BuiltinFunctions.NextNode nextNode,
-                        @Cached PythonObjectFactory factory,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            self.setDataObj(self.getDataobj().jumplink(factory));
-            Object value = self.getDataobj().getItem(frame, inliningTarget, 0, nextNode, raiseNode);
-            self.setIndex(1);
             return value;
         }
     }
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
-        abstract Object execute(VirtualFrame frame, PythonObject self);
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
 
         @Specialization
-        static Object reduce(PTee self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClass,
-                        @Cached PythonObjectFactory factory) {
+        static Object reduce(PTee self) {
+            PythonLanguage language = PythonLanguage.get(null);
             // return type(self), ((),), (self.dataobj, self.index)
-            Object type = getClass.execute(inliningTarget, self);
-            PTuple tuple1 = factory.createTuple(new Object[]{factory.createEmptyTuple()});
-            PTuple tuple2 = factory.createTuple(new Object[]{self.getDataobj(), self.getIndex()});
-            return factory.createTuple(new Object[]{type, tuple1, tuple2});
+            Object type = GetClassNode.executeUncached(self);
+            PTuple tuple1 = PFactory.createTuple(language, new Object[]{PFactory.createEmptyTuple(language)});
+            PTuple tuple2 = PFactory.createTuple(language, new Object[]{self.getDataobj(), self.getIndex()});
+            return PFactory.createTuple(language, new Object[]{type, tuple1, tuple2});
         }
     }
 
     @Builtin(name = J___SETSTATE__, minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    public abstract static class SetStateNode extends PythonBinaryBuiltinNode {
-        abstract Object execute(VirtualFrame frame, PythonObject self, Object state);
+    public abstract static class SetStateNode extends DeprecatedSetStateBuiltin {
 
         @Specialization
-        static Object setState(VirtualFrame frame, PTee self, Object state,
-                        @Bind("this") Node inliningTarget,
-                        @Cached LenNode lenNode,
-                        @Cached TupleBuiltins.GetItemNode getItemNode,
-                        @Cached CastToJavaIntLossyNode castToIntNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+        @TruffleBoundary
+        static Object setState(PTee self, Object state,
+                        @Bind Node inliningTarget) {
 
-            if (!(state instanceof PTuple) || (int) lenNode.execute(frame, state) != 2) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, IS_NOT_A, "state", "2-tuple");
+            if (!PyTupleCheckNode.executeUncached(state) || PyTupleSizeNode.executeUncached(state) != 2) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, IS_NOT_A, "state", "2-tuple");
             }
-            Object dataObject = getItemNode.execute(frame, state, 0);
+            Object dataObject = PyTupleGetItem.executeUncached(state, 0);
             if (!(dataObject instanceof PTeeDataObject)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, IS_NOT_A, "state", "_tee_dataobject");
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, IS_NOT_A, "state", "_tee_dataobject");
             }
             self.setDataObj((PTeeDataObject) dataObject);
-            Object secondElement = getItemNode.execute(frame, state, 1);
+            Object secondElement = PyTupleGetItem.executeUncached(state, 1);
             int index = 0;
             try {
-                index = castToIntNode.execute(inliningTarget, secondElement);
+                index = CastToJavaIntLossyNode.executeUncached(secondElement);
             } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, INTEGER_REQUIRED_GOT, secondElement);
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, INTEGER_REQUIRED_GOT, secondElement);
             }
             if (index < 0 || index > LINKCELLS) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, INDEX_OUT_OF_RANGE);
+                throw PRaiseNode.raiseStatic(inliningTarget, ValueError, INDEX_OUT_OF_RANGE);
             }
             self.setIndex(index);
             return PNone.NONE;

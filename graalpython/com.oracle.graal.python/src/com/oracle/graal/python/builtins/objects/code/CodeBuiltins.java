@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -28,10 +28,8 @@ package com.oracle.graal.python.builtins.objects.code;
 
 import static com.oracle.graal.python.annotations.ArgumentClinic.VALUE_EMPTY_TSTRING;
 import static com.oracle.graal.python.annotations.ArgumentClinic.VALUE_NONE;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___EQ__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___HASH__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_NONE;
+import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.objectArrayToTruffleStringArray;
 
@@ -39,34 +37,49 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PNotImplemented;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
-import com.oracle.graal.python.builtins.objects.str.StringNodes.InternStringNode;
+import com.oracle.graal.python.builtins.objects.bytes.BytesNodes.GetBytesStorage;
+import com.oracle.graal.python.builtins.objects.code.CodeBuiltinsClinicProviders.CodeConstructorNodeClinicProviderGen;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.compiler.CodeUnit;
-import com.oracle.graal.python.compiler.OpCodes;
-import com.oracle.graal.python.compiler.SourceMap;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.HashBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
+import com.oracle.graal.python.lib.PyBytesCheckNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectHashNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.RichCmpOp;
+import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.GetTupleStorage;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnit;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.IndirectCallData;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.bytecode.Instruction;
+import com.oracle.truffle.api.bytecode.SourceInformationTree;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
@@ -76,14 +89,103 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PCode)
 public final class CodeBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = CodeBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return CodeBuiltinsFactory.getFactories();
+    }
+
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "code", minNumOfPositionalArgs = 16, numOfPositionalOnlyArgs = 18, parameterNames = {
+                    "$cls", "argcount", "posonlyargcount", "kwonlyargcount", "nlocals", "stacksize", "flags", "codestring",
+                    "constants", "names", "varnames", "filename", "name", "qualname", "firstlineno",
+                    "linetable", "exceptiontable", "freevars", "cellvars"})
+    @ArgumentClinic(name = "argcount", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "posonlyargcount", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "kwonlyargcount", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "nlocals", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "stacksize", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "flags", conversion = ArgumentClinic.ClinicConversion.Int)
+    @ArgumentClinic(name = "filename", conversion = ArgumentClinic.ClinicConversion.TString)
+    @ArgumentClinic(name = "name", conversion = ArgumentClinic.ClinicConversion.TString)
+    @ArgumentClinic(name = "qualname", conversion = ArgumentClinic.ClinicConversion.TString)
+    @ArgumentClinic(name = "firstlineno", conversion = ArgumentClinic.ClinicConversion.Int)
+    @GenerateNodeFactory
+    public abstract static class CodeConstructorNode extends PythonClinicBuiltinNode {
+        @Specialization
+        static PCode call(VirtualFrame frame, @SuppressWarnings("unused") Object cls, int argcount,
+                        int posonlyargcount, int kwonlyargcount,
+                        int nlocals, int stacksize, int flags,
+                        Object codestring, Object constants, Object names, Object varnames,
+                        TruffleString filename, TruffleString name, TruffleString qualname,
+                        int firstlineno, Object linetable, Object exceptiontable,
+                        Object freevars, Object cellvars,
+                        @Bind Node inliningTarget,
+                        @CachedLibrary(limit = "1") PythonBufferAccessLibrary bufferLib,
+                        @Cached CodeNodes.CreateCodeNode createCodeNode,
+                        @Cached GetBytesStorage getBytesStorage,
+                        @Cached GetTupleStorage getTupleStorage,
+                        @Cached SequenceStorageNodes.ToArrayNode toArrayNode,
+                        @Cached PyBytesCheckNode bytesCheckNode,
+                        @Cached PyTupleCheckNode tupleCheckNode,
+                        @Cached CastToTruffleStringNode castToTruffleStringNode) {
+            byte[] codeBytes = getBytes(inliningTarget, codestring, bytesCheckNode, getBytesStorage, bufferLib);
+            byte[] linetableBytes = getBytes(inliningTarget, linetable, bytesCheckNode, getBytesStorage, bufferLib);
+            checkBytes(inliningTarget, exceptiontable, bytesCheckNode);
+
+            Object[] constantsArr = getTupleArray(inliningTarget, constants, getTupleStorage, toArrayNode, tupleCheckNode);
+            TruffleString[] namesArr = objectArrayToTruffleStringArray(inliningTarget,
+                            getTupleArray(inliningTarget, names, getTupleStorage, toArrayNode, tupleCheckNode), castToTruffleStringNode);
+            TruffleString[] varnamesArr = objectArrayToTruffleStringArray(inliningTarget,
+                            getTupleArray(inliningTarget, varnames, getTupleStorage, toArrayNode, tupleCheckNode), castToTruffleStringNode);
+            TruffleString[] freevarsArr = objectArrayToTruffleStringArray(inliningTarget,
+                            getTupleArray(inliningTarget, freevars, getTupleStorage, toArrayNode, tupleCheckNode), castToTruffleStringNode);
+            TruffleString[] cellcarsArr = objectArrayToTruffleStringArray(inliningTarget,
+                            getTupleArray(inliningTarget, cellvars, getTupleStorage, toArrayNode, tupleCheckNode), castToTruffleStringNode);
+
+            return createCodeNode.execute(frame, argcount, posonlyargcount, kwonlyargcount,
+                            nlocals, stacksize, flags,
+                            codeBytes, constantsArr, namesArr,
+                            varnamesArr, freevarsArr, cellcarsArr,
+                            filename, name, qualname,
+                            firstlineno, linetableBytes);
+        }
+
+        private static byte[] getBytes(Node inliningTarget, Object object, PyBytesCheckNode bytesCheckNode,
+                        GetBytesStorage getBytesStorage, PythonBufferAccessLibrary bufferLib) {
+            checkBytes(inliningTarget, object, bytesCheckNode);
+            return bufferLib.getCopiedByteArray(getBytesStorage.execute(inliningTarget, object));
+        }
+
+        private static void checkBytes(Node inliningTarget, Object object, PyBytesCheckNode bytesCheckNode) {
+            if (!bytesCheckNode.execute(inliningTarget, object)) {
+                throw invalidArgs(inliningTarget);
+            }
+        }
+
+        private static Object[] getTupleArray(Node inliningTarget, Object object,
+                        GetTupleStorage getTupleStorage, SequenceStorageNodes.ToArrayNode toArrayNode, PyTupleCheckNode tupleCheckNode) {
+            if (!tupleCheckNode.execute(inliningTarget, object)) {
+                throw invalidArgs(inliningTarget);
+            }
+            return toArrayNode.execute(inliningTarget, getTupleStorage.execute(inliningTarget, object));
+        }
+
+        private static RuntimeException invalidArgs(Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.INVALID_ARGS, "code");
+        }
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return CodeConstructorNodeClinicProviderGen.INSTANCE;
+        }
     }
 
     @Builtin(name = "co_freevars", minNumOfPositionalArgs = 1, isGetter = true)
@@ -91,10 +193,8 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetFreeVarsNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode,
-                        @Cached PythonObjectFactory factory) {
-            return internStrings(inliningTarget, self.getFreeVars(), internStringNode, factory);
+                        @Bind Node inliningTarget) {
+            return createStringsTuple(inliningTarget, self.getFreeVars());
         }
     }
 
@@ -103,10 +203,8 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetCellVarsNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode,
-                        @Cached PythonObjectFactory factory) {
-            return internStrings(inliningTarget, self.getCellVars(), internStringNode, factory);
+                        @Bind Node inliningTarget) {
+            return createStringsTuple(inliningTarget, self.getCellVars());
         }
     }
 
@@ -114,12 +212,10 @@ public final class CodeBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetFilenameNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode) {
+        static Object get(PCode self) {
             TruffleString filename = self.getFilename();
             if (filename != null) {
-                return internStringNode.execute(inliningTarget, filename);
+                return filename;
             }
             return PNone.NONE;
         }
@@ -138,11 +234,17 @@ public final class CodeBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetNameNode extends PythonUnaryBuiltinNode {
         @Specialization
-        @TruffleBoundary
-        static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode) {
-            return internStringNode.execute(inliningTarget, self.co_name());
+        static Object get(PCode self) {
+            return self.co_name();
+        }
+    }
+
+    @Builtin(name = "co_qualname", minNumOfPositionalArgs = 1, isGetter = true)
+    @GenerateNodeFactory
+    public abstract static class GetQualNameNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static Object get(PCode self) {
+            return self.co_qualname();
         }
     }
 
@@ -205,8 +307,9 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetCodeNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Cached PythonObjectFactory factory) {
-            return self.co_code(factory);
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language) {
+            return self.co_code(language, inliningTarget);
         }
     }
 
@@ -215,10 +318,8 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetConstsNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode,
-                        @Cached PythonObjectFactory factory) {
-            return internStrings(inliningTarget, self.getConstants(), internStringNode, factory);
+                        @Bind PythonLanguage language) {
+            return PFactory.createTuple(language, PythonUtils.arrayCopyOf(self.getConstants(), self.getConstants().length));
         }
     }
 
@@ -227,10 +328,8 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetNamesNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode,
-                        @Cached PythonObjectFactory factory) {
-            return internStrings(inliningTarget, self.getNames(), internStringNode, factory);
+                        @Bind Node inliningTarget) {
+            return createStringsTuple(inliningTarget, self.getNames());
         }
     }
 
@@ -239,10 +338,8 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetVarNamesNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InternStringNode internStringNode,
-                        @Cached PythonObjectFactory factory) {
-            return internStrings(inliningTarget, self.getVarnames(), internStringNode, factory);
+                        @Bind Node inliningTarget) {
+            return createStringsTuple(inliningTarget, self.getVarnames());
         }
     }
 
@@ -253,13 +350,25 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetLineTableNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             byte[] linetable = self.getLinetable();
             if (linetable == null) {
                 // TODO: this is for the moment undefined (see co_code)
                 linetable = PythonUtils.EMPTY_BYTE_ARRAY;
             }
-            return factory.createBytes(linetable);
+            return PFactory.createBytes(language, linetable);
+        }
+    }
+
+    @Builtin(name = "co_exceptiontable", minNumOfPositionalArgs = 1, isGetter = true)
+    @GenerateNodeFactory
+    abstract static class GetExceptionTableNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        @SuppressWarnings("unused")
+        static Object get(PCode self,
+                        @Bind PythonLanguage language) {
+            // We store our exception table together with the bytecode, not in this field
+            return PFactory.createEmptyBytes(language);
         }
     }
 
@@ -273,34 +382,152 @@ public final class CodeBuiltins extends PythonBuiltins {
 
         @Specialization
         @TruffleBoundary
-        Object lines(PCode self) {
-            PythonObjectFactory factory = PythonObjectFactory.getUncached();
+        static Object lines(PCode self) {
+            PythonLanguage language = PythonLanguage.get(null);
             PTuple tuple;
-            if (self.getRootNode() instanceof PBytecodeRootNode) {
-                CodeUnit co = ((PBytecodeRootNode) self.getRootNode()).getCodeUnit();
-                SourceMap map = co.getSourceMap();
-                List<PTuple> lines = new ArrayList<>();
-                if (map != null && map.startLineMap.length > 0) {
-                    IteratorData data = new IteratorData();
-                    data.line = map.startLineMap[0];
-                    co.iterateBytecode((int bci, OpCodes op, int oparg, byte[] followingArgs) -> {
-                        int nextStart = bci + op.length();
-                        if (map.startLineMap[bci] != data.line || nextStart == co.code.length) {
-                            lines.add(factory.createTuple(new int[]{data.start, nextStart, data.line}));
-                            data.line = map.startLineMap[bci];
-                            data.start = nextStart;
-                        }
-                    });
-                }
-                tuple = factory.createTuple(lines.toArray());
+            BytecodeDSLCodeUnit co = self.getCodeUnit();
+            if (co != null) {
+                PBytecodeDSLRootNode rootNode = (PBytecodeDSLRootNode) self.getRootNodeForExtraction();
+                List<PTuple> lines = computeLinesForBytecodeDSLInterpreter(rootNode);
+                tuple = PFactory.createTuple(language, lines.toArray());
             } else {
-                tuple = factory.createEmptyTuple();
+                tuple = PFactory.createEmptyTuple(language);
             }
             return PyObjectGetIter.executeUncached(tuple);
         }
+
+        private static List<PTuple> computeLinesForBytecodeDSLInterpreter(PBytecodeDSLRootNode root) {
+            BytecodeNode bytecodeNode = root.getBytecodeNode().ensureSourceInformation();
+            List<int[]> triples = new ArrayList<>();
+            SourceInformationTree sourceInformationTree = bytecodeNode.getSourceInformationTree();
+            assert sourceInformationTree.getSourceSection() != null;
+            traverseSourceInformationTree(sourceInformationTree, triples);
+            return convertTripleBcisToInstructionIndices(bytecodeNode, root.getLanguage(), triples);
+        }
+
+        /**
+         * This function traverses the source information tree recursively to compute a list of
+         * consecutive bytecode ranges with their corresponding line numbers.
+         * <p>
+         * Each node in the tree covers a bytecode range. Each child covers some sub-range. The
+         * bytecodes covered by a particular node are the bytecodes within its range that are *not*
+         * covered by the node's children.
+         * <p>
+         * For example, consider a node covering [0, 20] with children covering [4, 9] and [15, 18].
+         * The node itself covers the ranges [0, 4], [9, 15], and [18, 20]. These ranges are
+         * assigned the line number of the node.
+         */
+        private static void traverseSourceInformationTree(SourceInformationTree tree, List<int[]> triples) {
+            int startIndex = tree.getStartBytecodeIndex();
+            int startLine = tree.getSourceSection().getStartLine();
+            for (SourceInformationTree child : tree.getChildren()) {
+                if (startIndex < child.getStartBytecodeIndex()) {
+                    // range before child.start is uncovered
+                    triples.add(new int[]{startIndex, child.getStartBytecodeIndex(), startLine});
+                }
+                // recursively handle [child.start, child.end]
+                traverseSourceInformationTree(child, triples);
+                startIndex = child.getEndBytecodeIndex();
+            }
+
+            if (startIndex < tree.getEndBytecodeIndex()) {
+                // range after last_child.end is uncovered
+                triples.add(new int[]{startIndex, tree.getEndBytecodeIndex(), startLine});
+            }
+        }
+
+        /**
+         * The bci ranges in the triples are not stable and can change when the bytecode is
+         * instrumented. We create new triples with stable instruction indices by walking the
+         * instructions. We also coalesce triples with the same line numbers.
+         */
+        private static List<PTuple> convertTripleBcisToInstructionIndices(BytecodeNode bytecodeNode, PythonLanguage language, List<int[]> triples) {
+            List<PTuple> result = new ArrayList<>(triples.size());
+            int tripleIndex = 0;
+            int[] triple = triples.get(0);
+            assert triple[0] == 0 : "the first bytecode range should start from 0";
+
+            int startInstructionIndex = 0;
+            int instructionIndex = 0;
+            int pendingLine = triple[2];
+
+            for (Instruction instruction : bytecodeNode.getInstructions()) {
+                // Iterate the instructions, counting the stable instruction index as we go.
+                if (instruction.getBytecodeIndex() == triple[1] /* end bci */) {
+                    // We hit the end of the current triple. Continue with the next one.
+                    triple = triples.get(++tripleIndex);
+                    assert triple[0] == instruction.getBytecodeIndex() : "bytecode ranges should be consecutive";
+                    // If this new triple has a different line, emit a tuple for the previous line.
+                    // Otherwise, continue (this new triple's range is combined with the previous).
+                    if (pendingLine != triple[2] /* line */) {
+                        result.add(PFactory.createTuple(language, new int[]{startInstructionIndex, instructionIndex, pendingLine}));
+                        startInstructionIndex = instructionIndex;
+                        pendingLine = triple[2];
+                    }
+                }
+
+                if (!instruction.isInstrumentation()) {
+                    // Emulate CPython's fixed 2-word instructions.
+                    instructionIndex += 2;
+                }
+            }
+
+            // Emit a tuple for the remaining range.
+            result.add(PFactory.createTuple(language, new int[]{startInstructionIndex, instructionIndex, pendingLine}));
+            assert tripleIndex == triples.size() - 1 : String.format("every bytecode range should have been converted to " +
+                            "an instruction range, %d != %d, function: %s", tripleIndex, triples.size() - 1, bytecodeNode.getRootNode());
+
+            return result;
+        }
+
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Builtin(name = "co_positions", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class CoPositionsNode extends PythonUnaryBuiltinNode {
+
+        @Specialization
+        @TruffleBoundary
+        Object positions(PCode self) {
+            PythonLanguage language = PythonLanguage.get(null);
+            PTuple tuple;
+            BytecodeDSLCodeUnit co = self.getCodeUnit();
+            if (co != null) {
+                List<PTuple> lines = new ArrayList<>();
+                PBytecodeDSLRootNode rootNode = (PBytecodeDSLRootNode) self.getRootNodeForExtraction();
+                BytecodeNode bytecodeNode = rootNode.getBytecodeNode();
+                if (!bytecodeNode.hasSourceInformation()) {
+                    bytecodeNode = bytecodeNode.ensureSourceInformation();
+                }
+                for (Instruction instruction : bytecodeNode.getInstructions()) {
+                    if (instruction.isInstrumentation()) {
+                        // Skip instrumented instructions. The co_positions array should agree
+                        // with the logical instruction index.
+                        continue;
+                    }
+                    SourceSection section = rootNode.getSourceSectionForLocation(instruction.getLocation());
+                    if (section != null) {
+                        lines.add(PFactory.createTuple(language, new int[]{
+                                        section.getStartLine(),
+                                        section.getEndLine(),
+                                        // 1-based inclusive to 0-based inclusive
+                                        section.getStartColumn() - 1,
+                                        // 1-based inclusive to 0-based exclusive (-1 + 1 = 0)
+                                        section.getEndColumn()
+                        }));
+                    } else {
+                        lines.add(PFactory.createTuple(language, new Object[]{PNone.NONE, PNone.NONE, PNone.NONE, PNone.NONE}));
+                    }
+                }
+                tuple = PFactory.createTuple(language, lines.toArray());
+            } else {
+                tuple = PFactory.createEmptyTuple(language);
+            }
+            return PFactory.createSequenceIterator(language, tuple);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class CodeReprNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -313,59 +540,60 @@ public final class CodeBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___EQ__, minNumOfPositionalArgs = 2)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class CodeEqNode extends PythonBinaryBuiltinNode {
+    public abstract static class CodeEqNode extends RichCmpBuiltinNode {
 
-        @Specialization
+        @Specialization(guards = "op.isEqOrNe()")
         @TruffleBoundary
-        boolean eq(PCode self, PCode other) {
+        boolean eq(PCode self, PCode other, RichCmpOp op) {
             if (self == other) {
-                return true;
+                return op.isEq();
             }
             // it's quite difficult for our deserialized code objects to tell if they are the same
             if (self.getRootNode() != null && other.getRootNode() != null) {
                 if (!self.getName().equalsUncached(other.getName(), TS_ENCODING)) {
-                    return false;
+                    return op.isNe();
                 }
                 if (self.co_argcount() != other.co_argcount() || self.co_posonlyargcount() != other.co_posonlyargcount() || self.co_kwonlyargcount() != other.co_kwonlyargcount() ||
                                 self.co_nlocals() != other.co_nlocals() || self.co_flags() != other.co_flags() || self.co_firstlineno() != other.co_firstlineno()) {
-                    return false;
+                    return op.isNe();
                 }
-                if (!Arrays.equals(self.getCodestring(), other.getCodestring())) {
-                    return false;
+                if (!Arrays.equals(self.getCodestring(this), other.getCodestring(this))) {
+                    return op.isNe();
                 }
                 // TODO compare co_const
-                return Arrays.equals(self.getNames(), other.getNames()) && Arrays.equals(self.getVarnames(), other.getVarnames()) && Arrays.equals(self.getFreeVars(), other.getFreeVars()) &&
+                boolean eq = Arrays.equals(self.getNames(), other.getNames()) && Arrays.equals(self.getVarnames(), other.getVarnames()) && Arrays.equals(self.getFreeVars(), other.getFreeVars()) &&
                                 Arrays.equals(self.getCellVars(), other.getCellVars());
+                return eq == op.isEq();
             }
-            return false;
+            return op.isNe();
         }
 
         @SuppressWarnings("unused")
         @Fallback
-        Object fail(Object self, Object other) {
+        Object fail(Object self, Object other, RichCmpOp op) {
             return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
 
-    @Builtin(name = J___HASH__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class CodeHashNode extends PythonUnaryBuiltinNode {
+    public abstract static class CodeHashNode extends HashBuiltinNode {
         @Specialization
         static long hash(VirtualFrame frame, PCode self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectHashNode hashNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached PyObjectHashNode hashNode) {
             long h, h0, h1, h2, h3, h4, h5, h6;
 
             h0 = hashNode.execute(frame, inliningTarget, self.co_name());
-            h1 = hashNode.execute(frame, inliningTarget, self.co_code(factory));
-            h2 = hashNode.execute(frame, inliningTarget, self.co_consts(factory));
-            h3 = hashNode.execute(frame, inliningTarget, self.co_names(factory));
-            h4 = hashNode.execute(frame, inliningTarget, self.co_varnames(factory));
-            h5 = hashNode.execute(frame, inliningTarget, self.co_freevars(factory));
-            h6 = hashNode.execute(frame, inliningTarget, self.co_cellvars(factory));
+            h1 = hashNode.execute(frame, inliningTarget, self.co_code(language, inliningTarget));
+            h2 = hashNode.execute(frame, inliningTarget, self.co_consts(language));
+            h3 = hashNode.execute(frame, inliningTarget, self.co_names(language));
+            h4 = hashNode.execute(frame, inliningTarget, self.co_varnames(language));
+            h5 = hashNode.execute(frame, inliningTarget, self.co_freevars(language));
+            h6 = hashNode.execute(frame, inliningTarget, self.co_cellvars(language));
 
             h = h0 ^ h1 ^ h2 ^ h3 ^ h4 ^ h5 ^ h6 ^
                             self.co_argcount() ^ self.co_posonlyargcount() ^ self.co_kwonlyargcount() ^
@@ -377,9 +605,14 @@ public final class CodeBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "replace", minNumOfPositionalArgs = 1, parameterNames = {"$self",
+    @Builtin(name = "replace", minNumOfPositionalArgs = 1, parameterNames = {"$self"}, keywordOnlyNames = {
                     "co_argcount", "co_posonlyargcount", "co_kwonlyargcount", "co_nlocals", "co_stacksize", "co_flags", "co_firstlineno",
-                    "co_code", "co_consts", "co_names", "co_varnames", "co_freevars", "co_cellvars", "co_filename", "co_name", "co_linetable"})
+                    "co_code", "co_consts", "co_names", "co_varnames", "co_freevars", "co_cellvars",
+                    "co_filename", "co_name", "co_qualname", "co_linetable", "co_exceptiontable"})
+    @Builtin(name = "__replace__", minNumOfPositionalArgs = 1, parameterNames = {"$self"}, keywordOnlyNames = {
+                    "co_argcount", "co_posonlyargcount", "co_kwonlyargcount", "co_nlocals", "co_stacksize", "co_flags", "co_firstlineno",
+                    "co_code", "co_consts", "co_names", "co_varnames", "co_freevars", "co_cellvars",
+                    "co_filename", "co_name", "co_qualname", "co_linetable", "co_exceptiontable"}, doc = "The same as replace().")
     @ArgumentClinic(name = "co_argcount", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "-1", useDefaultForNone = true)
     @ArgumentClinic(name = "co_posonlyargcount", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "-1", useDefaultForNone = true)
     @ArgumentClinic(name = "co_kwonlyargcount", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "-1", useDefaultForNone = true)
@@ -395,6 +628,7 @@ public final class CodeBuiltins extends PythonBuiltins {
     @ArgumentClinic(name = "co_cellvars", conversion = ArgumentClinic.ClinicConversion.Tuple)
     @ArgumentClinic(name = "co_filename", conversion = ArgumentClinic.ClinicConversion.TString, defaultValue = VALUE_EMPTY_TSTRING, useDefaultForNone = true)
     @ArgumentClinic(name = "co_name", conversion = ArgumentClinic.ClinicConversion.TString, defaultValue = VALUE_EMPTY_TSTRING, useDefaultForNone = true)
+    @ArgumentClinic(name = "co_qualname", conversion = ArgumentClinic.ClinicConversion.TString, defaultValue = VALUE_EMPTY_TSTRING, useDefaultForNone = true)
     @ArgumentClinic(name = "co_linetable", conversion = ArgumentClinic.ClinicConversion.ReadableBuffer, defaultValue = VALUE_NONE, useDefaultForNone = true)
     @GenerateNodeFactory
     public abstract static class ReplaceNode extends PythonClinicBuiltinNode {
@@ -411,9 +645,10 @@ public final class CodeBuiltins extends PythonBuiltins {
                         Object[] coConsts, Object[] coNames,
                         Object[] coVarnames, Object[] coFreevars,
                         Object[] coCellvars, TruffleString coFilename,
-                        TruffleString coName, Object coLnotab,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+                        TruffleString coName, TruffleString coQualname,
+                        Object coLnotab, @SuppressWarnings("unused") Object coExceptiontable,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @Cached CodeNodes.CreateCodeNode createCodeNode,
                         @Cached CastToTruffleStringNode castToTruffleStringNode,
                         @CachedLibrary(limit = "2") PythonBufferAccessLibrary bufferLib) {
@@ -425,7 +660,7 @@ public final class CodeBuiltins extends PythonBuiltins {
                                 coNlocals == -1 ? self.co_nlocals() : coNlocals,
                                 coStacksize == -1 ? self.co_stacksize() : coStacksize,
                                 coFlags == -1 ? self.co_flags() : coFlags,
-                                PGuards.isNone(coCode) ? self.getCodestring() : bufferLib.getInternalOrCopiedByteArray(coCode),
+                                PGuards.isNone(coCode) ? self.getCodestring(inliningTarget) : bufferLib.getInternalOrCopiedByteArray(coCode),
                                 coConsts.length == 0 ? null : coConsts,
                                 coNames.length == 0 ? null : objectArrayToTruffleStringArray(inliningTarget, coNames, castToTruffleStringNode),
                                 coVarnames.length == 0 ? null : objectArrayToTruffleStringArray(inliningTarget, coVarnames, castToTruffleStringNode),
@@ -433,45 +668,25 @@ public final class CodeBuiltins extends PythonBuiltins {
                                 coCellvars.length == 0 ? null : objectArrayToTruffleStringArray(inliningTarget, coCellvars, castToTruffleStringNode),
                                 coFilename.isEmpty() ? self.co_filename() : coFilename,
                                 coName.isEmpty() ? self.co_name() : coName,
+                                coQualname.isEmpty() ? self.co_qualname() : coQualname,
                                 coFirstlineno == -1 ? self.co_firstlineno() : coFirstlineno,
                                 PGuards.isNone(coLnotab) ? self.getLinetable() : bufferLib.getInternalOrCopiedByteArray(coLnotab));
             } finally {
                 if (!PGuards.isNone(coCode)) {
-                    bufferLib.release(coCode, frame, indirectCallData);
+                    bufferLib.release(coCode, frame, callData);
                 }
                 if (!PGuards.isNone(coLnotab)) {
-                    bufferLib.release(coLnotab, frame, indirectCallData);
+                    bufferLib.release(coLnotab, frame, callData);
                 }
             }
         }
     }
 
-    private static boolean hasStrings(Object[] values) {
-        for (Object o : values) {
-            if (o instanceof TruffleString) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static PTuple internStrings(Node inliningTarget, Object[] values, InternStringNode internStringNode, PythonObjectFactory factory) {
+    private static PTuple createStringsTuple(Node inliningTarget, TruffleString[] values) {
+        PythonLanguage language = PythonLanguage.get(inliningTarget);
         if (values == null) {
-            return factory.createEmptyTuple();
+            return PFactory.createEmptyTuple(language);
         }
-        Object[] result;
-        if (!hasStrings(values)) {
-            result = values;
-        } else {
-            result = new Object[values.length];
-            for (int i = 0; i < values.length; ++i) {
-                if (values[i] instanceof TruffleString) {
-                    result[i] = internStringNode.execute(inliningTarget, values[i]);
-                } else {
-                    result[i] = values[i];
-                }
-            }
-        }
-        return factory.createTuple(result);
+        return PFactory.createTuple(language, PythonUtils.arrayCopyOf(values, values.length));
     }
 }

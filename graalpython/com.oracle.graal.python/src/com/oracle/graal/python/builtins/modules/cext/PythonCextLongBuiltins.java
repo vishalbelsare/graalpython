@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,53 +40,60 @@
  */
 package com.oracle.graal.python.builtins.modules.cext;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.NotImplementedError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CONST_UNSIGNED_CHAR_PTR;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CONST_VOID_PTR;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtrAsTruffleString;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.LONG_LONG;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Pointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyLongObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectAsTruffleString;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.SIZE_T;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UNSIGNED_CHAR_PTR;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UNSIGNED_LONG;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.UNSIGNED_LONG_LONG;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.OverflowError;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readByteArrayElements;
 
 import java.math.BigInteger;
+import java.nio.ByteOrder;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.modules.BuiltinConstructors;
-import com.oracle.graal.python.builtins.modules.BuiltinConstructors.IntNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi5BuiltinNode;
+import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
+import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi6BuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiNullaryBuiltinNode;
+import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiQuaternaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTernaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
-import com.oracle.graal.python.builtins.objects.cext.PythonNativeVoidPtr;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.CastToNativeLongNode;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.TransformExceptionToNativeNode;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodesFactory.TransformExceptionToNativeNodeGen;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor;
-import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodes.ConvertPIntToPrimitiveNode;
-import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodesFactory.ConvertPIntToPrimitiveNodeGen;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodes.TransformPExceptionToNativeCachedNode;
 import com.oracle.graal.python.builtins.objects.ints.IntBuiltins;
-import com.oracle.graal.python.builtins.objects.ints.IntBuiltins.NegNode;
+import com.oracle.graal.python.builtins.objects.ints.IntNodes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.lib.PyLongCheckNode;
 import com.oracle.graal.python.lib.PyLongFromDoubleNode;
+import com.oracle.graal.python.lib.PyLongFromUnicodeObject;
+import com.oracle.graal.python.lib.PyNumberIndexNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.truffle.PythonTypes;
+import com.oracle.graal.python.nodes.util.CastToJavaBigIntegerNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.nativeaccess.NativeMemory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -97,259 +104,247 @@ import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
-import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PythonCextLongBuiltins {
 
-    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
-    abstract static class _PyLong_Sign extends CApiUnaryBuiltinNode {
+    private static final CApiTiming TIMING_PYLONG_GETINFO = CApiTiming.create(false, "PyLong_GetInfo");
 
-        @SuppressWarnings("unused")
-        @Specialization(guards = "n == 0")
-        static int sign(int n) {
-            return 0;
+    @CApiBuiltin(ret = PyObjectTransfer, args = {}, call = Direct)
+    static long PyLong_GetInfo() {
+        CApiTiming.enter();
+        try {
+            Object result = SysModuleBuiltins.createIntInfo(PythonLanguage.get(null));
+            return PythonToNativeInternalNode.executeNewRefUncached(result);
+        } finally {
+            CApiTiming.exit(TIMING_PYLONG_GETINFO);
         }
+    }
 
-        @SuppressWarnings("unused")
-        @Specialization(guards = "n < 0")
-        static int signNeg(int n) {
-            return -1;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "n > 0")
-        static int signPos(int n) {
-            return 1;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "n == 0")
-        static int sign(long n) {
-            return 0;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "n < 0")
-        static int signNeg(long n) {
-            return -1;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "n > 0")
-        static int signPos(long n) {
-            return 1;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "b")
-        static int signTrue(boolean b) {
-            return 1;
-        }
-
-        @SuppressWarnings("unused")
-        @Specialization(guards = "!b")
-        static int signFalse(boolean b) {
-            return 0;
-        }
+    @CApiBuiltin(ret = Py_ssize_t, args = {PyLongObject}, call = Ignored)
+    abstract static class GraalPyPrivate_Long_DigitCount extends CApiUnaryBuiltinNode {
 
         @Specialization
-        static int sign(PInt n,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedBranchProfile zeroProfile,
-                        @Cached InlinedBranchProfile negProfile) {
-            if (n.isNegative()) {
-                negProfile.enter(inliningTarget);
-                return -1;
-            } else if (n.isZero()) {
-                zeroProfile.enter(inliningTarget);
-                return 0;
+        static long getDC(Object n,
+                        @Bind Node inliningTarget,
+                        @Cached CExtNodes.LvTagNode lvTagNode) {
+            return lvTagNode.getDigitCount(inliningTarget, n);
+        }
+    }
+
+    private static final CApiTiming TIMING_GRAALPYPRIVATE_LONG_FROMDOUBLE = CApiTiming.create(false, "GraalPyPrivate_Long_FromDouble");
+
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {ArgDescriptor.Double}, call = Ignored, acquireGil = false)
+    static long GraalPyPrivate_Long_FromDouble(double d) {
+        CApiTiming.enter();
+        try {
+            Object result = PyLongFromDoubleNode.executeUncached(d);
+            return PythonToNativeInternalNode.executeNewRefUncached(result);
+        } finally {
+            CApiTiming.exit(TIMING_GRAALPYPRIVATE_LONG_FROMDOUBLE);
+        }
+    }
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {ConstCharPtrAsTruffleString, Int}, call = Ignored)
+    abstract static class GraalPyPrivate_Long_FromString extends CApiBinaryBuiltinNode {
+
+        @Specialization
+        Object fromString(Object s, int base,
+                        @Bind Node inliningTarget,
+                        @Cached PyLongFromUnicodeObject fromUnicodeObject) {
+            return fromUnicodeObject.execute(inliningTarget, s, base);
+        }
+    }
+
+    @CApiBuiltin(ret = LONG_LONG, args = {PyObject, SIZE_T, Pointer}, call = Ignored, acquireGil = false)
+    abstract static class GraalPyPrivate_Long_AsPrimitiveAndOverflow extends CApiTernaryBuiltinNode {
+        @Specialization
+        static long doGeneric(Object object, long targetTypeSize, long overflow,
+                        @Bind Node inliningTarget,
+                        @Cached PyLongCheckNode longCheckNode,
+                        @Cached PyNumberIndexNode indexNode) {
+            Object integer;
+            if (longCheckNode.execute(inliningTarget, object)) {
+                integer = object;
             } else {
-                return 1;
+                integer = indexNode.execute(null, inliningTarget, object);
             }
-        }
 
-        @SuppressWarnings("unused")
-        @Specialization(guards = {"!canBeInteger(obj)", "isPIntSubtype(inliningTarget, obj, getClassNode, isSubtypeNode)"})
-        static Object signNative(Object obj,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached GetClassNode getClassNode,
-                        @Shared @Cached IsSubtypeNode isSubtypeNode) {
-            // function returns int, but -1 is expected result for 'n < 0'
-            throw CompilerDirectives.shouldNotReachHere("not yet implemented");
-        }
-
-        @Specialization(guards = {"!isInteger(obj)", "!isPInt(obj)", "!isPIntSubtype(inliningTarget, obj,getClassNode,isSubtypeNode)"})
-        static Object sign(@SuppressWarnings("unused") Object obj,
-                        @Bind("this") Node inliningTarget,
-                        @SuppressWarnings("unused") @Shared @Cached GetClassNode getClassNode,
-                        @SuppressWarnings("unused") @Shared @Cached IsSubtypeNode isSubtypeNode) {
-            // assert(PyLong_Check(v));
-            throw CompilerDirectives.shouldNotReachHere();
-        }
-
-        protected boolean isPIntSubtype(Node inliningTarget, Object obj, GetClassNode getClassNode, IsSubtypeNode isSubtypeNode) {
-            return isSubtypeNode.execute(getClassNode.execute(inliningTarget, obj), PythonBuiltinClassType.PInt);
-        }
-    }
-
-    @CApiBuiltin(ret = PyObjectTransfer, args = {ArgDescriptor.Double}, call = Direct)
-    abstract static class PyLong_FromDouble extends CApiUnaryBuiltinNode {
-
-        @Specialization
-        static Object fromDouble(double d,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyLongFromDoubleNode pyLongFromDoubleNode) {
-            return pyLongFromDoubleNode.execute(inliningTarget, d);
-        }
-    }
-
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObjectAsTruffleString, Int, Int}, call = Ignored)
-    @TypeSystemReference(PythonTypes.class)
-    abstract static class PyTruffleLong_FromString extends CApiTernaryBuiltinNode {
-
-        @Specialization(guards = "negative == 0")
-        Object fromString(Object s, int base, @SuppressWarnings("unused") int negative,
-                        @Shared @Cached BuiltinConstructors.IntNode intNode) {
-            return intNode.executeWith(null, s, base);
-        }
-
-        @Specialization(guards = "negative != 0")
-        Object fromString(Object s, int base, @SuppressWarnings("unused") int negative,
-                        @Shared @Cached BuiltinConstructors.IntNode intNode,
-                        @Cached NegNode negNode) {
-            return negNode.execute(null, intNode.executeWith(null, s, base));
-        }
-    }
-
-    @CApiBuiltin(ret = ArgDescriptor.Long, args = {PyObject, Int, ArgDescriptor.Long}, call = Ignored)
-    abstract static class PyTruffleLong_AsPrimitive extends CApiTernaryBuiltinNode {
-
-        @Specialization
-        static Object doGeneric(Object object, int mode, long targetTypeSize,
-                        @Bind("this") Node inliningTarget,
-                        @Cached IsSubtypeNode isSubtypeNode,
-                        @Cached GetClassNode getClassNode,
-                        @Cached ConvertPIntToPrimitiveNode convertPIntToPrimitiveNode,
-                        @Cached CastToNativeLongNode castToNativeLongNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
             try {
-                /*
-                 * The 'mode' parameter is usually a constant since this function is primarily used
-                 * in 'PyLong_As*' API functions that pass a fixed mode. So, there is not need to
-                 * profile the value and even if it is not constant, it is profiled implicitly.
-                 */
-                if (requiredPInt(mode) && !isSubtypeNode.execute(getClassNode.execute(inliningTarget, object), PythonBuiltinClassType.PInt)) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.INTEGER_REQUIRED);
-                }
-                // the 'ConvertPIntToPrimitiveNode' uses 'AsNativePrimitive' which does coercion
-                Object coerced = convertPIntToPrimitiveNode.execute(inliningTarget, object, signed(mode), PInt.intValueExact(targetTypeSize), exact(mode));
-                return castToNativeLongNode.execute(inliningTarget, coerced);
+                return convertBuiltinInteger(inliningTarget, integer, 1, (int) targetTypeSize, true);
             } catch (OverflowException e) {
-                throw CompilerDirectives.shouldNotReachHere();
+                writeOverflow(integer, overflow);
+                return -1;
             }
-        }
-
-        private static int signed(int mode) {
-            return mode & 0x1;
-        }
-
-        private static boolean requiredPInt(int mode) {
-            return (mode & 0x2) != 0;
-        }
-
-        private static boolean exact(int mode) {
-            return (mode & 0x4) == 0;
-        }
-    }
-
-    @CApiBuiltin(name = "PyLong_FromSsize_t", ret = PyObjectTransfer, args = {Py_ssize_t}, call = Direct)
-    @CApiBuiltin(name = "PyLong_FromLong", ret = PyObjectTransfer, args = {ArgDescriptor.Long}, call = Direct)
-    @CApiBuiltin(ret = PyObjectTransfer, args = {LONG_LONG}, call = Direct)
-    abstract static class PyLong_FromLongLong extends CApiUnaryBuiltinNode {
-
-        @Specialization
-        static int doSignedInt(int n) {
-            return n;
-        }
-
-        @Specialization
-        static long doSignedLong(long n) {
-            return n;
-        }
-
-        @Specialization(guards = "!isInteger(pointer)", limit = "2")
-        static Object doPointer(Object pointer,
-                        @CachedLibrary("pointer") InteropLibrary lib,
-                        @Cached PythonObjectFactory factory) {
-            // We capture the native pointer at the time when we create the wrapper if it exists.
-            if (lib.isPointer(pointer)) {
-                try {
-                    return factory.createNativeVoidPtr(pointer, lib.asPointer(pointer));
-                } catch (UnsupportedMessageException e) {
-                    throw CompilerDirectives.shouldNotReachHere(e);
-                }
-            }
-            return factory.createNativeVoidPtr(pointer);
-        }
-    }
-
-    @CApiBuiltin(name = "PyLong_FromSize_t", ret = PyObjectTransfer, args = {SIZE_T}, call = Direct)
-    @CApiBuiltin(name = "PyLong_FromUnsignedLong", ret = PyObjectTransfer, args = {UNSIGNED_LONG}, call = Direct)
-    @CApiBuiltin(ret = PyObjectTransfer, args = {UNSIGNED_LONG_LONG}, call = Direct)
-    abstract static class PyLong_FromUnsignedLongLong extends CApiUnaryBuiltinNode {
-
-        @Specialization
-        static long doUnsignedInt(int n) {
-            if (n < 0) {
-                return n & 0xFFFFFFFFL;
-            }
-            return n;
-        }
-
-        @Specialization(guards = "n >= 0")
-        static Object doUnsignedLongPositive(long n) {
-            return n;
-        }
-
-        @Specialization(guards = "n < 0")
-        static Object doUnsignedLongNegative(long n,
-                        @Shared @Cached PythonObjectFactory factory) {
-            return factory.createInt(convertToBigInteger(n));
-        }
-
-        @Specialization(guards = "!isInteger(pointer)", limit = "2")
-        static Object doPointer(Object pointer,
-                        @CachedLibrary("pointer") InteropLibrary lib,
-                        @Shared @Cached PythonObjectFactory factory) {
-            // We capture the native pointer at the time when we create the wrapper if it exists.
-            if (lib.isPointer(pointer)) {
-                try {
-                    return factory.createNativeVoidPtr(pointer, lib.asPointer(pointer));
-                } catch (UnsupportedMessageException e) {
-                    throw CompilerDirectives.shouldNotReachHere(e);
-                }
-            }
-            return factory.createNativeVoidPtr(pointer);
         }
 
         @TruffleBoundary
-        private static BigInteger convertToBigInteger(long n) {
-            return BigInteger.valueOf(n).add(BigInteger.ONE.shiftLeft(Long.SIZE));
+        private static void writeOverflow(Object value, long overflow) {
+            int sign;
+            if (value instanceof Long longValue) {
+                sign = Long.signum(longValue);
+            } else {
+                assert value instanceof PInt;
+                sign = ((PInt) value).isNegative() ? -1 : 1;
+            }
+            assert sign >= -1 && sign <= 1;
+            NativeMemory.writeInt(overflow, sign);
         }
     }
 
-    @CApiBuiltin(ret = Pointer, args = {PyObject}, call = Direct)
-    public abstract static class PyLong_AsVoidPtr extends CApiUnaryBuiltinNode {
-        @Child private ConvertPIntToPrimitiveNode asPrimitiveNode;
-        @Child private TransformExceptionToNativeNode transformExceptionToNativeNode;
+    @CApiBuiltin(ret = LONG_LONG, args = {PyObject, Int, SIZE_T}, call = Ignored)
+    abstract static class GraalPyPrivate_Long_AsPrimitiveWithCoercion extends CApiTernaryBuiltinNode {
+        @Specialization
+        static long doGeneric(Object object, int mode, long targetTypeSize,
+                        @Bind Node inliningTarget,
+                        @Cached PyLongCheckNode longCheckNode,
+                        @Cached PyNumberIndexNode indexNode,
+                        @Cached PRaiseNode raiseNode) {
+            Object integer;
+            if (longCheckNode.execute(inliningTarget, object)) {
+                integer = object;
+            } else {
+                integer = indexNode.execute(null, inliningTarget, object);
+            }
+            return convertAndRaise(inliningTarget, integer, mode, (int) targetTypeSize, raiseNode);
+        }
+    }
+
+    @CApiBuiltin(ret = LONG_LONG, args = {PyObject, Int, SIZE_T}, call = Ignored)
+    abstract static class GraalPyPrivate_Long_AsPrimitive extends CApiTernaryBuiltinNode {
+
+        @Specialization
+        static Object doGeneric(Object object, int mode, long targetTypeSize,
+                        @Bind Node inliningTarget,
+                        @Cached PyLongCheckNode longCheckNode,
+                        @Cached PRaiseNode raiseNode) {
+            if (!longCheckNode.execute(inliningTarget, object)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.INTEGER_REQUIRED);
+            }
+            return convertAndRaise(inliningTarget, object, mode, (int) targetTypeSize, raiseNode);
+        }
+    }
+
+    private static long convertAndRaise(Node inliningTarget, Object object, int mode, int targetTypeSize, PRaiseNode raiseNode) {
+        try {
+            return convertBuiltinInteger(inliningTarget, object, signed(mode), targetTypeSize, exact(mode));
+        } catch (OverflowException e) {
+            throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO_C_TYPE, targetTypeSize);
+        }
+    }
+
+    private static int signed(int mode) {
+        return mode & 0x1;
+    }
+
+    private static boolean exact(int mode) {
+        return (mode & 0x4) == 0;
+    }
+
+    private static long convertBuiltinInteger(Node inliningTarget, Object object, int signed, int targetTypeSize, boolean exact) throws OverflowException {
+        if (targetTypeSize != Integer.BYTES && targetTypeSize != Long.BYTES) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.SystemError, ErrorMessages.UNSUPPORTED_TARGET_SIZE, targetTypeSize);
+        }
+        if (object instanceof Boolean value) {
+            return value ? 1 : 0;
+        } else if (object instanceof Integer value) {
+            return convertLong(inliningTarget, value, signed, targetTypeSize, exact);
+        } else if (object instanceof Long value) {
+            return convertLong(inliningTarget, value, signed, targetTypeSize, exact);
+        } else if (object instanceof PInt value) {
+            if (!exact) {
+                return targetTypeSize == Integer.BYTES ? value.intValue() : value.longValue();
+            }
+            if (signed == 0 && value.isNegative()) {
+                throw raiseNegativeValue(inliningTarget);
+            }
+            if (targetTypeSize == Integer.BYTES) {
+                if (signed != 0) {
+                    return value.intValueExact();
+                } else if (value.bitLength() <= Integer.SIZE) {
+                    return value.intValue();
+                }
+            } else if (signed != 0) {
+                return value.longValueExact();
+            } else if (value.bitLength() <= Long.SIZE) {
+                return value.longValue();
+            }
+            throw OverflowException.INSTANCE;
+        } else if (object instanceof PythonAbstractNativeObject) {
+            throw PRaiseNode.raiseStatic(inliningTarget, NotImplementedError, ErrorMessages.CASTING_A_NATIVE_INT_OBJECT_IS_NOT_IMPLEMENTED_YET);
+        }
+        throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.INDEX_RETURNED_NON_INT, object);
+    }
+
+    private static long convertLong(Node inliningTarget, long value, int signed, int targetTypeSize, boolean exact) throws OverflowException {
+        if (!exact) {
+            return targetTypeSize == Integer.BYTES ? (int) value : value;
+        }
+        if (signed == 0 && value < 0) {
+            throw raiseNegativeValue(inliningTarget);
+        }
+        if (targetTypeSize == Integer.BYTES && (signed != 0 ? (int) value != value : Integer.toUnsignedLong((int) value) != value)) {
+            throw OverflowException.INSTANCE;
+        }
+        return value;
+    }
+
+    private static PException raiseNegativeValue(Node inliningTarget) {
+        throw PRaiseNode.raiseStatic(inliningTarget, OverflowError, ErrorMessages.CANNOT_CONVERT_NEGATIVE_VALUE_TO_UNSIGNED_INT);
+    }
+
+    private static final CApiTiming TIMING_GRAALPYPRIVATE_LONG_FROMLONGLONG = CApiTiming.create(false, "GraalPyPrivate_Long_FromLongLong");
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {LONG_LONG}, call = Ignored)
+    static long GraalPyPrivate_Long_FromLongLong(long n) {
+        CApiTiming.enter();
+        try {
+            return PythonToNativeInternalNode.executeNewRefUncached(n);
+        } finally {
+            CApiTiming.exit(TIMING_GRAALPYPRIVATE_LONG_FROMLONGLONG);
+        }
+    }
+
+    private static final CApiTiming TIMING_GRAALPYPRIVATE_LONG_FROMUNSIGNEDLONGLONG = CApiTiming.create(false, "GraalPyPrivate_Long_FromUnsignedLongLong");
+
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {UNSIGNED_LONG_LONG}, call = Ignored, acquireGil = false)
+    static long GraalPyPrivate_Long_FromUnsignedLongLong(long n) {
+        CApiTiming.enter();
+        try {
+            Object result = n >= 0 ? n : PFactory.createInt(PythonLanguage.get(null), PInt.longToUnsignedBigInteger(n));
+            return PythonToNativeInternalNode.executeNewRefUncached(result);
+        } finally {
+            CApiTiming.exit(TIMING_GRAALPYPRIVATE_LONG_FROMUNSIGNEDLONGLONG);
+        }
+    }
+
+    private static final CApiTiming TIMING_GRAALPYPRIVATE_LONG_NUMBITS = CApiTiming.create(false, "GraalPyPrivate_Long_NumBits");
+
+    @CApiBuiltin(ret = SIZE_T, args = {PyObjectRawPointer}, call = Ignored, acquireGil = false)
+    static long GraalPyPrivate_Long_NumBits(long objPtr) {
+        CApiTiming.enter();
+        try {
+            Object obj = NativeToPythonInternalNode.executeUncached(objPtr, false);
+            if (obj instanceof Integer value) {
+                return Integer.SIZE - Integer.numberOfLeadingZeros(Math.abs(value));
+            } else if (obj instanceof Long value) {
+                return Long.SIZE - Long.numberOfLeadingZeros(Math.abs(value));
+            } else if (obj instanceof PInt value) {
+                return value.bitLength();
+            } else if (obj instanceof Boolean value) {
+                return value ? 1 : 0;
+            }
+            throw CompilerDirectives.shouldNotReachHere();
+        } finally {
+            CApiTiming.exit(TIMING_GRAALPYPRIVATE_LONG_NUMBITS);
+        }
+    }
+
+    @CApiBuiltin(ret = Pointer, args = {PyObject}, call = Ignored)
+    abstract static class GraalPyPrivate_Long_AsVoidPtr extends CApiUnaryBuiltinNode {
+        @Child private TransformPExceptionToNativeCachedNode transformExceptionToNativeNode;
 
         @Specialization
         static long doPointer(int n) {
@@ -363,125 +358,267 @@ public final class PythonCextLongBuiltins {
 
         @Specialization
         long doPointer(PInt n,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedBranchProfile overflowProfile,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             try {
                 return n.longValueExact();
             } catch (OverflowException e) {
+                if (!n.isNegative() && n.bitLength() <= Long.SIZE) {
+                    return n.longValue();
+                }
                 overflowProfile.enter(inliningTarget);
-                try {
-                    throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "C long");
-                } catch (PException pe) {
-                    ensureTransformExcNode().executeCached(pe);
-                    return 0;
-                }
-            }
-        }
-
-        @Specialization
-        static Object doPointer(PythonNativeVoidPtr n) {
-            return n.getPointerObject();
-        }
-
-        @Fallback
-        long doGeneric(Object n,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            if (asPrimitiveNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                asPrimitiveNode = insert(ConvertPIntToPrimitiveNodeGen.create());
-            }
-            try {
-                try {
-                    return asPrimitiveNode.executeLongCached(n, 0, Long.BYTES);
-                } catch (UnexpectedResultException e) {
-                    throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "C long");
-                }
-            } catch (PException e) {
-                ensureTransformExcNode().executeCached(e);
+                transformOverflow(inliningTarget, raiseNode);
                 return 0;
             }
         }
 
-        private TransformExceptionToNativeNode ensureTransformExcNode() {
+        @Fallback
+        long doGeneric(Object n,
+                        @Bind Node inliningTarget,
+                        @Cached PyNumberIndexNode indexNode,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
+            try {
+                Object index = indexNode.execute(null, inliningTarget, n);
+                return convertBuiltinInteger(inliningTarget, index, 0, Long.BYTES, true);
+            } catch (OverflowException e) {
+                transformOverflow(inliningTarget, raiseNode);
+                return 0;
+            } catch (PException e) {
+                ensureTransformExcNode().execute(e);
+                return 0;
+            }
+        }
+
+        private void transformOverflow(Node inliningTarget, PRaiseNode raiseNode) {
+            try {
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "C long");
+            } catch (PException pe) {
+                ensureTransformExcNode().execute(pe);
+            }
+        }
+
+        private TransformPExceptionToNativeCachedNode ensureTransformExcNode() {
             if (transformExceptionToNativeNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                transformExceptionToNativeNode = insert(TransformExceptionToNativeNodeGen.create());
+                transformExceptionToNativeNode = insert(TransformPExceptionToNativeCachedNode.create());
             }
             return transformExceptionToNativeNode;
         }
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, call = Ignored)
-    abstract static class PyTruffleLong_One extends CApiNullaryBuiltinNode {
-        @Specialization
-        static int run() {
-            return 1;
-        }
-    }
-
-    @CApiBuiltin(ret = PyObjectTransfer, call = Ignored)
-    abstract static class PyTruffleLong_Zero extends CApiNullaryBuiltinNode {
-        @Specialization
-        static int run() {
-            return 0;
-        }
-    }
-
-    @CApiBuiltin(ret = Int, args = {PyLongObject, UNSIGNED_CHAR_PTR, SIZE_T, Int, Int}, call = Direct)
-    abstract static class _PyLong_AsByteArray extends CApi5BuiltinNode {
-        private static void checkSign(Node inliningTarget, boolean negative, int isSigned, PRaiseNode.Lazy raiseNode) {
+    @CApiBuiltin(ret = Int, args = {PyLongObject, UNSIGNED_CHAR_PTR, SIZE_T, Int, Int, Int}, call = Direct)
+    abstract static class _PyLong_AsByteArray extends CApi6BuiltinNode {
+        private static void checkSign(Node inliningTarget, boolean negative, int isSigned, int withExceptions, PRaiseNode raiseNode) {
             if (negative) {
                 if (isSigned == 0) {
-                    throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.MESSAGE_CONVERT_NEGATIVE);
+                    if (withExceptions != 0) {
+                        throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.MESSAGE_CONVERT_NEGATIVE);
+                    }
                 }
             }
         }
 
         @Specialization
-        static Object get(int value, Object bytes, long n, int littleEndian, int isSigned,
-                        @Bind("this") Node inliningTarget,
+        static Object get(int value, long bytes, long n, int littleEndian, int isSigned, int withExceptions,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile profile,
-                        @Shared @Cached CStructAccess.WriteByteNode write,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            checkSign(inliningTarget, value < 0, isSigned, raiseNode);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            checkSign(inliningTarget, value < 0, isSigned, withExceptions, raiseNode);
             byte[] array = IntBuiltins.ToBytesNode.fromLong(value, PythonUtils.toIntError(n), littleEndian == 0, isSigned != 0, inliningTarget, profile, raiseNode);
-            write.writeByteArray(bytes, array);
+            NativeMemory.writeByteArrayElements(bytes, 0L, array, 0, array.length);
             return 0;
         }
 
         @Specialization
-        static Object get(long value, Object bytes, long n, int littleEndian, int isSigned,
-                        @Bind("this") Node inliningTarget,
+        static Object get(long value, long bytes, long n, int littleEndian, int isSigned, int withExceptions,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile profile,
-                        @Shared @Cached CStructAccess.WriteByteNode write,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            checkSign(inliningTarget, value < 0, isSigned, raiseNode);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            checkSign(inliningTarget, value < 0, isSigned, withExceptions, raiseNode);
             byte[] array = IntBuiltins.ToBytesNode.fromLong(value, PythonUtils.toIntError(n), littleEndian == 0, isSigned != 0, inliningTarget, profile, raiseNode);
-            write.writeByteArray(bytes, array);
+            NativeMemory.writeByteArrayElements(bytes, 0L, array, 0, array.length);
             return 0;
         }
 
         @Specialization
-        static Object get(PInt value, Object bytes, long n, int littleEndian, int isSigned,
-                        @Bind("this") Node inliningTarget,
+        static Object get(PInt value, long bytes, long n, int littleEndian, int isSigned, int withExceptions,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile profile,
-                        @Shared @Cached CStructAccess.WriteByteNode write,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            checkSign(inliningTarget, value.isNegative(), isSigned, raiseNode);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            checkSign(inliningTarget, value.isNegative(), isSigned, withExceptions, raiseNode);
             byte[] array = IntBuiltins.ToBytesNode.fromBigInteger(value, PythonUtils.toIntError(n), littleEndian == 0, isSigned != 0, inliningTarget, profile, raiseNode);
-            write.writeByteArray(bytes, array);
+            NativeMemory.writeByteArrayElements(bytes, 0L, array, 0, array.length);
             return 0;
         }
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObjectAsTruffleString, Int}, call = Direct)
+    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, Int}, call = Direct)
     abstract static class PyLong_FromUnicodeObject extends CApiBinaryBuiltinNode {
         @Specialization
-        static Object convert(TruffleString s, int base,
-                        @Cached IntNode intNode) {
-            return intNode.executeWith(null, s, base);
+        static Object convert(Object s, int base,
+                        @Bind Node inliningTarget,
+                        @Cached PyLongFromUnicodeObject pyLongFromUnicodeObject) {
+            return pyLongFromUnicodeObject.execute(inliningTarget, s, base);
         }
+    }
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {CONST_UNSIGNED_CHAR_PTR, SIZE_T, Int, Int}, call = Direct)
+    abstract static class _PyLong_FromByteArray extends CApiQuaternaryBuiltinNode {
+        @Specialization
+        static Object convert(long charPtr, long size, int littleEndian, int signed,
+                        @Bind Node inliningTarget,
+                        @Cached IntNodes.PyLongFromByteArray fromByteArray,
+                        @Cached PRaiseNode raiseNode) {
+            if (size != (int) size) {
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.BYTE_ARRAY_TOO_LONG_TO_CONVERT_TO_INT);
+            }
+            byte[] bytes = readByteArrayElements(charPtr, 0, (int) size);
+            return fromByteArray.execute(inliningTarget, bytes, littleEndian != 0, signed != 0);
+        }
+    }
+
+    private static final int LITTLE_ENDIAN = 1;
+    private static final int NATIVE_ENDIAN = 2;
+    private static final int UNSIGNED_BUFFER = 4;
+    private static final int REJECT_NEGATIVE = 8;
+    private static final int ALLOW_INDEX = 16;
+    private static final int PYLONG_BITS_IN_DIGIT = 30;
+
+    private static final CApiTiming TIMING_PYLONG_ASNATIVEBYTES = CApiTiming.create(false, "PyLong_AsNativeBytes");
+
+    @CApiBuiltin(ret = Py_ssize_t, args = {PyObjectRawPointer, Pointer, Py_ssize_t, Int}, call = Direct)
+    static long PyLong_AsNativeBytes(long objectPtr, long buffer, long size, int flags) {
+        CApiTiming.enter();
+        try {
+            if (objectPtr == 0 || size < 0) {
+                throw PythonCextBuiltins.badInternalCall("PyLong_AsNativeBytes", objectPtr == 0 ? "object" : "size");
+            }
+
+            Object object = NativeToPythonInternalNode.executeUncached(objectPtr, false);
+            Object integer = object;
+            if (!PyLongCheckNode.executeUncached(object)) {
+                if (flags != -1 && (flags & ALLOW_INDEX) != 0) {
+                    integer = PyNumberIndexNode.executeUncached(object);
+                } else {
+                    throw PRaiseNode.raiseStatic(null, TypeError, ErrorMessages.INTEGER_REQUIRED_GOT, object);
+                }
+            }
+
+            BigInteger value = CastToJavaBigIntegerNode.executeUncached(integer);
+            if (flags != -1 && (flags & REJECT_NEGATIVE) != 0 && value.signum() < 0) {
+                throw PRaiseNode.raiseStatic(null, ValueError, ErrorMessages.CANNOT_CONVERT_NEGATIVE_INT);
+            }
+
+            boolean littleEndian = resolveEndianness(flags);
+            if (size > 0) {
+                writeNativeBytes(buffer, size, value, littleEndian);
+            }
+            return requiredNativeBytesSize(value, size, flags);
+        } finally {
+            CApiTiming.exit(TIMING_PYLONG_ASNATIVEBYTES);
+        }
+    }
+
+    @TruffleBoundary
+    private static void writeNativeBytes(long buffer, long size, BigInteger value, boolean littleEndian) {
+        byte[] source = value.toByteArray();
+        byte fill = value.signum() < 0 ? (byte) 0xff : 0;
+        NativeMemory.memset(buffer, fill, size);
+        int copyLength = (int) Math.min(size, source.length);
+        int sourceOffset = source.length - copyLength;
+        if (littleEndian) {
+            byte[] reversed = new byte[copyLength];
+            for (int i = 0; i < copyLength; i++) {
+                reversed[i] = source[source.length - i - 1];
+            }
+            NativeMemory.writeByteArrayElements(buffer, 0, reversed, 0, copyLength);
+        } else {
+            NativeMemory.writeByteArrayElements(buffer, size - copyLength, source, sourceOffset, copyLength);
+        }
+    }
+
+    @TruffleBoundary
+    private static long requiredNativeBytesSize(BigInteger value, long size, int flags) {
+        int magnitudeBits = value.abs().bitLength();
+        if (magnitudeBits <= PYLONG_BITS_IN_DIGIT) {
+            long result = Long.BYTES;
+            if (size > 0 && size <= Long.BYTES) {
+                int bits = (int) size * Byte.SIZE;
+                BigInteger signedLimit = BigInteger.ONE.shiftLeft(bits - 1);
+                if (value.compareTo(signedLimit.negate()) >= 0 && value.compareTo(signedLimit) < 0) {
+                    result = size;
+                } else if (value.signum() > 0 && value.compareTo(BigInteger.ONE.shiftLeft(bits)) < 0) {
+                    result = flags == -1 || (flags & UNSIGNED_BUFFER) != 0 ? size : size + 1;
+                }
+            }
+            return result;
+        }
+
+        long result = magnitudeBits / Byte.SIZE + 1L;
+        if (size > 0 && result == size + 1 && magnitudeBits % Byte.SIZE == 0) {
+            if (value.signum() < 0) {
+                BigInteger minimum = BigInteger.ONE.shiftLeft(magnitudeBits - 1).negate();
+                if (value.equals(minimum)) {
+                    result = size;
+                }
+            } else if (flags == -1 || (flags & UNSIGNED_BUFFER) != 0) {
+                result = size;
+            }
+        }
+        return result;
+    }
+
+    private static final CApiTiming TIMING_PYLONG_FROMNATIVEBYTES = CApiTiming.create(false, "PyLong_FromNativeBytes");
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {CONST_VOID_PTR, SIZE_T, Int}, call = Direct)
+    static long PyLong_FromNativeBytes(long buffer, long size, int flags) {
+        CApiTiming.enter();
+        try {
+            if (buffer == 0) {
+                throw PythonCextBuiltins.badInternalCall("PyLong_FromNativeBytes", "buffer");
+            }
+            if (size != (int) size) {
+                throw PRaiseNode.raiseStatic(null, OverflowError, ErrorMessages.BYTE_ARRAY_TOO_LONG_TO_CONVERT_TO_INT);
+            }
+            boolean littleEndian = resolveEndianness(flags);
+            boolean signed = flags == -1 || (flags & UNSIGNED_BUFFER) == 0;
+            byte[] bytes = readByteArrayElements(buffer, 0, (int) size);
+            Object result = IntNodes.PyLongFromByteArray.executeUncached(bytes, littleEndian, signed);
+            return PythonToNativeInternalNode.executeNewRefUncached(result);
+        } finally {
+            CApiTiming.exit(TIMING_PYLONG_FROMNATIVEBYTES);
+        }
+    }
+
+    private static final CApiTiming TIMING_PYLONG_FROMUNSIGNEDNATIVEBYTES = CApiTiming.create(false, "PyLong_FromUnsignedNativeBytes");
+
+    @CApiBuiltin(ret = PyObjectTransfer, args = {CONST_VOID_PTR, SIZE_T, Int}, call = Direct)
+    static long PyLong_FromUnsignedNativeBytes(long buffer, long size, int flags) {
+        CApiTiming.enter();
+        try {
+            if (buffer == 0) {
+                throw PythonCextBuiltins.badInternalCall("PyLong_FromUnsignedNativeBytes", "buffer");
+            }
+            if (size != (int) size) {
+                throw PRaiseNode.raiseStatic(null, OverflowError, ErrorMessages.BYTE_ARRAY_TOO_LONG_TO_CONVERT_TO_INT);
+            }
+            boolean littleEndian = resolveEndianness(flags);
+            byte[] bytes = readByteArrayElements(buffer, 0, (int) size);
+            Object result = IntNodes.PyLongFromByteArray.executeUncached(bytes, littleEndian, false);
+            return PythonToNativeInternalNode.executeNewRefUncached(result);
+        } finally {
+            CApiTiming.exit(TIMING_PYLONG_FROMUNSIGNEDNATIVEBYTES);
+        }
+    }
+
+    private static boolean resolveEndianness(int flags) {
+        boolean littleEndian;
+        if (flags == -1 || (flags & NATIVE_ENDIAN) != 0) {
+            littleEndian = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+        } else {
+            littleEndian = (flags & LITTLE_ENDIAN) != 0;
+        }
+        return littleEndian;
     }
 }

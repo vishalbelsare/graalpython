@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,7 +44,6 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.nodes.PGuards;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -56,14 +55,10 @@ import com.oracle.truffle.api.nodes.Node;
 
 @ImportStatic(PGuards.class)
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 20
+@GenerateInline(false)       // footprint reduction 36 -> 20
 public abstract class BaseExceptionAttrNode extends Node {
     public interface StorageFactory {
-        Object[] create(Object[] args, PythonObjectFactory factory);
-
-        default Object[] create(Object[] args) {
-            return create(args, null);
-        }
+        Object[] create(Object[] args);
 
         default Object[] create() {
             return create(null);
@@ -78,6 +73,12 @@ public abstract class BaseExceptionAttrNode extends Node {
         final Object val = execute(self, PNone.NO_VALUE, index, factory);
         assert val instanceof Integer : "expected PBaseException attribute to be an integer";
         return (int) val;
+    }
+
+    public final long getLong(PBaseException self, int index, StorageFactory factory) {
+        final Object val = execute(self, PNone.NO_VALUE, index, factory);
+        assert val instanceof Integer || val instanceof Long : "expected PBaseException attribute to be an integer";
+        return val instanceof Integer ? (int) val : (long) val;
     }
 
     public final Object set(PBaseException self, Object value, int index, StorageFactory factory) {
@@ -97,15 +98,14 @@ public abstract class BaseExceptionAttrNode extends Node {
 
         @Specialization
         static Object[] ensure(PBaseException self, StorageFactory storageFactory,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ExceptionNodes.GetArgsNode getArgsNode,
-                        @Cached SequenceStorageNodes.GetInternalObjectArrayNode getInternalObjectArrayNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached SequenceStorageNodes.GetInternalObjectArrayNode getInternalObjectArrayNode) {
             Object[] attributes = self.getExceptionAttributes();
             if (attributes == null) {
                 PTuple argsTuple = getArgsNode.execute(inliningTarget, self);
                 Object[] args = getInternalObjectArrayNode.execute(inliningTarget, argsTuple.getSequenceStorage());
-                attributes = storageFactory.create(args, factory);
+                attributes = storageFactory.create(args);
                 self.setExceptionAttributes(attributes);
             }
             return attributes;

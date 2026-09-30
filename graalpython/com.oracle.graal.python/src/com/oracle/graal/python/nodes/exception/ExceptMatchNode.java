@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,26 +41,29 @@
 package com.oracle.graal.python.nodes.exception;
 
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.exception.PBaseException;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.bytecode.OperationProxy;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
-import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
@@ -68,39 +71,48 @@ import com.oracle.truffle.api.nodes.Node;
 
 @ImportStatic(PGuards.class)
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 44 -> 25
+@OperationProxy.Proxyable(allowUncached = true, storeBytecodeIndex = true)
+@GenerateInline(false)       // footprint reduction 44 -> 25
 public abstract class ExceptMatchNode extends Node {
-    public abstract boolean executeMatch(Frame frame, Object exception, Object clause);
+    public abstract boolean executeMatch(Object exception, Object clause);
 
-    private static void raiseIfNoException(VirtualFrame frame, Object clause, ValidExceptionNode isValidException, PRaiseNode raiseNode) {
-        if (!isValidException.execute(frame, clause)) {
-            raiseNoException(raiseNode);
+    private static void raiseIfNoException(Node inliningTarget, Object clause, ValidExceptionNode isValidException) {
+        if (!isValidException.execute(clause)) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonErrorType.TypeError, ErrorMessages.CATCHING_CLS_NOT_ALLOWED);
         }
     }
 
-    private static void raiseNoException(PRaiseNode raiseNode) {
-        throw raiseNode.raise(PythonErrorType.TypeError, ErrorMessages.CATCHING_CLS_NOT_ALLOWED);
+    @Specialization(guards = "!tupleCheckNode.execute(inliningTarget, clause)")
+    public static boolean matchPythonSingle(PException e, Object clause,
+                    @Bind Node inliningTarget,
+                    @SuppressWarnings("unused") @Shared @Cached PyTupleCheckNode tupleCheckNode,
+                    @Shared @Cached ValidExceptionNode isValidException,
+                    @Shared @Cached GetClassNode getClassNode,
+                    @Shared @Cached IsSubtypeNode isSubtype) {
+        raiseIfNoException(inliningTarget, clause, isValidException);
+        return isSubtype.execute(getClassNode.execute(inliningTarget, e.getUnreifiedException()), clause);
     }
 
-    @Specialization(guards = "!isPTuple(clause)")
-    static boolean matchPythonSingle(VirtualFrame frame, PException e, Object clause,
-                    @Bind("this") Node inliningTarget,
+    @Specialization(guards = "!tupleCheckNode.execute(inliningTarget, clause)")
+    public static boolean matchPythonBaseSingle(PBaseException e, Object clause,
+                    @Bind Node inliningTarget,
+                    @SuppressWarnings("unused") @Shared @Cached PyTupleCheckNode tupleCheckNode,
                     @Shared @Cached ValidExceptionNode isValidException,
-                    @Cached GetClassNode getClassNode,
-                    @Cached IsSubtypeNode isSubtype,
-                    @Shared @Cached PRaiseNode raiseNode) {
-        raiseIfNoException(frame, clause, isValidException, raiseNode);
-        return isSubtype.execute(frame, getClassNode.execute(inliningTarget, e.getUnreifiedException()), clause);
+                    @Shared @Cached GetClassNode getClassNode,
+                    @Shared @Cached IsSubtypeNode isSubtype) {
+        raiseIfNoException(inliningTarget, clause, isValidException);
+        return isSubtype.execute(getClassNode.execute(inliningTarget, e), clause);
     }
 
-    @Specialization(guards = {"!isPTuple(clause)", "!isPException(e)"}, limit = "1")
-    static boolean matchJava(VirtualFrame frame, AbstractTruffleException e, Object clause,
+    @Specialization(guards = {"!tupleCheckNode.execute(inliningTarget, clause)", "!isPException(e)"}, limit = "1")
+    public static boolean matchJava(AbstractTruffleException e, Object clause,
+                    @Bind Node inliningTarget,
+                    @SuppressWarnings("unused") @Shared @Cached PyTupleCheckNode tupleCheckNode,
                     @Shared @Cached ValidExceptionNode isValidException,
-                    @CachedLibrary("clause") InteropLibrary clauseLib,
-                    @Shared @Cached PRaiseNode raiseNode) {
+                    @CachedLibrary("clause") InteropLibrary clauseLib) {
         // n.b.: we can only allow Java exceptions in clauses, because we cannot tell for other
         // foreign exception types if they *are* exception types
-        raiseIfNoException(frame, clause, isValidException, raiseNode);
+        raiseIfNoException(inliningTarget, clause, isValidException);
         if (clauseLib.isMetaObject(clause)) {
             try {
                 return clauseLib.isMetaInstance(clause, e);
@@ -113,17 +125,19 @@ public abstract class ExceptMatchNode extends Node {
         }
     }
 
-    @Specialization
-    static boolean matchTuple(VirtualFrame frame, Object e, PTuple clause,
-                    @Bind("this") Node inliningTarget,
-                    @Cached ExceptMatchNode recursiveNode,
-                    @Cached SequenceStorageNodes.GetItemScalarNode getItemNode) {
+    @Specialization(guards = "tupleCheckNode.execute(inliningTarget, clause)", limit = "1")
+    public static boolean matchTuple(Object e, Object clause,
+                    @Bind Node inliningTarget,
+                    @SuppressWarnings("unused") @Exclusive @Cached PyTupleCheckNode tupleCheckNode,
+                    @Exclusive @Cached ExceptMatchNode recursiveNode,
+                    @Exclusive @Cached TupleNodes.GetTupleStorage getTupleStorage,
+                    @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItemNode) {
         // check for every type in the tuple
-        SequenceStorage storage = clause.getSequenceStorage();
+        SequenceStorage storage = getTupleStorage.execute(inliningTarget, clause);
         int length = storage.length();
         for (int i = 0; i < length; i++) {
             Object clauseType = getItemNode.execute(inliningTarget, storage, i);
-            if (recursiveNode.executeMatch(frame, e, clauseType)) {
+            if (recursiveNode.executeMatch(e, clauseType)) {
                 return true;
             }
         }

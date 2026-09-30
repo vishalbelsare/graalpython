@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,8 +42,9 @@ package com.oracle.graal.python.builtins.modules.hashlib;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -58,8 +59,8 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.runtime.IndirectCallData;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
@@ -88,13 +89,12 @@ public final class DigestObjectBuiltins extends PythonBuiltins {
     abstract static class CopyNode extends PythonUnaryBuiltinNode {
         @Specialization
         static DigestObject copy(DigestObject self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode) {
             try {
-                return self.copy(factory);
+                return self.copy();
             } catch (CloneNotSupportedException e) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.ValueError);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.ValueError);
             }
         }
     }
@@ -104,8 +104,8 @@ public final class DigestObjectBuiltins extends PythonBuiltins {
     abstract static class DigestNode extends PythonUnaryBuiltinNode {
         @Specialization
         static PBytes digest(DigestObject self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createBytes(self.digest());
+                        @Bind PythonLanguage language) {
+            return PFactory.createBytes(language, self.digest());
         }
     }
 
@@ -114,7 +114,7 @@ public final class DigestObjectBuiltins extends PythonBuiltins {
     abstract static class HexdigestNode extends PythonUnaryBuiltinNode {
         @Specialization
         static TruffleString hexdigest(DigestObject self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached BytesNodes.ByteToHexNode toHexNode) {
             byte[] digest = self.digest();
             return toHexNode.execute(inliningTarget, digest, digest.length, (byte) 0, 0);
@@ -132,17 +132,17 @@ public final class DigestObjectBuiltins extends PythonBuiltins {
 
         @Specialization(limit = "3")
         static PNone update(VirtualFrame frame, DigestObject self, Object buffer,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @CachedLibrary("buffer") PythonBufferAccessLibrary bufferLib,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             if (self.wasReset()) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.ValueError, ErrorMessages.UPDATING_FINALIZED_DIGEST_IS_NOT_SUPPORTED);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.UPDATING_FINALIZED_DIGEST_IS_NOT_SUPPORTED);
             }
             try {
                 self.update(bufferLib.getInternalOrCopiedByteArray(buffer), bufferLib.getBufferLength(buffer));
             } finally {
-                bufferLib.release(buffer, frame, indirectCallData);
+                bufferLib.release(buffer, frame, callData);
             }
             return PNone.NONE;
         }

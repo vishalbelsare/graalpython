@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,27 +40,36 @@
  */
 package com.oracle.graal.python.builtins.objects.map;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_MAP;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
+import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
 import com.oracle.graal.python.lib.PyObjectGetIter;
-import com.oracle.graal.python.nodes.call.special.CallVarargsMethodNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -69,68 +78,85 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PMap)
 public final class MapBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = MapBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return MapBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 3, takesVarArgs = true)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_MAP, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
-    public abstract static class InitNode extends PythonBuiltinNode {
-        @Specialization(guards = "args.length == 0")
-        static PNone doOne(VirtualFrame frame, PMap self, Object func, Object iterable, @SuppressWarnings("unused") Object[] args,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("getIter") @Cached PyObjectGetIter getIter) {
-            self.setFunction(func);
-            self.setIterators(new Object[]{getIter.execute(frame, inliningTarget, iterable)});
-            return PNone.NONE;
-        }
-
-        @Specialization(replaces = "doOne")
-        static PNone doGeneric(VirtualFrame frame, PMap self, Object func, Object iterable, Object[] args,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("getIter") @Cached PyObjectGetIter getIter) {
-            self.setFunction(func);
-            Object[] iterators = new Object[args.length + 1];
-            iterators[0] = getIter.execute(frame, inliningTarget, iterable);
-            for (int i = 0; i < args.length; i++) {
-                iterators[i + 1] = getIter.execute(frame, inliningTarget, args[i]);
+    abstract static class MapNode extends PythonVarargsBuiltinNode {
+        @Specialization
+        static PMap doit(VirtualFrame frame, Object cls, Object[] args, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
+                        @Cached(inline = false /* uncommon path */) TypeNodes.HasObjectInitNode hasObjectInitNode,
+                        @Cached InlinedLoopConditionProfile loopProfile,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
+            if (keywords.length > 0 && hasObjectInitNode.executeCached(cls)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_TAKES_NO_KEYWORD_ARGS, "map()");
             }
-            self.setIterators(iterators);
-            return PNone.NONE;
+            if (args.length < 2) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.MAP_MUST_HAVE_AT_LEAST_TWO_ARGUMENTS);
+            }
+            PMap map = PFactory.createMap(cls, getInstanceShape.execute(cls));
+            map.setFunction(args[0]);
+            Object[] iterators = new Object[args.length - 1];
+            loopProfile.profileCounted(inliningTarget, iterators.length);
+            for (int i = 0; loopProfile.inject(inliningTarget, i < iterators.length); i++) {
+                iterators[i] = getIter.execute(frame, inliningTarget, args[i + 1]);
+            }
+            map.setIterators(iterators);
+            return map;
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization(guards = "self.getIterators().length == 1")
-        Object doOne(VirtualFrame frame, PMap self,
-                        @Shared @Cached CallVarargsMethodNode callNode,
-                        @Shared @Cached GetNextNode next) {
-            return callNode.execute(frame, self.getFunction(), new Object[]{next.execute(frame, self.getIterators()[0])}, PKeyword.EMPTY_KEYWORDS);
+        static Object doOne(VirtualFrame frame, PMap self,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached TpSlots.GetObjectSlotsNode getSlots,
+                        @Shared @Cached TpSlotIterNext.CallSlotTpIterNextNode callTpIternext,
+                        @Shared @Cached CallNode callNode) {
+            Object iterator = self.getIterators()[0];
+            TpSlot iternext = getSlots.execute(inliningTarget, iterator).tp_iternext();
+            Object item = callTpIternext.execute(frame, inliningTarget, iternext, iterator);
+            return callNode.execute(frame, self.getFunction(), item);
         }
 
         @Specialization(replaces = "doOne")
-        Object doNext(VirtualFrame frame, PMap self,
-                        @Shared @Cached CallVarargsMethodNode callNode,
-                        @Shared @Cached GetNextNode next) {
+        static Object doNext(VirtualFrame frame, PMap self,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached TpSlots.GetObjectSlotsNode getSlots,
+                        @Shared @Cached TpSlotIterNext.CallSlotTpIterNextNode callTpIternext,
+                        @Shared @Cached CallNode callNode,
+                        @Shared @Cached InlinedLoopConditionProfile loopProfile) {
             Object[] iterators = self.getIterators();
             Object[] arguments = new Object[iterators.length];
-            for (int i = 0; i < iterators.length; i++) {
-                arguments[i] = next.execute(frame, iterators[i]);
+            loopProfile.profileCounted(inliningTarget, iterators.length);
+            for (int i = 0; loopProfile.inject(inliningTarget, i < iterators.length); i++) {
+                Object iterator = iterators[i];
+                TpSlot iternext = getSlots.execute(inliningTarget, iterator).tp_iternext();
+                arguments[i] = callTpIternext.execute(frame, inliningTarget, iternext, iterator);
             }
-            return callNode.execute(frame, self.getFunction(), arguments, PKeyword.EMPTY_KEYWORDS);
+            return callNode.execute(frame, self.getFunction(), arguments);
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class IterNode extends PythonUnaryBuiltinNode {
+    abstract static class IterNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         static PMap iter(PMap self) {
@@ -140,15 +166,15 @@ public final class MapBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonBuiltinNode {
+    abstract static class ReduceNode extends PythonBinaryBuiltinNode {
         @Specialization
         static PTuple doit(PMap self, @SuppressWarnings("unused") Object ignored,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object[] iterators = self.getIterators();
             Object[] args = new Object[iterators.length + 1];
             args[0] = self.getFunction();
             System.arraycopy(iterators, 0, args, 1, iterators.length);
-            return factory.createTuple(new Object[]{PythonBuiltinClassType.PMap, factory.createTuple(args)});
+            return PFactory.createTuple(language, new Object[]{PythonBuiltinClassType.PMap, PFactory.createTuple(language, args)});
         }
     }
 }

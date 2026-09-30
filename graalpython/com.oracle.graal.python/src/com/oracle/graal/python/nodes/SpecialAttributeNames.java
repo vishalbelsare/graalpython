@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -61,6 +61,9 @@ public abstract class SpecialAttributeNames {
     public static final String J___CLASSCELL__ = "__classcell__";
     public static final TruffleString T___CLASSCELL__ = tsLiteral(J___CLASSCELL__);
 
+    public static final String J___CLASSDICTCELL__ = "__classdictcell__";
+    public static final TruffleString T___CLASSDICTCELL__ = tsLiteral(J___CLASSDICTCELL__);
+
     public static final String J___CLOSURE__ = "__closure__";
 
     public static final String J___ANNOTATIONS__ = "__annotations__";
@@ -74,6 +77,12 @@ public abstract class SpecialAttributeNames {
 
     public static final String J___MODULE__ = "__module__";
     public static final TruffleString T___MODULE__ = tsLiteral(J___MODULE__);
+
+    public static final String J___FIRSTLINENO__ = "__firstlineno__";
+    public static final TruffleString T___FIRSTLINENO__ = tsLiteral(J___FIRSTLINENO__);
+
+    public static final String J___STATIC_ATTRIBUTES__ = "__static_attributes__";
+    public static final TruffleString T___STATIC_ATTRIBUTES__ = tsLiteral(J___STATIC_ATTRIBUTES__);
 
     public static final String J___DICT__ = "__dict__";
     public static final TruffleString T___DICT__ = tsLiteral(J___DICT__);
@@ -108,14 +117,17 @@ public abstract class SpecialAttributeNames {
 
     public static final TruffleString T___FILE__ = tsLiteral("__file__");
 
-    public static final TruffleString T___LIBRARY__ = tsLiteral("__library__");
-
     public static final TruffleString T___ORIGNAME__ = tsLiteral("__origname__");
 
     public static final TruffleString T___CACHED__ = tsLiteral("__cached__");
 
+    public static final TruffleString T___INITIALIZING__ = tsLiteral("__initializing__");
+
     public static final String J___TEXT_SIGNATURE__ = "__text_signature__";
     public static final TruffleString T___TEXT_SIGNATURE__ = tsLiteral(J___TEXT_SIGNATURE__);
+
+    public static final String J___SIGNATURE__ = "__signature__";
+    public static final TruffleString T___SIGNATURE__ = tsLiteral(J___SIGNATURE__);
 
     public static final String J___TRACEBACK__ = "__traceback__";
     public static final TruffleString T___TRACEBACK__ = tsLiteral(J___TRACEBACK__);
@@ -137,14 +149,16 @@ public abstract class SpecialAttributeNames {
     public static final String J___DICTOFFSET__ = "__dictoffset__";
 
     public static final String J___WEAKLISTOFFSET__ = "__weaklistoffset__";
+    public static final TruffleString T___WEAKLISTOFFSET__ = tsLiteral(J___WEAKLISTOFFSET__);
+
+    public static final String J___WEAKREFOFFSET__ = "__weakrefoffset__";
 
     public static final String J___ITEMSIZE__ = "__itemsize__";
 
     public static final TruffleString T___WEAKREF__ = tsLiteral("__weakref__");
 
-    public static final TruffleString T___WEAKLISTOFFSET__ = tsLiteral("__weaklistoffset__");
-
-    public static final TruffleString T___ALL__ = tsLiteral("__all__");
+    public static final String J___ALL__ = "__all__";
+    public static final TruffleString T___ALL__ = tsLiteral(J___ALL__);
 
     public static final String J___FLAGS__ = "__flags__";
 
@@ -162,6 +176,9 @@ public abstract class SpecialAttributeNames {
     public static final String J___PARAMETERS__ = "__parameters__";
     public static final TruffleString T___PARAMETERS__ = tsLiteral(J___PARAMETERS__);
 
+    public static final String J___UNPACKED__ = "__unpacked__";
+    public static final TruffleString T___UNPACKED__ = tsLiteral(J___UNPACKED__);
+
     public static final String J___ORIG_CLASS__ = "__orig_class__";
     public static final TruffleString T___ORIG_CLASS__ = tsLiteral(J___ORIG_CLASS__);
 
@@ -176,4 +193,7 @@ public abstract class SpecialAttributeNames {
 
     public static final String J___VECTORCALLOFFSET__ = "__vectorcalloffset__";
     public static final TruffleString T___VECTORCALLOFFSET__ = tsLiteral(J___VECTORCALLOFFSET__);
+
+    public static final String J___TYPE_PARAMS__ = "__type_params__";
+    public static final TruffleString T___TYPE_PARAMS__ = tsLiteral(J___TYPE_PARAMS__);
 }

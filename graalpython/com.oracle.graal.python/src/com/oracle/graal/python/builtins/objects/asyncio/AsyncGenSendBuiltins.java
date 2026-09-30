@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,18 +41,19 @@
 package com.oracle.graal.python.builtins.objects.asyncio;
 
 import static com.oracle.graal.python.builtins.objects.asyncio.PAsyncGenASend.AwaitableState;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___AWAIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.generator.CommonGeneratorBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
@@ -72,12 +73,14 @@ import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PAsyncGenASend)
 public final class AsyncGenSendBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = AsyncGenSendBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return AsyncGenSendBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___AWAIT__, minNumOfPositionalArgs = 1, declaresExplicitSelf = true)
+    @Slot(value = SlotKind.am_await, isComplex = true)
     @GenerateNodeFactory
     public abstract static class Await extends PythonUnaryBuiltinNode {
         @Specialization
@@ -86,9 +89,9 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1, declaresExplicitSelf = true)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class Next extends PythonUnaryBuiltinNode {
+    public abstract static class Next extends TpIterNextBuiltin {
         @Specialization
         public Object next(VirtualFrame frame, PAsyncGenASend self,
                         @Cached Send send) {
@@ -101,22 +104,21 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
     public abstract static class Send extends PythonBinaryBuiltinNode {
         @Specialization
         public Object send(VirtualFrame frame, PAsyncGenASend self, Object sent,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseReuse,
                         @Cached PRaiseNode raiseAlreadyRunning,
                         @Cached CommonGeneratorBuiltins.SendNode send,
                         @Cached IsBuiltinObjectProfile isStopIteration,
                         @Cached IsBuiltinObjectProfile isGenExit,
-                        @Cached IsBuiltinObjectExactProfile isAsyncGenWrappedValue,
-                        @Cached PRaiseNode raiseStopIteration) {
+                        @Cached IsBuiltinObjectExactProfile isAsyncGenWrappedValue) {
             Object result;
             if (self.getState() == AwaitableState.CLOSED) {
-                throw raiseReuse.raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_ASEND);
+                throw raiseReuse.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_ASEND);
             }
 
             if (self.getState() == AwaitableState.INIT) {
                 if (self.receiver.isRunningAsync()) {
-                    throw raiseAlreadyRunning.raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.AGEN_ALREADY_RUNNING);
+                    throw raiseAlreadyRunning.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.AGEN_ALREADY_RUNNING);
                 }
                 if (sent == null || sent == PNone.NONE) {
                     sent = self.message;
@@ -131,7 +133,7 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
                 throw handleAGError(self.receiver, e, inliningTarget, isStopIteration, isGenExit);
             }
             try {
-                return unwrapAGYield(self.receiver, result, inliningTarget, isAsyncGenWrappedValue, raiseStopIteration);
+                return unwrapAGYield(self.receiver, result, inliningTarget, isAsyncGenWrappedValue);
             } catch (PException e) {
                 self.setState(AwaitableState.CLOSED);
                 throw e;
@@ -159,12 +161,11 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
 
     static Object unwrapAGYield(PAsyncGen self, Object result,
                     Node inliningTarget,
-                    IsBuiltinObjectExactProfile isAGWrappedValue,
-                    PRaiseNode raise) {
+                    IsBuiltinObjectExactProfile isAGWrappedValue) {
         if (isAGWrappedValue.profileObject(inliningTarget, result, PythonBuiltinClassType.PAsyncGenAWrappedValue)) {
             self.setRunningAsync(false);
             Object wrapped = ((PAsyncGenWrappedValue) result).getWrapped();
-            throw raise.raise(PythonBuiltinClassType.StopIteration, new Object[]{wrapped});
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.StopIteration, new Object[]{wrapped});
         }
         return result;
     }
@@ -176,17 +177,16 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
 
         @Specialization
         public Object doThrow(VirtualFrame frame, PAsyncGenASend self, Object arg1, Object arg2, Object arg3,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseReuse,
                         @Cached CommonGeneratorBuiltins.ThrowNode throwNode,
                         @Cached IsBuiltinObjectProfile isStopIteration,
                         @Cached IsBuiltinObjectProfile isGeneratorExit,
-                        @Cached IsBuiltinObjectExactProfile isAGWrappedValue,
-                        @Cached PRaiseNode raiseStopIteration) {
+                        @Cached IsBuiltinObjectExactProfile isAGWrappedValue) {
             Object result;
 
             if (self.getState() == AwaitableState.CLOSED) {
-                throw raiseReuse.raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_ASEND);
+                throw raiseReuse.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_ASEND);
             }
             try {
                 result = throwNode.execute(frame, self.receiver, arg1, arg2, arg3);
@@ -195,7 +195,7 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
                 throw handleAGError(self.receiver, e, inliningTarget, isStopIteration, isGeneratorExit);
             }
             try {
-                return unwrapAGYield(self.receiver, result, inliningTarget, isAGWrappedValue, raiseStopIteration);
+                return unwrapAGYield(self.receiver, result, inliningTarget, isAGWrappedValue);
             } catch (PException e) {
                 self.setState(AwaitableState.CLOSED);
                 throw e;
@@ -204,7 +204,7 @@ public final class AsyncGenSendBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1, declaresExplicitSelf = true)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class Iter extends PythonUnaryBuiltinNode {
         @Specialization

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -74,15 +74,16 @@ import static com.oracle.graal.python.runtime.PosixConstants.SO_PROTOCOL;
 import static com.oracle.graal.python.runtime.PosixConstants.SO_TYPE;
 import static com.oracle.graal.python.runtime.PosixConstants.TCP_NODELAY;
 import static com.oracle.graal.python.runtime.PosixConstants.TCP_USER_TIMEOUT;
+import static com.oracle.graal.python.test.integration.Utils.SUPPORTS_PANAMA;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static org.hamcrest.CoreMatchers.anyOf;
 import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeNoException;
@@ -97,19 +98,19 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import org.hamcrest.Description;
-import org.hamcrest.TypeSafeMatcher;
+import com.oracle.graal.python.PythonLanguage;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
+import org.junit.function.ThrowingRunnable;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
 
-import com.oracle.graal.python.builtins.PythonOS;
+import com.oracle.graal.python.annotations.PythonOS;
 import com.oracle.graal.python.builtins.objects.exception.OSErrorEnum;
 import com.oracle.graal.python.runtime.PosixConstants.MandatoryIntConstant;
 import com.oracle.graal.python.runtime.PosixSupportLibrary;
@@ -123,6 +124,7 @@ import com.oracle.graal.python.runtime.PosixSupportLibrary.Inet4SockAddr;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.Inet6SockAddr;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.InvalidAddressException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.InvalidUnixSocketPathException;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixErrnoException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.RecvfromResult;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.SelectResult;
@@ -141,13 +143,12 @@ public class SocketTests {
 
     @Parameters(name = "{0}")
     public static String[] params() {
-        return new String[]{"native", "java"};
+        return SUPPORTS_PANAMA ? new String[]{"java", "native"} : new String[]{"java"};
     }
 
     @Rule public WithPythonContextRule withPythonContextRule = new WithPythonContextRule((o) -> o.put("python.PosixModuleBackend", backendName));
 
     @Rule public CleanupRule cleanup = new CleanupRule();
-    @Rule public ExpectedException expectedException = ExpectedException.none();
 
     @Rule public TemporaryFolder tempFolder = new TemporaryFolder();
 
@@ -171,20 +172,20 @@ public class SocketTests {
     }
 
     @Test
-    public void fillUniversalSockAddrInet4() {
+    public void fillUniversalSockAddrInet4() throws PosixException {
         Inet4SockAddr addr = new Inet4SockAddr(12345, INADDR_LOOPBACK.value);
         checkUsa(addr, createUsa(addr));
     }
 
     @Test
-    public void fillUniversalSockAddrInet6() {
+    public void fillUniversalSockAddrInet6() throws PosixException {
         assumeTrue(isInet6Supported());
         Inet6SockAddr addr = new Inet6SockAddr(12345, IN6ADDR_LOOPBACK, 12, 1);
         checkUsa(addr, createUsa(addr));
     }
 
     @Test
-    public void fillUniversalSockAddrUnix() {
+    public void fillUniversalSockAddrUnix() throws PosixException {
         assumeTrue("native".equals(backendName));
         byte[] path = new byte[]{65, 0};
         UnixSockAddr addr = new UnixSockAddr(path);
@@ -311,15 +312,16 @@ public class SocketTests {
     }
 
     @Test
-    public void dgramUnconnectedSendInet6() throws PosixException {
+    public void dgramUnconnectedSendInet6() {
         assumeTrue(isInet6Supported());
         // From send(2):
         // EDESTADDRREQ - The socket is not connection-mode, and no peer address is set.
         // ENOTCONN - The socket is not connected, and no target has been given.
         // BUGS: Linux may return EPIPE instead of ENOTCONN.
-        expectErrno(OSErrorEnum.EDESTADDRREQ, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
-        UdpClient cli = new UdpClient(AF_INET6.value);
-        cli.send(DATA, 0);
+        expectErrno(() -> {
+            UdpClient cli = new UdpClient(AF_INET6.value);
+            cli.send(DATA, 0);
+        }, OSErrorEnum.EDESTADDRREQ, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
     }
 
     @Test
@@ -349,22 +351,24 @@ public class SocketTests {
     }
 
     @Test
-    public void dgramUnconnectedWriteInet4() throws PosixException {
+    public void dgramUnconnectedWriteInet4() {
         // From send(2):
         // The only difference between send() and write(2) is the presence of flags.
         // EDESTADDRREQ - The socket is not connection-mode, and no peer address is set.
         // ENOTCONN - The socket is not connected, and no target has been given.
         // BUGS: Linux may return EPIPE instead of ENOTCONN.
-        expectErrno(OSErrorEnum.EDESTADDRREQ, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
-        UdpClient cli = new UdpClient(AF_INET.value);
-        cli.write(DATA);
+        expectErrno(() -> {
+            UdpClient cli = new UdpClient(AF_INET.value);
+            cli.write(DATA);
+        }, OSErrorEnum.EDESTADDRREQ, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
     }
 
     @Test
-    public void streamListenConnectInet() throws PosixException {
-        expectErrno(OSErrorEnum.EISCONN, OSErrorEnum.EOPNOTSUPP);
-        TcpServer srv = new TcpServer(AF_INET.value);
-        srv.connect(srv.usa());
+    public void streamListenConnectInet() {
+        expectErrno(() -> {
+            TcpServer srv = new TcpServer(AF_INET.value);
+            srv.connect(srv.usa());
+        }, OSErrorEnum.EISCONN, OSErrorEnum.EOPNOTSUPP);
     }
 
     @Test
@@ -375,40 +379,43 @@ public class SocketTests {
     }
 
     @Test
-    public void streamConnectListenInet() throws PosixException {
-        expectErrno(OSErrorEnum.EINVAL);
-        TcpServer srv = new TcpServer(AF_INET.value);
-        TcpClient cli = new TcpClient(AF_INET.value);
-        cli.connect(srv.usa());
-        cli.listen(5);
+    public void streamConnectListenInet() {
+        expectErrno(() -> {
+            TcpServer srv = new TcpServer(AF_INET.value);
+            TcpClient cli = new TcpClient(AF_INET.value);
+            cli.connect(srv.usa());
+            cli.listen(5);
+        }, OSErrorEnum.EINVAL);
     }
 
     @Test
-    public void streamDoubleConnectInet6() throws PosixException {
+    public void streamDoubleConnectInet6() {
         assumeTrue(isInet6Supported());
-        expectErrno(OSErrorEnum.EISCONN);
-        TcpServer srv = new TcpServer(AF_INET6.value);
-        TcpClient cli = new TcpClient(AF_INET6.value);
-        cli.connect(srv.usa());
-        cli.connect(srv.usa());
+        expectErrno(() -> {
+            TcpServer srv = new TcpServer(AF_INET6.value);
+            TcpClient cli = new TcpClient(AF_INET6.value);
+            cli.connect(srv.usa());
+            cli.connect(srv.usa());
+        }, OSErrorEnum.EISCONN);
     }
 
     @Test
-    public void streamSendtoInet() throws PosixException {
+    public void streamSendtoInet() {
         // We don't test native sendto - it may either ignore the address or return EISCONN
         // Emulated sendto always fails with EISCONN
         assumeTrue("java".equals(backendName));
-        expectErrno(OSErrorEnum.EISCONN);
-        TcpServer srv = new TcpServer(AF_INET.value);
-        TcpClient cli = new TcpClient(AF_INET.value);
+        expectErrno(() -> {
+            TcpServer srv = new TcpServer(AF_INET.value);
+            TcpClient cli = new TcpClient(AF_INET.value);
 
-        cli.connect(srv.usa());
-        TcpClient c = srv.accept(cli.address());
+            cli.connect(srv.usa());
+            TcpClient c = srv.accept(cli.address());
 
-        checkUsa(c.address(), cli.getpeername());
-        checkUsa(cli.address(), c.getpeername());
+            checkUsa(c.address(), cli.getpeername());
+            checkUsa(cli.address(), c.getpeername());
 
-        c.sendto(DATA, 0, cli.usa());
+            c.sendto(DATA, 0, cli.usa());
+        }, OSErrorEnum.EISCONN);
     }
 
     @Test
@@ -491,72 +498,83 @@ public class SocketTests {
     }
 
     @Test
-    public void dgramUnconnectedGetpeername() throws PosixException {
-        expectErrno(OSErrorEnum.ENOTCONN);
-        new UdpClient(AF_INET.value).getpeername();
+    public void dgramUnconnectedGetpeername() {
+        expectErrno(() -> {
+            new UdpClient(AF_INET.value).getpeername();
+        }, OSErrorEnum.ENOTCONN);
     }
 
     @Test
-    public void dgramListen() throws PosixException {
-        expectErrno(OSErrorEnum.EOPNOTSUPP);
-        lib.listen(posixSupport, new UdpServer(AF_INET.value).fd, 5);
+    public void dgramListen() {
+        expectErrno(() -> lib.listen(posixSupport, new UdpServer(AF_INET.value).fd, 5),
+                        OSErrorEnum.EOPNOTSUPP,
+                        OSErrorEnum.EACCES /* Some CI machines seem to block this with EACCESS */);
     }
 
     @Test
-    public void streamDoubleBind() throws PosixException {
-        expectErrno(OSErrorEnum.EINVAL);
-        new TcpServer(AF_INET.value).bindAny();
+    public void streamDoubleBind() {
+        expectErrno(() -> {
+            new TcpServer(AF_INET.value).bindAny();
+        }, OSErrorEnum.EINVAL);
     }
 
     @Test
-    public void streamUnconnectedGetpeername() throws PosixException {
-        expectErrno(OSErrorEnum.ENOTCONN);
-        new TcpClient(AF_INET.value).getpeername();
+    public void streamUnconnectedGetpeername() {
+        expectErrno(() -> {
+            new TcpClient(AF_INET.value).getpeername();
+        }, OSErrorEnum.ENOTCONN);
     }
 
     @Test
-    public void streamUnconnectedRead() throws PosixException {
-        expectErrno(OSErrorEnum.ENOTCONN);
-        lib.read(posixSupport, new TcpClient(AF_INET.value).fd, 10);
+    public void streamUnconnectedRead() {
+        expectErrno(() -> {
+            lib.read(posixSupport, new TcpClient(AF_INET.value).fd, 10);
+        }, OSErrorEnum.ENOTCONN);
     }
 
     @Test
-    public void streamUnconnectedWrite() throws PosixException {
+    public void streamUnconnectedWrite() {
         // From send(2): Linux may return EPIPE instead of ENOTCONN.
-        expectErrno(OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
-        lib.write(posixSupport, new TcpClient(AF_INET.value).fd, Buffer.wrap(DATA));
+        expectErrno(() -> {
+            lib.write(posixSupport, new TcpClient(AF_INET.value).fd, Buffer.wrap(DATA));
+        }, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
     }
 
     @Test
-    public void streamListeningGetpeername() throws PosixException {
-        expectErrno(OSErrorEnum.ENOTCONN);
-        new TcpServer(AF_INET.value).getpeername();
+    public void streamListeningGetpeername() {
+        expectErrno(() -> {
+            new TcpServer(AF_INET.value).getpeername();
+        }, OSErrorEnum.ENOTCONN);
     }
 
     @Test
-    public void streamListeningRecv() throws PosixException {
-        expectErrno(OSErrorEnum.ENOTCONN);
-        lib.recv(posixSupport, new TcpServer(AF_INET.value).fd, new byte[10], 0, 10, 0);
+    public void streamListeningRecv() {
+        expectErrno(() -> {
+            lib.recv(posixSupport, new TcpServer(AF_INET.value).fd, new byte[10], 0, 10, 0);
+        }, OSErrorEnum.ENOTCONN);
     }
 
     @Test
-    public void streamListeningSend() throws PosixException {
+    public void streamListeningSend() {
         // From send(2): Linux may return EPIPE instead of ENOTCONN.
-        expectErrno(OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
-        lib.send(posixSupport, new TcpServer(AF_INET.value).fd, DATA, 0, DATA.length, 0);
+        expectErrno(() -> {
+            lib.send(posixSupport, new TcpServer(AF_INET.value).fd, DATA, 0, DATA.length, 0);
+        }, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
     }
 
     @Test
-    public void streamListeningRead() throws PosixException {
-        expectErrno(OSErrorEnum.ENOTCONN);
-        lib.read(posixSupport, new TcpServer(AF_INET.value).fd, 10);
+    public void streamListeningRead() {
+        expectErrno(() -> {
+            lib.read(posixSupport, new TcpServer(AF_INET.value).fd, 10);
+        }, OSErrorEnum.ENOTCONN);
     }
 
     @Test
-    public void streamListeningWrite() throws PosixException {
+    public void streamListeningWrite() {
         // From send(2): Linux may return EPIPE instead of ENOTCONN.
-        expectErrno(OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
-        lib.write(posixSupport, new TcpServer(AF_INET.value).fd, Buffer.wrap(DATA));
+        expectErrno(() -> {
+            lib.write(posixSupport, new TcpServer(AF_INET.value).fd, Buffer.wrap(DATA));
+        }, OSErrorEnum.ENOTCONN, OSErrorEnum.EPIPE);
     }
 
     @Test
@@ -604,12 +622,13 @@ public class SocketTests {
     }
 
     @Test
-    public void nonBlockingDgramRecv() throws PosixException {
-        expectErrno(OSErrorEnum.EWOULDBLOCK);
-        UdpClient cli = new UdpClient(AF_INET.value);
-        cli.setBlocking(false);
-        assertFalse(cli.getBlocking());
-        lib.recv(posixSupport, cli.fd, new byte[10], 0, 10, 0);
+    public void nonBlockingDgramRecv() {
+        expectErrno(() -> {
+            UdpClient cli = new UdpClient(AF_INET.value);
+            cli.setBlocking(false);
+            assertFalse(cli.getBlocking());
+            lib.recv(posixSupport, cli.fd, new byte[10], 0, 10, 0);
+        }, OSErrorEnum.EWOULDBLOCK);
     }
 
     @Test
@@ -621,9 +640,14 @@ public class SocketTests {
             lib.accept(posixSupport, srv.fd);
             fail("Expected accept() to fail with EWOULDBLOCK");
         } catch (PosixException e) {
-            assertEquals(OSErrorEnum.EWOULDBLOCK.getNumber(), e.getErrorCode());
+            assertTrue(e.hasErrno(OSErrorEnum.EWOULDBLOCK));
         }
         cli.connect(srv.usa());
+
+        // A completed connect does not guarantee that the connection is already visible to a
+        // non-blocking accept(). Wait until the listening socket reports that it is readable.
+        SelectResult res = lib.select(posixSupport, new int[]{srv.fd}, new int[0], new int[0], new Timeval(1, 0));
+        assertTrue(res.getReadFds()[0]);
         srv.accept(cli.address());
     }
 
@@ -645,7 +669,7 @@ public class SocketTests {
 
     @Test
     public void streamSelect() throws PosixException {
-        if (PythonOS.getPythonOS() == PythonOS.PLATFORM_DARWIN) {
+        if (PythonLanguage.getPythonOS() == PythonOS.PLATFORM_DARWIN) {
             // transiently fails on darwin, skip
             return;
         }
@@ -672,8 +696,23 @@ public class SocketTests {
 
         res = lib.select(posixSupport, new int[]{srv.fd, cli.fd, c.fd}, new int[0], new int[0], new Timeval(0, 100000));
         assertFalse(res.getReadFds()[0]);
-        assertTrue(res.getReadFds()[1]);
-        assertTrue(res.getReadFds()[2]);
+
+        // c is readable immediately after shutdown(SHUT_RD), while the data sent to cli may arrive
+        // slightly later. select() returns when any descriptor is ready, so wait for each event
+        // separately if they were not observed in the same call.
+        boolean cliReadable = res.getReadFds()[1];
+        boolean cReadable = res.getReadFds()[2];
+        if (!cliReadable) {
+            SelectResult cliRes = lib.select(posixSupport, new int[]{cli.fd}, new int[0], new int[0],
+                            new Timeval(1, 0));
+            cliReadable = cliRes.getReadFds()[0];
+        }
+        if (!cReadable) {
+            SelectResult cRes = lib.select(posixSupport, new int[]{c.fd}, new int[0], new int[0], new Timeval(1, 0));
+            cReadable = cRes.getReadFds()[0];
+        }
+        assertTrue(cliReadable);
+        assertTrue(cReadable);
 
         assertEquals(0, lib.recv(posixSupport, c.fd, new byte[10], 0, 10, 0));
 
@@ -681,7 +720,7 @@ public class SocketTests {
     }
 
     @Test
-    public void getnameinfo() throws GetAddrInfoException {
+    public void getnameinfo() throws PosixException, GetAddrInfoException {
         Object[] res = lib.getnameinfo(posixSupport, createUsa(new Inet6SockAddr(443, IN6ADDR_LOOPBACK, 0, 0)), NI_NUMERICSERV.value | NI_NUMERICHOST.value);
         assertThat(p2s(res[0]), anyOf(equalTo("::1"), equalTo("0:0:0:0:0:0:0:1%0")));
         assertEquals("443", p2s(res[1]));
@@ -695,7 +734,7 @@ public class SocketTests {
     }
 
     @Test
-    public void getnameinfoUdp() throws GetAddrInfoException {
+    public void getnameinfoUdp() throws PosixException, GetAddrInfoException {
         assumeTrue(runsOnLinux());
         Object[] res = lib.getnameinfo(posixSupport, createUsa(new Inet4SockAddr(512, INADDR_LOOPBACK.value)), NI_NUMERICHOST.value);
         assertEquals("exec", p2s(res[1]));
@@ -704,53 +743,60 @@ public class SocketTests {
     }
 
     @Test
-    public void getnameinfoErr() throws GetAddrInfoException {
-        expectGetAddrInfoException(EAI_NONAME);
-        lib.getnameinfo(posixSupport, createUsa(new Inet4SockAddr(443, INADDR_LOOPBACK.value)), NI_NUMERICHOST.value | NI_NAMEREQD.value);
+    public void getnameinfoErr() {
+        expectGetAddrInfoException(() -> {
+            lib.getnameinfo(posixSupport, createUsa(new Inet4SockAddr(443, INADDR_LOOPBACK.value)), NI_NUMERICHOST.value | NI_NAMEREQD.value);
+        }, EAI_NONAME);
     }
 
     @Test
-    public void getaddrinfoErrNoInput() throws GetAddrInfoException {
-        expectGetAddrInfoException(EAI_NONAME);
-        lib.getaddrinfo(posixSupport, null, null, AF_UNSPEC.value, 0, 0, 0);
+    public void getaddrinfoErrNoInput() {
+        expectGetAddrInfoException(() -> {
+            lib.getaddrinfo(posixSupport, null, null, AF_UNSPEC.value, 0, 0, 0);
+        }, EAI_NONAME);
     }
 
     @Test
-    public void getaddrinfoErrFamily() throws GetAddrInfoException {
-        expectGetAddrInfoException(EAI_FAMILY);
-        lib.getaddrinfo(posixSupport, null, s2p("http"), -42, 0, 0, 0);
+    public void getaddrinfoErrFamily() {
+        expectGetAddrInfoException(() -> {
+            lib.getaddrinfo(posixSupport, null, s2p("http"), -42, 0, 0, 0);
+        }, EAI_FAMILY);
     }
 
     @Test
-    public void getaddrinfoErrSockType() throws GetAddrInfoException {
+    public void getaddrinfoErrSockType() {
         assumeTrue(runsOnLinux());
-        expectGetAddrInfoException(EAI_SOCKTYPE);
-        lib.getaddrinfo(posixSupport, null, s2p("http"), AF_UNSPEC.value, -42, 0, 0);
+        expectGetAddrInfoException(() -> {
+            lib.getaddrinfo(posixSupport, null, s2p("http"), AF_UNSPEC.value, -42, 0, 0);
+        }, EAI_SOCKTYPE);
     }
 
     @Test
-    public void getaddrinfoErrService() throws GetAddrInfoException {
+    public void getaddrinfoErrService() {
         assumeTrue(runsOnLinux());
-        expectGetAddrInfoException(EAI_SERVICE);
-        lib.getaddrinfo(posixSupport, null, s2p("invalid service"), AF_UNSPEC.value, SOCK_DGRAM.value, 0, 0);
+        expectGetAddrInfoException(() -> {
+            lib.getaddrinfo(posixSupport, null, s2p("invalid service"), AF_UNSPEC.value, SOCK_DGRAM.value, 0, 0);
+        }, EAI_SERVICE);
     }
 
     @Test
-    public void getaddrinfoErrAddrFamily() throws GetAddrInfoException {
+    public void getaddrinfoErrAddrFamily() {
         assumeTrue(runsOnLinux());
-        expectGetAddrInfoException(EAI_ADDRFAMILY);
-        lib.getaddrinfo(posixSupport, s2p("::1"), null, AF_INET.value, 0, 0, 0);
+        expectGetAddrInfoException(() -> {
+            lib.getaddrinfo(posixSupport, s2p("::1"), null, AF_INET.value, 0, 0, 0);
+        }, EAI_ADDRFAMILY);
     }
 
     @Test
-    public void getaddrinfoBadFlags() throws GetAddrInfoException {
+    public void getaddrinfoBadFlags() {
         assumeTrue(runsOnLinux());
-        expectGetAddrInfoException(EAI_BADFLAGS);
-        lib.getaddrinfo(posixSupport, null, s2p("https"), AF_INET.value, 0, 0, AI_CANONNAME.value);
+        expectGetAddrInfoException(() -> {
+            lib.getaddrinfo(posixSupport, null, s2p("https"), AF_INET.value, 0, 0, AI_CANONNAME.value);
+        }, EAI_BADFLAGS);
     }
 
     @Test
-    public void getaddrinfoServiceOnly() throws GetAddrInfoException {
+    public void getaddrinfoServiceOnly() throws PosixException, GetAddrInfoException {
         Object service = s2p("https");
         AddrInfoCursor aic = lib.getaddrinfo(posixSupport, null, service, AF_UNSPEC.value, SOCK_STREAM.value, 0, 0);
         cleanup.add(() -> aicLib.release(aic));
@@ -771,7 +817,7 @@ public class SocketTests {
     }
 
     @Test
-    public void getaddrinfoPassive() throws GetAddrInfoException {
+    public void getaddrinfoPassive() throws PosixException, GetAddrInfoException {
         Object service = s2p("https");
         AddrInfoCursor aic = lib.getaddrinfo(posixSupport, null, service, AF_INET.value, 0, IPPROTO_TCP.value, AI_PASSIVE.value);
         cleanup.add(() -> aicLib.release(aic));
@@ -787,7 +833,7 @@ public class SocketTests {
     }
 
     @Test
-    public void getaddrinfoServerOnlyNoCanon() throws GetAddrInfoException {
+    public void getaddrinfoServerOnlyNoCanon() throws PosixException, GetAddrInfoException {
         Object node = s2p("localhost");
         AddrInfoCursor aic = lib.getaddrinfo(posixSupport, node, null, AF_UNSPEC.value, SOCK_DGRAM.value, 0, 0);
         cleanup.add(() -> aicLib.release(aic));
@@ -807,7 +853,7 @@ public class SocketTests {
     }
 
     @Test
-    public void getaddrinfo() throws GetAddrInfoException {
+    public void getaddrinfo() throws PosixException, GetAddrInfoException {
         Object node = s2p("localhost");
         Object service = s2p("https");
         AddrInfoCursor aic = lib.getaddrinfo(posixSupport, node, service, AF_INET.value, 0, IPPROTO_TCP.value, AI_CANONNAME.value);
@@ -906,21 +952,22 @@ public class SocketTests {
     }
 
     @Test
-    public void inet_pton_eafnosupport() throws PosixException, InvalidAddressException {
-        expectErrno(OSErrorEnum.EAFNOSUPPORT);
-        lib.inet_pton(posixSupport, AF_UNSPEC.value, s2p(""));
+    public void inet_pton_eafnosupport() {
+        expectErrno(() -> {
+            lib.inet_pton(posixSupport, AF_UNSPEC.value, s2p(""));
+        }, OSErrorEnum.EAFNOSUPPORT);
     }
 
     @Test
-    public void inet_pton_invalid_inet6() throws PosixException, InvalidAddressException {
-        expectedException.expect(InvalidAddressException.class);
-        lib.inet_pton(posixSupport, AF_INET6.value, s2p(":"));
+    public void inet_pton_invalid_inet6() {
+        Assert.assertThrows(InvalidAddressException.class,
+                        () -> lib.inet_pton(posixSupport, AF_INET6.value, s2p(":")));
     }
 
     @Test
-    public void inet_pton_invalid_inet4_as_inet6() throws PosixException, InvalidAddressException {
-        expectedException.expect(InvalidAddressException.class);
-        lib.inet_pton(posixSupport, AF_INET6.value, s2p("127.0.0.1"));
+    public void inet_pton_invalid_inet4_as_inet6() {
+        Assert.assertThrows(InvalidAddressException.class,
+                        () -> lib.inet_pton(posixSupport, AF_INET6.value, s2p("127.0.0.1")));
     }
 
     @Test
@@ -942,11 +989,11 @@ public class SocketTests {
     }
 
     @Test
-    public void inet_pton_inet4_octal() throws PosixException, InvalidAddressException {
+    public void inet_pton_inet4_octal() {
         // native inet_pton on darwin accepts leading zeroes (but handles them as decimal)
         assumeTrue("java".equals(backendName) || runsOnLinux());
-        expectedException.expect(InvalidAddressException.class);
-        lib.inet_pton(posixSupport, AF_INET.value, s2p("1.2.010.4"));
+        Assert.assertThrows(InvalidAddressException.class,
+                        () -> lib.inet_pton(posixSupport, AF_INET.value, s2p("1.2.010.4")));
     }
 
     @Test
@@ -958,15 +1005,16 @@ public class SocketTests {
     }
 
     @Test
-    public void inet_ntop_eafnosupport() throws PosixException {
-        expectErrno(OSErrorEnum.EAFNOSUPPORT);
-        lib.inet_ntop(posixSupport, AF_UNSPEC.value, new byte[16]);
+    public void inet_ntop_eafnosupport() {
+        expectErrno(() -> {
+            lib.inet_ntop(posixSupport, AF_UNSPEC.value, new byte[16]);
+        }, OSErrorEnum.EAFNOSUPPORT);
     }
 
     @Test
-    public void inet_ntop_len() throws PosixException {
-        expectedException.expect(IllegalArgumentException.class);
-        lib.inet_ntop(posixSupport, AF_INET6.value, new byte[15]);
+    public void inet_ntop_len() {
+        Assert.assertThrows(IllegalArgumentException.class,
+                        () -> lib.inet_ntop(posixSupport, AF_INET6.value, new byte[15]));
     }
 
     @Test
@@ -1032,50 +1080,26 @@ public class SocketTests {
     }
 
     private Object s2p(String s) {
-        return lib.createPathFromString(posixSupport, toTruffleStringUncached(s));
+        return lib.createCStringFromString(posixSupport, toTruffleStringUncached(s));
     }
 
     private String p2s(Object p) {
-        return lib.getPathAsString(posixSupport, p).toJavaStringUncached();
+        return lib.getCStringAsString(posixSupport, p).toJavaStringUncached();
     }
 
-    private void expectErrno(OSErrorEnum... expectedErrorCodes) {
-        expectedException.expect(new TypeSafeMatcher<PosixException>() {
-            @Override
-            protected boolean matchesSafely(PosixException item) {
-                return Stream.of(expectedErrorCodes).anyMatch(e -> item.getErrorCode() == e.getNumber());
-            }
-
-            @Override
-            public void describeTo(Description description) {
-                String names = Stream.of(expectedErrorCodes).map(OSErrorEnum::name).collect(Collectors.joining(" or "));
-                description.appendText("PosixException with error code ").appendText(names);
-            }
-
-            @Override
-            protected void describeMismatchSafely(PosixException item, Description mismatchDescription) {
-                mismatchDescription.appendText("the actual error code was ").appendValue(item.getErrorCode()).appendText(" (").appendValue(item).appendText(")");
-            }
-        });
+    private static void expectErrno(ThrowingRunnable runnable, OSErrorEnum... expectedErrorCodes) {
+        PosixErrnoException exception = Assert.assertThrows(PosixErrnoException.class, runnable);
+        if (Stream.of(expectedErrorCodes).noneMatch(e -> exception.getErrorCode() == e.getNumber())) {
+            String names = Stream.of(expectedErrorCodes).map(OSErrorEnum::name).collect(Collectors.joining(" or "));
+            fail("Expected PosixException with error code " + names + " but the actual error code was " + exception.getErrorCode() + " (" + exception + ")");
+        }
     }
 
-    private void expectGetAddrInfoException(MandatoryIntConstant expectedErrorCode) {
-        expectedException.expect(new TypeSafeMatcher<GetAddrInfoException>() {
-            @Override
-            protected boolean matchesSafely(GetAddrInfoException item) {
-                return item.getErrorCode() == expectedErrorCode.value;
-            }
-
-            @Override
-            public void describeTo(Description description) {
-                description.appendText("GetAddrInfoException with error code ").appendValue(expectedErrorCode.name);
-            }
-
-            @Override
-            protected void describeMismatchSafely(GetAddrInfoException item, Description mismatchDescription) {
-                mismatchDescription.appendText("the actual error code was ").appendValue(item.getErrorCode()).appendText(" (").appendValue(item).appendText(")");
-            }
-        });
+    private static void expectGetAddrInfoException(ThrowingRunnable runnable, MandatoryIntConstant expectedErrorCode) {
+        GetAddrInfoException exception = Assert.assertThrows(GetAddrInfoException.class, runnable);
+        if (exception.getErrorCode() != expectedErrorCode.value) {
+            fail("Expected GetAddrInfoException with error code " + expectedErrorCode.name + " but the actual error code was " + exception.getErrorCode() + " (" + exception + ")");
+        }
     }
 
     private int createSocket(int family, int type, int protocol) throws PosixException {
@@ -1084,7 +1108,7 @@ public class SocketTests {
         return sockfd;
     }
 
-    private UniversalSockAddr createUsa(FamilySpecificSockAddr src) {
+    private UniversalSockAddr createUsa(FamilySpecificSockAddr src) throws PosixException {
         if (src instanceof Inet4SockAddr inet4SockAddr) {
             return lib.createUniversalSockAddrInet4(posixSupport, inet4SockAddr);
         } else if (src instanceof Inet6SockAddr inet6SockAddr) {

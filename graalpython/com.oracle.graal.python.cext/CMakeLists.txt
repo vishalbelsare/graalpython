@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023, Oracle and/or its affiliates.
+# Copyright (c) 2023, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -35,43 +35,104 @@ function(require_var var)
     endif()
 endfunction()
 
-if(MSVC)
-    message(FATAL_ERROR "C API cannot be built with MSVC")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+execute_process(COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_SOURCE_DIR}/.compile_commands.json.probe" RESULT_VARIABLE _touch_res)
+if(_touch_res EQUAL 0)
+    file(REMOVE "${CMAKE_SOURCE_DIR}/.compile_commands.json.probe")
+    set(COMPILATION_DATABASE "${CMAKE_SOURCE_DIR}/compile_commands.json")
+    add_custom_command(
+        OUTPUT "${COMPILATION_DATABASE}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/compile_commands.json" "${COMPILATION_DATABASE}"
+        DEPENDS "${CMAKE_BINARY_DIR}/compile_commands.json"
+        VERBATIM)
+    add_custom_target(compile_commands_target ALL DEPENDS "${COMPILATION_DATABASE}")
+else()
+    message(STATUS "Source directory is not writable, skipping copy of compile_commands.json.")
+    add_custom_target(compile_commands_target)
 endif()
 
-if(WIN32)
-    require_var(GRAALVM_LLVM_LIB_DIR)
-endif()
-require_var(TRUFFLE_H_INC)
-require_var(TRUFFLE_NFI_H_INC)
-require_var(LLVM_MODE)
+require_var(GRAALPY_PARENT_DIR)
+require_var(CAPI_INC_DIR)
+require_var(PYCONFIG_INCLUDE_DIR)
 require_var(GRAALPY_EXT)
 
 if(NOT DEFINED SRC_DIR)
     set(SRC_DIR "${CMAKE_SOURCE_DIR}")
 endif()
 
-set(TARGET_LIBPYTHON "python-${LLVM_MODE}")
+set(TARGET_LIBPYTHON "python-native")
 
 ######################################################################
 # common variables and compile/link options (for all build targets)
 ######################################################################
 
-set(CFLAGS_WARNINGS -Wno-int-to-pointer-cast -Wno-int-conversion -Wno-void-pointer-to-int-cast
-                    -Wno-incompatible-pointer-types-discards-qualifiers -Wno-pointer-type-mismatch
-                    -Wno-braced-scalar-init -Wno-deprecated-declarations)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG FALSE)
 
-# preprocessor defines for all platforms
-add_compile_definitions(
-    NDEBUG
-    GRAALVM_PYTHON_LLVM
-)
+if (MSVC)
+  SET(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "" FORCE)
+  SET(CFLAGS_WARNINGS /Wall /WX
+    # Many warnings that are just MSVC being a bit pedantic
+    /wd4255 # no function prototype given: converting '()' to '(void)'
+    /wd4820 # padding added after data member
+    /wd4100 # unreferenced formal parameter
+    /wd4200 # nonstandard extension used: zero-sized array in struct/union
+    /wd4210 # nonstandard extension used: function given file scope
+    /wd4996 # This function or variable may be unsafe ... see _CRT_SECURE_NO_WARNINGS
+    /wd4668 # ... is not defined as a preprocessor macro, replacing with '0' for '#if/#elif'
+    /wd4115 # named type definition in parentheses
+    /wd4152 # nonstandard extension, function/data pointer conversion in expression
+    /wd5045 # Compiler will insert Spectre mitigation for memory load if /Qspectre switch specified
+    /wd4047 # 'int64_t' differs in levels of indirection from 'char []' / 'void *'
+    /wd4242 # conversion from 'int' to 'char', possible loss of data
+    /wd4244 # conversion from 'long' to 'char', possible loss of data
+    /wd4245 # conversion from signed to unsigned type
+    /wd4267 # conversion from 'size_t' to 'int', possible loss of data
+    /wd4127 # conditional expression is constant
+    /wd4130 # logical operation on address of string constant
+    /wd4702 # unreachable code
+    /wd4101 # unreferenced local variable
+    /wd4189 # local variable is initialized but not referenced
+    /wd4456 # declaration hides previous local declaration
+    /wd4459 # declaration hides global declaration
+    /wd4061 # enumerator X in switch of enum Y is not explicitly handled by a case label
+    /wd4464 # relative include path contains '..'
+    /wd4710 # 'fprintf': function not inlined
+    /wd4706 # assignment within conditional expression
+    /wd4774 # 'sprintf': format string expected in argument 2 is not a string literal
+    /wd4191 # unsafe conversion from 'PyObject *(__cdecl *)(MatchObject *,PyObject *const *,Py_ssize_t)' to 'void (__cdecl *)(void)'
+    /wd4574 # sqlite, expat: 'SQLITE_ATOMIC_INTRINSICS' is defined to be '0': did you mean to use '#if SQLITE_ATOMIC_INTRINSICS'?
+    /wd4701 # potentially uninitialized local variable used
+
+    # Some that I'm not so happy about
+    /wd4232 # sre: nonstandard extension used: 'ml_meth': address of dllimport 'Py_GenericAlias' is not static, identity not guaranteed
+    /wd4918 # sre: invalid character in pragma optimization list
+    /wd4703 # unicodeobject.c:potentially uninitialized local pointer variable used
+    /wd4310 # xmlparse: cast truncates constant value
+    /wd4777 # format string '%zd' requires an argument of type 'unsigned __int64'
+  )
+else()
+  set(CFLAGS_WARNINGS -Wall -Werror -Wno-unused-function -Wno-unused-variable -Wno-unused-const-variable
+                    -Wno-unknown-warning-option
+                    -Wno-discarded-qualifiers                         # _testbuffer.c
+                    -Wno-tautological-constant-out-of-range-compare   # fileutils.c: wchar_t > MAX_UNICODE is always false on Windows
+                    -Wno-unused-but-set-variable                      # sqlite.c: BOOL bRc
+                    -Wno-ignored-pragmas                              # sre.c: #pragma optimize("agtw", on)
+                    -Wno-int-to-pointer-cast -Wno-int-conversion -Wno-void-pointer-to-int-cast
+                    -Wno-incompatible-pointer-types-discards-qualifiers
+                    -Wno-braced-scalar-init -Wno-deprecated-declarations)
+  add_compile_options(-ffile-prefix-map=${GRAALPY_PARENT_DIR}=.)
+endif()
+
 
 if(WIN32)
     add_compile_definitions(
         MS_WINDOWS
         Py_ENABLE_SHARED
         HAVE_DECLSPEC_DLL
+        NTDDI_VERSION=NTDDI_WINBLUE
     )
 endif()
 
@@ -85,7 +146,7 @@ set(CMAKE_INSTALL_PREFIX ${CMAKE_BINARY_DIR})
 set(CAPI_SRC "${SRC_DIR}/src")
 
 # using glob patterns is not recommended: https://cmake.org/cmake/help/latest/command/file.html#glob
-set(SRC_FILES ${CAPI_SRC}/codecs.c ${CAPI_SRC}/setobject.c ${CAPI_SRC}/compile.c ${CAPI_SRC}/thread.c
+set(SRC_FILES ${CAPI_SRC}/codecs.c ${CAPI_SRC}/compile.c ${CAPI_SRC}/thread.c
               ${CAPI_SRC}/moduleobject.c ${CAPI_SRC}/preconfig.c ${CAPI_SRC}/getbuildinfo.c ${CAPI_SRC}/object.c
               ${CAPI_SRC}/dtoa.c ${CAPI_SRC}/pystrhex.c ${CAPI_SRC}/capi.c ${CAPI_SRC}/complexobject.c
               ${CAPI_SRC}/capsule.c ${CAPI_SRC}/typeobject.c ${CAPI_SRC}/obmalloc.c ${CAPI_SRC}/descrobject.c
@@ -96,13 +157,16 @@ set(SRC_FILES ${CAPI_SRC}/codecs.c ${CAPI_SRC}/setobject.c ${CAPI_SRC}/compile.c
               ${CAPI_SRC}/pystrtod.c ${CAPI_SRC}/tupleobject.c ${CAPI_SRC}/iterobject.c ${CAPI_SRC}/sliceobject.c
               ${CAPI_SRC}/classobject.c ${CAPI_SRC}/floatobject.c ${CAPI_SRC}/namespaceobject.c ${CAPI_SRC}/_warnings.c
               ${CAPI_SRC}/dictobject.c ${CAPI_SRC}/pystate.c ${CAPI_SRC}/mysnprintf.c ${CAPI_SRC}/ceval.c
-              ${CAPI_SRC}/getcompiler.c ${CAPI_SRC}/pyhash.c ${CAPI_SRC}/fileutils.c
+              ${CAPI_SRC}/getcompiler.c ${CAPI_SRC}/pyhash.c ${CAPI_SRC}/fileutils.c ${CAPI_SRC}/invalid_parameter_handler.c
               ${CAPI_SRC}/modsupport.c ${CAPI_SRC}/context.c ${CAPI_SRC}/abstract.c ${CAPI_SRC}/frameobject.c
               ${CAPI_SRC}/posixmodule.c ${CAPI_SRC}/exceptions.c ${CAPI_SRC}/pyctype.c
-              ${CAPI_SRC}/mystrtoul.c ${CAPI_SRC}/weakrefobject.c
-              ${CAPI_SRC}/modsupport_shared.c ${CAPI_SRC}/fileobject.c ${CAPI_SRC}/pystrcmp.c ${CAPI_SRC}/getversion.c
+              ${CAPI_SRC}/mystrtoul.c ${CAPI_SRC}/weakrefobject.c ${CAPI_SRC}/gcmodule.c
+              ${CAPI_SRC}/fileobject.c ${CAPI_SRC}/pystrcmp.c ${CAPI_SRC}/getversion.c
               ${CAPI_SRC}/genobject.c ${CAPI_SRC}/methodobject.c ${CAPI_SRC}/boolobject.c ${CAPI_SRC}/pylifecycle.c
-              ${CAPI_SRC}/errors.c ${CAPI_SRC}/signals.c ${CAPI_SRC}/datetime.c
+              ${CAPI_SRC}/errors.c ${CAPI_SRC}/signals.c ${CAPI_SRC}/datetime.c ${CAPI_SRC}/call.c
+              ${CAPI_SRC}/getargs.c ${CAPI_SRC}/tracemalloc.c ${CAPI_SRC}/initconfig.c ${CAPI_SRC}/graalpy_stacktrace.c
+              ${CAPI_SRC}/graalpyarray.c
+              ${CAPI_SRC}/lock.c ${CAPI_SRC}/parking_lot.c
 )
 
 file(GLOB_RECURSE ACTUAL_SRC_FILES
@@ -138,8 +202,8 @@ list_equals(SRC_FILES ACTUAL_SRC_FILES)
 include_directories(
     ${CAPI_SRC}
     "${SRC_DIR}/include"
-    "${TRUFFLE_H_INC}"
-    "${TRUFFLE_NFI_H_INC}"
+    "${CAPI_INC_DIR}"
+    "${PYCONFIG_INCLUDE_DIR}"
 )
 
 function(native_module name core src_files)
@@ -148,11 +212,13 @@ function(native_module name core src_files)
     if(APPLE)
         target_link_options(${name} PRIVATE -undefined dynamic_lookup)
     endif()
-    if(${core})
-        target_compile_definitions(${name} PRIVATE Py_BUILD_CORE)
-        target_include_directories(${name} PRIVATE "${SRC_DIR}/include/internal")
+    if(NOT "NO_CORE_DEFINES" IN_LIST ARGN)
+        if(${core})
+            target_compile_definitions(${name} PRIVATE Py_BUILD_CORE)
+            target_include_directories(${name} PRIVATE "${SRC_DIR}/include/internal")
+        endif()
+        target_compile_definitions(${name} PRIVATE Py_BUILD_CORE_MODULE)
     endif()
-    target_compile_definitions(${name} PRIVATE Py_BUILD_CORE_MODULE)
     set_target_properties(${name} PROPERTIES SUFFIX "${GRAALPY_EXT}"
                                              PREFIX "")
     target_sources(${name} PRIVATE ${src_files})
@@ -172,17 +238,136 @@ endfunction()
 ######################################################################
 
 add_library(${TARGET_LIBPYTHON} SHARED)
-simple_native_module("_cpython_sre")
+native_module("_cpython_sre" TRUE "${SRC_DIR}/modules/_cpython_sre/sre.c")
 simple_native_module("_cpython_unicodedata")
-simple_native_module("_cpython_struct")
-simple_native_module("_sqlite3")
+if(NOT WIN32)
+    simple_native_module("termios")
+endif()
+set(SQLITE3_SRC
+    "${SRC_DIR}/modules/_sqlite/sqlite/sqlite3.c"
+    "${SRC_DIR}/modules/_sqlite/blob.c"
+    "${SRC_DIR}/modules/_sqlite/connection.c"
+    "${SRC_DIR}/modules/_sqlite/cursor.c"
+    "${SRC_DIR}/modules/_sqlite/microprotocols.c"
+    "${SRC_DIR}/modules/_sqlite/module.c"
+    "${SRC_DIR}/modules/_sqlite/prepare_protocol.c"
+    "${SRC_DIR}/modules/_sqlite/row.c"
+    "${SRC_DIR}/modules/_sqlite/statement.c"
+    "${SRC_DIR}/modules/_sqlite/util.c"
+)
+native_module("_sqlite3" TRUE "${SQLITE3_SRC}")
+# This combines the flags CPython uses on macOS and Windows, on Linux systems
+# it usually links against the system sqlite3 so we do not really know. See
+# https://github.com/python/cpython/issues/88017 for some reasons
+target_include_directories("_sqlite3" PUBLIC "${SRC_DIR}/modules/_sqlite/sqlite")
+target_compile_definitions("_sqlite3" PRIVATE
+    SQLITE_ENABLE_MATH_FUNCTIONS
+    SQLITE_ENABLE_FTS5
+    SQLITE_ENABLE_FTS4
+    SQLITE_ENABLE_FTS3_PARENTHESIS
+    SQLITE_ENABLE_RTREE
+    SQLITE_OMIT_AUTOINIT
+    SQLITE_TCL=0
+)
+
+set(LIBHACL_HEADERS
+    # "${SRC_DIR}/modules/_hacl/include/krml/FStar_UInt128_Verified.h"
+    # "${SRC_DIR}/modules/_hacl/include/krml/FStar_UInt_8_16_32_64.h"
+    # "${SRC_DIR}/modules/_hacl/include/krml/fstar_uint128_struct_endianness.h"
+    # "${SRC_DIR}/modules/_hacl/include/krml/internal/target.h"
+    # "${SRC_DIR}/modules/_hacl/include/krml/lowstar_endianness.h"
+    # "${SRC_DIR}/modules/_hacl/include/krml/types.h"
+    # "${SRC_DIR}/modules/_hacl/Hacl_Streaming_Types.h"
+    # "${SRC_DIR}/modules/_hacl/python_hacl_namespaces.h"
+    "${SRC_DIR}/modules/_hacl/include"
+    "${SRC_DIR}/modules/_hacl"
+)
+set(SHA3_SRC
+    "${SRC_DIR}/modules/sha3module.c"
+    "${SRC_DIR}/modules/_hacl/Hacl_Hash_SHA3.c"
+)
+native_module("_sha3" TRUE "${SHA3_SRC}")
+target_include_directories("_sha3" PUBLIC "${LIBHACL_HEADERS}")
+
+set(TESTCAPI_SRC
+    "${SRC_DIR}/modules/_testcapi/abstract.c"
+    "${SRC_DIR}/modules/_testcapi/buffer.c"
+    "${SRC_DIR}/modules/_testcapi/bytes.c"
+    # "${SRC_DIR}/modules/_testcapi/code.c"
+    "${SRC_DIR}/modules/_testcapi/codec.c"
+    "${SRC_DIR}/modules/_testcapi/complex.c"
+    "${SRC_DIR}/modules/_testcapi/datetime.c"
+    "${SRC_DIR}/modules/_testcapi/dict.c"
+    "${SRC_DIR}/modules/_testcapi/docstring.c"
+    "${SRC_DIR}/modules/_testcapi/exceptions.c"
+    "${SRC_DIR}/modules/_testcapi/file.c"
+    "${SRC_DIR}/modules/_testcapi/float.c"
+    "${SRC_DIR}/modules/_testcapi/gc.c"
+    "${SRC_DIR}/modules/_testcapi/getargs.c"
+    "${SRC_DIR}/modules/_testcapi/hash.c"
+    "${SRC_DIR}/modules/_testcapi/heaptype.c"
+    "${SRC_DIR}/modules/_testcapi/immortal.c"
+    "${SRC_DIR}/modules/_testcapi/list.c"
+    "${SRC_DIR}/modules/_testcapi/long.c"
+    "${SRC_DIR}/modules/_testcapi/mem.c"
+    # "${SRC_DIR}/modules/_testcapi/monitoring.c"
+    "${SRC_DIR}/modules/_testcapi/numbers.c"
+    "${SRC_DIR}/modules/_testcapi/object.c"
+    "${SRC_DIR}/modules/_testcapi/parts.h"
+    "${SRC_DIR}/modules/_testcapi/pyatomic.c"
+    "${SRC_DIR}/modules/_testcapi/run.c"
+    "${SRC_DIR}/modules/_testcapi/set.c"
+    "${SRC_DIR}/modules/_testcapi/structmember.c"
+    "${SRC_DIR}/modules/_testcapi/time.c"
+    "${SRC_DIR}/modules/_testcapi/tuple.c"
+    "${SRC_DIR}/modules/_testcapi/unicode.c"
+    "${SRC_DIR}/modules/_testcapi/util.h"
+    "${SRC_DIR}/modules/_testcapi/weakref.c"
+    # "${SRC_DIR}/modules/_testcapi/vectorcall.c"
+    # "${SRC_DIR}/modules/_testcapi/watchers.c"
+    "${SRC_DIR}/modules/_testcapi.c"
+)
+
+native_module("_testcapi" FALSE "${TESTCAPI_SRC}")
+target_include_directories("_testcapi" PRIVATE "${SRC_DIR}/include/internal")
+if(WIN32)
+    target_compile_options("_testcapi" PRIVATE /wd4296 /wd4130)
+endif()
+
+set(TESTLIMITEDCAPI_SRC
+    "${SRC_DIR}/modules/_testlimitedcapi/abstract.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/bytearray.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/bytes.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/complex.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/dict.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/eval.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/file.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/float.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/heaptype_relative.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/import.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/list.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/long.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/object.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/pyos.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/set.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/sys.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/tuple.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/unicode.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/vectorcall_limited.c"
+    "${SRC_DIR}/modules/_testlimitedcapi/weakref.c"
+    "${SRC_DIR}/modules/_testlimitedcapi.c"
+)
+
+native_module("_testlimitedcapi" FALSE "${TESTLIMITEDCAPI_SRC}" NO_CORE_DEFINES)
+
+simple_native_module("_testbuffer")
+if(WIN32)
+    target_compile_options("_testbuffer" PRIVATE /wd4090)
+endif()
+simple_native_module("_testmultiphase")
+simple_native_module("_testsinglephase")
 
 if(NOT WIN32)
-    native_module("_testcapi" FALSE "${SRC_DIR}/modules/_testcapi.c")
-    simple_native_module("_testbuffer")
-    simple_native_module("_testmultiphase")
-    simple_native_module("_ctypes_test")
-
     ###################### BZIP2 ########################
     if(DEFINED LIBBZ2_BUILD_FILE)
         include("${LIBBZ2_BUILD_FILE}")
@@ -193,28 +378,103 @@ if(NOT WIN32)
         # variable 'TARGET_LIBBZ2' is defined in file 'LIBBZ2_BUILD_FILE'
         target_link_libraries(${TARGET_BZ2} ${TARGET_LIBBZ2})
     endif()
+endif()
 
+###################### PYEXPAT ######################
+set(TARGET_PYEXPAT "pyexpat")
+simple_native_module(${TARGET_PYEXPAT})
+set(EXPAT_SRC "${SRC_DIR}/expat")
+set(PYEXPAT_HEADERS
+    ${EXPAT_SRC}/ascii.h ${EXPAT_SRC}/asciitab.h ${EXPAT_SRC}/expat.h ${EXPAT_SRC}/expat_config.h
+    ${EXPAT_SRC}/expat_external.h ${EXPAT_SRC}/internal.h ${EXPAT_SRC}/latin1tab.h ${EXPAT_SRC}/utf8tab.h
+    ${EXPAT_SRC}/xmlrole.h ${EXPAT_SRC}/xmltok.h ${EXPAT_SRC}/xmltok_impl.h
+)
+target_sources(${TARGET_PYEXPAT} PRIVATE ${PYEXPAT_HEADERS})
+target_sources(${TARGET_PYEXPAT} PRIVATE ${EXPAT_SRC}/xmlparse.c ${EXPAT_SRC}/xmlrole.c ${EXPAT_SRC}/xmltok.c)
+target_include_directories(${TARGET_PYEXPAT} PRIVATE ${EXPAT_SRC})
+# bpo-30947: Python uses best available entropy sources to call XML_SetHashSalt(),
+# expat entropy sources are not needed
+target_compile_definitions(${TARGET_PYEXPAT} PRIVATE
+    HAVE_EXPAT_CONFIG_H=1
+    XML_POOR_ENTROPY=1
+    XML_DTD=1
+)
 
-    ###################### PYEXPAT ######################
-    set(TARGET_PYEXPAT "pyexpat")
-    simple_native_module(${TARGET_PYEXPAT})
-    set(EXPAT_SRC "${SRC_DIR}/expat")
-    set(PYEXPAT_HEADERS
-        ${EXPAT_SRC}/ascii.h ${EXPAT_SRC}/asciitab.h ${EXPAT_SRC}/expat.h ${EXPAT_SRC}/expat_config.h
-        ${EXPAT_SRC}/expat_external.h ${EXPAT_SRC}/internal.h ${EXPAT_SRC}/latin1tab.h ${EXPAT_SRC}/utf8tab.h
-        ${EXPAT_SRC}/xmlrole.h ${EXPAT_SRC}/xmltok.h ${EXPAT_SRC}/xmltok_impl.h
+###################### CTYPES ######################
+native_module("_ctypes_test" TRUE "${SRC_DIR}/modules/_ctypes/_ctypes_test.c" NO_CORE_DEFINES)
+if(WIN32)
+    target_compile_definitions("_ctypes_test" PRIVATE MS_WIN32 MS_WINDOWS)
+endif()
+set(CTYPES_SRC
+    "${SRC_DIR}/modules/_ctypes/_ctypes.c"
+    "${SRC_DIR}/modules/_ctypes/callbacks.c"
+    "${SRC_DIR}/modules/_ctypes/callproc.c"
+    "${SRC_DIR}/modules/_ctypes/cfield.c"
+    "${SRC_DIR}/modules/_ctypes/ctypes.h"
+    "${SRC_DIR}/modules/_ctypes/stgdict.c"
+)
+native_module("_ctypes" TRUE "${CTYPES_SRC}")
+if(WIN32)
+    target_compile_definitions("_ctypes" PRIVATE MS_WIN32 MS_WINDOWS)
+endif()
+target_include_directories("_ctypes" PUBLIC "${SRC_DIR}/modules/_ctypes")
+find_library(FFI_LIBRARY
+  NAMES "ffi.lib" "libffi.a"
+  PATHS "${LIBFFI_DIST}"
+  REQUIRED
+  NO_DEFAULT_PATH
+  NO_PACKAGE_ROOT_PATH
+  NO_CMAKE_PATH
+  NO_CMAKE_ENVIRONMENT_PATH
+  NO_SYSTEM_ENVIRONMENT_PATH
+  NO_CMAKE_SYSTEM_PATH
+  NO_CMAKE_INSTALL_PREFIX
+)
+find_path(FFI_INCLUDE
+  NAMES "ffi.h"
+  PATHS "${LIBFFI_DIST}"
+  PATH_SUFFIXES "include"
+  REQUIRED
+  NO_DEFAULT_PATH
+  NO_PACKAGE_ROOT_PATH
+  NO_CMAKE_PATH
+  NO_CMAKE_ENVIRONMENT_PATH
+  NO_SYSTEM_ENVIRONMENT_PATH
+  NO_CMAKE_SYSTEM_PATH
+  NO_CMAKE_INSTALL_PREFIX
+)
+target_link_libraries("_ctypes" PRIVATE ${FFI_LIBRARY})
+
+target_include_directories("_ctypes" BEFORE PRIVATE ${FFI_INCLUDE})
+
+if(WIN32)
+    target_compile_options("_ctypes" PRIVATE
+        /wd4201 # ffi.h(332): warning C4201: nonstandard extension used: nameless struct/union
+        /wd4457 # _ctypes.c(4783): warning C4457: declaration of 'item' hides function parameter
     )
-    target_sources(${TARGET_PYEXPAT} PRIVATE ${PYEXPAT_HEADERS})
-    target_sources(${TARGET_PYEXPAT} PRIVATE ${EXPAT_SRC}/xmlparse.c ${EXPAT_SRC}/xmlrole.c ${EXPAT_SRC}/xmltok.c)
-    target_include_directories(${TARGET_PYEXPAT} PRIVATE ${EXPAT_SRC})
-    # bpo-30947: Python uses best available entropy sources to call XML_SetHashSalt(),
-    # expat entropy sources are not needed
-    target_compile_definitions(${TARGET_PYEXPAT} PRIVATE
-        HAVE_EXPAT_CONFIG_H=1
-        XML_POOR_ENTROPY=1
+    target_compile_definitions("_ctypes" PRIVATE
+        MS_WIN32
+        MS_WIN64
+        _WIN64
+        FFI_STATIC_BUILD
+    )
+elseif(APPLE)
+    target_compile_definitions("_ctypes" PRIVATE
+        HAVE_DECL_RTLD_LOCAL
+        HAVE_DECL_RTLD_GLOBAL
+        HAVE_DYLD_SHARED_CACHE_CONTAINS_PATH
+        HAVE_FFI_CLOSURE_ALLOC
+        HAVE_FFI_PREP_CIF_VAR
+        HAVE_FFI_PREP_CLOSURE_LOC
+    )
+else()
+    target_compile_definitions("_ctypes" PRIVATE
+        HAVE_DECL_RTLD_LOCAL
+        HAVE_DECL_RTLD_GLOBAL
     )
 endif()
 
+###################### LIBPYTHON ######################
 target_sources(${TARGET_LIBPYTHON} PRIVATE ${SRC_FILES})
 target_include_directories(${TARGET_LIBPYTHON} PRIVATE
     "${SRC_DIR}/include/internal"
@@ -224,12 +484,14 @@ target_include_directories(${TARGET_LIBPYTHON} PRIVATE
 # target-specific compile and link options
 ######################################################################
 
-target_compile_definitions(${TARGET_LIBPYTHON} PRIVATE Py_BUILD_CORE)
+target_compile_definitions(${TARGET_LIBPYTHON} PRIVATE Py_BUILD_CORE Py_BUILD_CORE_BUILTIN)
 target_compile_options(${TARGET_LIBPYTHON} PRIVATE ${CFLAGS_WARNINGS})
 
 if(WIN32)
-    target_link_directories(${TARGET_LIBPYTHON} PRIVATE ${GRAALVM_LLVM_LIB_DIR})
-    target_link_libraries(${TARGET_LIBPYTHON} sulong-native graalvm-llvm)
+    if (NOT MSVC)
+        target_compile_options(${TARGET_LIBPYTHON} PRIVATE "-fmsc-version=1920")
+    endif()
+    target_link_libraries(${TARGET_LIBPYTHON} dbghelp)
 else()
     # Link to math library; required for functions like 'hypot' or similar
     target_link_libraries(${TARGET_LIBPYTHON} m)

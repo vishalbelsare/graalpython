@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,16 +36,31 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
 import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+
+from . import CPyExtTestCase, CPyExtFunction, CPyExtType
 
 
 class TestPystate(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super().compile_module(name)
+    test_PyThreadState_Swap = CPyExtFunction(
+        lambda args: True,
+        lambda: (
+            tuple(),
+        ),
+        code='''PyObject* wrap_PyThreadState_Swap(PyObject* ignored) {
+            PyThreadState *before = PyThreadState_GetUnchecked();
+            PyThreadState *old = PyThreadState_Swap(NULL);
+            int released = !PyGILState_Check();
+            PyThreadState *without_gil = PyThreadState_Swap(before);
+            int restored = PyGILState_Check();
+            return PyBool_FromLong(old == before && released && without_gil == NULL && restored);
+        }
+        ''',
+        resultspec="O",
+        argspec="",
+        arguments=["PyObject* ignored"],
+        callfunction="wrap_PyThreadState_Swap",
+    )
 
     test_PyThreadState_GetDict = CPyExtFunction(
         lambda args: type({}),
@@ -61,3 +76,63 @@ class TestPystate(CPyExtTestCase):
         arguments=["PyObject* ignored"],
         callfunction="wrap_PyThreadState_GetDict",
     )
+
+    def test_PyThreadState_GetFrame(self):
+        Tester = CPyExtType(
+            "PyThreadState_GetFrameTester",
+            code="""
+            static PyObject* get_frame(PyObject* unused) {
+                return (PyObject*)PyThreadState_GetFrame(PyThreadState_GET());
+            }
+            """,
+            tp_methods='{"get_frame", (PyCFunction)get_frame, METH_NOARGS | METH_STATIC, NULL}',
+        )
+        assert Tester.get_frame() is sys._getframe(0)
+
+    # This seems to get the native extensions into some inconsistent state on GraalPy, giving:
+    # refcnt below zero during managed adjustment for 0000aaae18fca780 (9 0000000000000009 - 10)
+    def test_SetAsyncExc(self):
+        # TODO GR-63289 transiently failing too often
+        return
+        SetAsyncExcCaller = CPyExtType(
+            "SetAsyncExcCaller",
+            """
+            static PyObject* trigger_ex(PyObject *cls, PyObject *args) {
+                long thread_id;
+                PyObject *ex;
+                if (!PyArg_ParseTuple(args, "lO", &thread_id, &ex)) {
+                    return NULL;
+                }
+                PyThreadState_SetAsyncExc(thread_id, ex);
+                return PyLong_FromLong(42);
+            }
+            """,
+            tp_methods='{"trigger_ex", (PyCFunction)trigger_ex, METH_VARARGS | METH_STATIC, ""}',
+        )
+
+        import threading
+        start = threading.Barrier(2, timeout=20)
+
+        caught_ex = "initial value of caught_ex"
+        def other_thread():
+            nonlocal caught_ex
+            try:
+                start.wait() # ensure we are in the try, before raising
+                r = 0
+                for i in range(1, 1000000000):
+                    for j in range(i, 1000000000):
+                        r += j / i
+            except Exception as e:
+                caught_ex = e
+            else:
+                caught_ex = "no exception caught"
+
+
+        t = threading.Thread(target=other_thread)
+        t.start()
+
+        start.wait()
+        SetAsyncExcCaller.trigger_ex(t.ident, Exception("test my message"))
+        t.join()
+
+        assert "test my message" in str(caught_ex), f"{str(caught_ex)=}, {t.is_alive()=}"

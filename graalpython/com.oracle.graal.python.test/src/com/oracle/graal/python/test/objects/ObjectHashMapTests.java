@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -66,14 +66,14 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap;
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.MapCursor;
+import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.PopNode;
+import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.PutNode;
 import com.oracle.graal.python.lib.PyObjectHashNode;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
-import com.oracle.graal.python.lib.PyObjectRichCompareBool.Comparison;
+import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedBranchProfile;
-import com.oracle.truffle.api.profiles.InlinedCountingConditionProfile;
 
 public class ObjectHashMapTests {
     public static final class DictKey implements TruffleObject {
@@ -84,9 +84,9 @@ public class ObjectHashMapTests {
         }
     }
 
-    private static final class EqNodeStub extends PyObjectRichCompareBool.EqNode {
+    private static final class EqNodeStub extends PyObjectRichCompareBool {
         @Override
-        protected boolean execute(Frame frame, Node inliningTarget, Object a, Object b, Comparison cmp) {
+        public boolean execute(Frame frame, Node inliningTarget, Object a, Object b, RichCmpOp cmp) {
             // Sanity check: we do not use any other keys in the tests
             assert a instanceof Long || a instanceof DictKey;
             assert b instanceof Long || b instanceof DictKey;
@@ -170,7 +170,7 @@ public class ObjectHashMapTests {
         // Basic tests of other methods
         Object[] oldKeys = keysToArray(map);
 
-        ObjectHashMap copy = map.copy();
+        ObjectHashMap copy = copyMap(map);
         assertEquals(map.size(), copy.size());
         for (Object key : oldKeys) {
             assertEquals(key.toString(), //
@@ -206,6 +206,23 @@ public class ObjectHashMapTests {
         putValues(map, expected, rand, 300);
         removeValues(map, expected, rand, 10);
         overrideValues(map, expected, rand, 10);
+
+        putValues(map, expected, rand, 50);
+        popValues(map, expected, 30);
+        putValues(map, expected, rand, 20);
+        popValues(map, expected, 40);
+    }
+
+    private static void popValues(ObjectHashMap map, LinkedHashMap<Long, Object> expected, int count) {
+        var keys = expected.keySet().stream().toList().reversed().stream().limit(count).toArray(Long[]::new);
+        for (int i = 0; i < keys.length; i++) {
+            Long key = keys[i];
+            Object[] popped = PopNode.doPopWithRestartForTests(map);
+            Assert.assertEquals(Integer.toString(i), key, popped[0]);
+            Assert.assertEquals(Integer.toString(i), expected.get(key), popped[1]);
+            expected.remove(key);
+            assertEqual(i, expected, map);
+        }
     }
 
     private static void removeAll(ObjectHashMap map) {
@@ -294,7 +311,7 @@ public class ObjectHashMapTests {
         Collections.reverse(keysValuesReversed);
         assertArrayEquals(message, keysValuesReversed.toArray(), reverseKeysToArray(actual));
 
-        EconomicMapStorage storage = new EconomicMapStorage(actual, false);
+        EconomicMapStorage storage = toEconomicMapStorage(actual);
         int[] size = new int[]{0};
         HashingStorageForEach.executeUncached(storage, new HashingStorageForEachCallback<>() {
             @Override
@@ -309,12 +326,12 @@ public class ObjectHashMapTests {
     }
 
     private static Object[] keysToArray(ObjectHashMap m) {
-        EconomicMapStorage s = new EconomicMapStorage(m, false);
+        EconomicMapStorage s = toEconomicMapStorage(m);
         return iteratorToArray(s, HashingStorageGetIterator.executeUncached(s));
     }
 
     private static Object[] reverseKeysToArray(ObjectHashMap m) {
-        EconomicMapStorage s = new EconomicMapStorage(m, false);
+        EconomicMapStorage s = toEconomicMapStorage(m);
         return iteratorToArray(s, HashingStorageGetReverseIterator.executeUncached(s));
     }
 
@@ -328,6 +345,24 @@ public class ObjectHashMapTests {
 
     private static int valueCounter = 0;
 
+    private static ObjectHashMap copyMap(ObjectHashMap original) {
+        EconomicMapStorage copy = EconomicMapStorage.create(original.size());
+        MapCursor cursor = original.getEntries();
+        while (cursor.advance()) {
+            put(copy, cursor.getKey().getValue(), cursor.getKey().getPythonHash(), cursor.getValue());
+        }
+        return copy;
+    }
+
+    private static EconomicMapStorage toEconomicMapStorage(ObjectHashMap map) {
+        EconomicMapStorage storage = EconomicMapStorage.create(map.size());
+        MapCursor cursor = map.getEntries();
+        while (cursor.advance()) {
+            put(storage, cursor.getKey().getValue(), cursor.getKey().getPythonHash(), cursor.getValue());
+        }
+        return storage;
+    }
+
     public static Object newValue() {
         return "Val: " + (valueCounter++);
     }
@@ -337,25 +372,14 @@ public class ObjectHashMapTests {
     }
 
     private static Object get(ObjectHashMap map, Object key, long hash) {
-        InlinedCountingConditionProfile uncachedCounting = InlinedCountingConditionProfile.getUncached();
-        return ObjectHashMap.GetNode.doGetWithRestart(null, null, map, key, hash,
-                        InlinedBranchProfile.getUncached(), uncachedCounting, uncachedCounting, uncachedCounting,
-                        uncachedCounting, uncachedCounting,
-                        new EqNodeStub());
+        return ObjectHashMap.GetNode.doGetWithRestartForTests(map, key, hash, new EqNodeStub());
     }
 
     private static void remove(ObjectHashMap map, Object key, long hash) {
-        InlinedCountingConditionProfile uncachedCounting = InlinedCountingConditionProfile.getUncached();
-        ObjectHashMap.RemoveNode.doRemoveWithRestart(null, null, map, key, hash,
-                        InlinedBranchProfile.getUncached(), uncachedCounting, uncachedCounting, uncachedCounting,
-                        uncachedCounting, InlinedBranchProfile.getUncached(), new EqNodeStub());
+        ObjectHashMap.RemoveNode.doRemoveWithRestartForTests(map, key, hash, new EqNodeStub());
     }
 
     private static void put(ObjectHashMap map, Object key, long hash, Object value) {
-        InlinedCountingConditionProfile uncachedCounting = InlinedCountingConditionProfile.getUncached();
-        ObjectHashMap.PutNode.doPutWithRestart(null, null, map, key, hash, value,
-                        InlinedBranchProfile.getUncached(), uncachedCounting, uncachedCounting, uncachedCounting,
-                        uncachedCounting, InlinedBranchProfile.getUncached(), InlinedBranchProfile.getUncached(),
-                        new EqNodeStub());
+        PutNode.doPutWithRestartForTests(map, key, hash, value, new EqNodeStub());
     }
 }

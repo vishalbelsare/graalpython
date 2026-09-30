@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,11 +41,9 @@
 package com.oracle.graal.python.builtins.modules.cjkcodecs;
 
 import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibyteCodecUtil.findCodec;
-import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecModuleBuiltins.PyMultibyteCodec_CAPSULE_NAME;
+import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecModuleBuiltins.createCodec;
 import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecModuleBuiltins.registerCodec;
-import static com.oracle.graal.python.builtins.modules.cjkcodecs.MultibytecodecModuleBuiltins.CreateCodecNode.createCodec;
 import static com.oracle.graal.python.nodes.BuiltinNames.J__CODECS_JP;
-import static com.oracle.graal.python.nodes.BuiltinNames.T__CODECS_JP;
 import static com.oracle.graal.python.nodes.ErrorMessages.ENCODING_NAME_MUST_BE_A_STRING;
 import static com.oracle.graal.python.nodes.ErrorMessages.NO_SUCH_CODEC_IS_SUPPORTED;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.LookupError;
@@ -53,21 +51,17 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeErro
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.modules.cjkcodecs.DBCSMap.MappingType;
 import com.oracle.graal.python.builtins.modules.cjkcodecs.MultibyteCodec.CodecType;
-import com.oracle.graal.python.builtins.objects.capsule.PyCapsule;
-import com.oracle.graal.python.builtins.objects.capsule.PyCapsuleNameMatchesNode;
-import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.lib.PyUnicodeCheckNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -109,29 +103,27 @@ public final class CodecsJPModuleBuiltins extends PythonBuiltins {
     @Override
     public void postInitialize(Python3Core core) {
         super.postInitialize(core);
-        PythonObjectFactory factory = core.factory();
-        PythonModule codec = core.lookupBuiltinModule(T__CODECS_JP);
         int i = 0;
-        registerCodec("shift_jis", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
-        registerCodec("cp932", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
-        registerCodec("euc_jp", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
-        registerCodec("shift_jis_2004", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
-        registerCodec("euc_jis_2004", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
-        registerCodec("euc_jisx0213", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
-        registerCodec("shift_jisx0213", i, CodecType.STATELESS, -1, null, null, CODEC_LIST, codec, factory);
+        registerCodec("shift_jis", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST);
+        registerCodec("cp932", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST);
+        registerCodec("euc_jp", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST);
+        registerCodec("shift_jis_2004", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST);
+        registerCodec("euc_jis_2004", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST);
+        registerCodec("euc_jisx0213", i++, CodecType.STATELESS, -1, null, null, CODEC_LIST);
+        registerCodec("shift_jisx0213", i, CodecType.STATELESS, -1, null, null, CODEC_LIST);
 
         i = 0;
-        registerCodec("jisx0208", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0212", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisxcommon", -1, null, i++, MappingType.ENCONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_1_bmp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_2_bmp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_bmp", -1, null, i++, MappingType.ENCONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_1_emp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_2_emp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_emp", -1, null, i++, MappingType.ENCONLY, MAPPING_LIST, null, codec, factory);
-        registerCodec("jisx0213_pair", -1, null, i++, MappingType.ENCDEC, MAPPING_LIST, null, codec, factory);
-        registerCodec("cp932ext", -1, null, i, MappingType.ENCDEC, MAPPING_LIST, null, codec, factory);
+        registerCodec("jisx0208", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null);
+        registerCodec("jisx0212", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null);
+        registerCodec("jisxcommon", -1, null, i++, MappingType.ENCONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_1_bmp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_2_bmp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_bmp", -1, null, i++, MappingType.ENCONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_1_emp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_2_emp", -1, null, i++, MappingType.DECONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_emp", -1, null, i++, MappingType.ENCONLY, MAPPING_LIST, null);
+        registerCodec("jisx0213_pair", -1, null, i++, MappingType.ENCDEC, MAPPING_LIST, null);
+        registerCodec("cp932ext", -1, null, i, MappingType.ENCDEC, MAPPING_LIST, null);
     }
 
     @Override
@@ -145,25 +137,22 @@ public final class CodecsJPModuleBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object getcodec(Object encoding,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached TruffleString.EqualNode isEqual,
                         @Cached PyUnicodeCheckNode unicodeCheckNode,
                         @Cached CastToTruffleStringNode asUTF8Node,
-                        @Cached PyCapsuleNameMatchesNode nameMatchesNode,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
 
             if (!unicodeCheckNode.execute(inliningTarget, encoding)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ENCODING_NAME_MUST_BE_A_STRING);
+                throw raiseNode.raise(inliningTarget, TypeError, ENCODING_NAME_MUST_BE_A_STRING);
             }
 
             MultibyteCodec codec = findCodec(CODEC_LIST, asUTF8Node.execute(inliningTarget, encoding), isEqual);
             if (codec == null) {
-                throw raiseNode.get(inliningTarget).raise(LookupError, NO_SUCH_CODEC_IS_SUPPORTED);
+                throw raiseNode.raise(inliningTarget, LookupError, NO_SUCH_CODEC_IS_SUPPORTED);
             }
 
-            PyCapsule codecobj = factory.createCapsule(codec, PyMultibyteCodec_CAPSULE_NAME, null);
-            return createCodec(inliningTarget, codecobj, nameMatchesNode, factory, raiseNode);
+            return createCodec(inliningTarget, codec);
         }
     }
 

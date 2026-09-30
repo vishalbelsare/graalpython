@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,22 +25,30 @@
  */
 package com.oracle.graal.python.builtins.objects.iterator;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_ITER;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.objects.module.PythonModule;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
-import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -52,48 +60,69 @@ import com.oracle.truffle.api.nodes.Node;
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PSentinelIterator)
 public final class SentinelIteratorBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = SentinelIteratorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return SentinelIteratorBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object doIterator(VirtualFrame frame, PSentinelIterator iterator,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CallNode callNode,
                         @Cached IsBuiltinObjectProfile errorProfile,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PyObjectRichCompareBool eqNode) {
             if (iterator.sentinelReached()) {
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
             Object nextValue;
             try {
-                nextValue = callNode.execute(frame, iterator.getCallTarget());
+                nextValue = callNode.execute(frame, iterator.getCallable());
             } catch (PException e) {
                 e.expectStopIteration(inliningTarget, errorProfile);
                 iterator.markSentinelReached();
-                throw e;
+                throw iteratorExhausted();
             }
-            boolean iteratorDone = eqNode.compare(frame, inliningTarget, nextValue, iterator.getSentinel());
+            boolean iteratorDone = eqNode.executeEq(frame, inliningTarget, nextValue, iterator.getSentinel());
             if (iteratorDone) {
                 iterator.markSentinelReached();
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
             return nextValue;
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         static Object doPSentinelIterator(PSentinelIterator self) {
             return self;
+        }
+    }
+
+    @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static Object reduce(VirtualFrame frame, PSentinelIterator self,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Bind PythonLanguage language) {
+            PythonModule builtins = PythonContext.get(inliningTarget).getBuiltins();
+            Object iter = getAttr.execute(frame, inliningTarget, builtins, T_ITER);
+            Object[] args;
+            if (self.sentinelReached()) {
+                args = new Object[]{PFactory.createEmptyTuple(language)};
+            } else {
+                args = new Object[]{self.getCallable(), self.getSentinel()};
+            }
+            return PFactory.createTuple(language, new Object[]{iter, PFactory.createTuple(language, args)});
         }
     }
 }

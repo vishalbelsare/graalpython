@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,12 +51,12 @@ import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.IndirectCallData;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
@@ -91,32 +91,33 @@ public abstract class PyUnicodeFromEncodedObject extends PNodeWithContext {
     @Specialization
     @SuppressWarnings("unused")
     static Object doString(VirtualFrame frame, TruffleString object, Object encoding, Object errors,
-                    @Shared @Cached(inline = false) PRaiseNode raiseNode) {
-        throw raiseNode.raise(PythonBuiltinClassType.TypeError, DECODING_STR_NOT_SUPPORTED);
+                    @Bind Node inliningTarget) {
+        throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, DECODING_STR_NOT_SUPPORTED);
     }
 
     @Specialization
     @SuppressWarnings("unused")
     static Object doPString(VirtualFrame frame, PString object, Object encoding, Object errors,
-                    @Shared @Cached(inline = false) PRaiseNode raiseNode) {
-        throw raiseNode.raise(PythonBuiltinClassType.TypeError, DECODING_STR_NOT_SUPPORTED);
+                    @Bind Node inliningTarget) {
+        throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, DECODING_STR_NOT_SUPPORTED);
     }
 
     @Specialization(guards = {"!isPBytes(object)", "!isString(object)"}, limit = "3")
     static Object doBuffer(VirtualFrame frame, Node inliningTarget, Object object, Object encoding, Object errors,
-                    @Cached("createFor(this)") IndirectCallData indirectCallNode,
+                    @Bind PythonLanguage language,
+                    @Cached("createFor($node)") InteropCallData indirectCallNode,
                     @Exclusive @Cached InlinedConditionProfile emptyStringProfile,
                     @CachedLibrary("object") PythonBufferAcquireLibrary bufferAcquireLib,
                     @Exclusive @Cached PyUnicodeDecode decode,
-                    @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                    @Cached(inline = false) PythonObjectFactory factory) {
-        Object buffer = bufferAcquireLib.acquireReadonly(object, frame, PythonContext.get(inliningTarget), PythonLanguage.get(inliningTarget), indirectCallNode);
+                    @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib) {
+        PythonContext context = PythonContext.get(inliningTarget);
+        Object buffer = bufferAcquireLib.acquireReadonly(object, frame, context, context.getLanguage(inliningTarget), indirectCallNode);
         try {
             int len = bufferLib.getBufferLength(buffer);
             if (emptyStringProfile.profile(inliningTarget, len == 0)) {
                 return T_EMPTY_STRING;
             }
-            PBytes bytes = factory.createBytes(bufferLib.getInternalOrCopiedByteArray(buffer), len);
+            PBytes bytes = PFactory.createBytes(language, bufferLib.getInternalOrCopiedByteArray(buffer), len);
             return decode.execute(frame, inliningTarget, bytes, encoding, errors);
         } finally {
             bufferLib.release(buffer, frame, indirectCallNode);

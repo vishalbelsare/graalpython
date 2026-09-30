@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,8 +48,8 @@ package com.oracle.graal.python.pegparser.sst;
 import com.oracle.graal.python.pegparser.tokenizer.SourceRange;
 
 public final class WithItemTy extends SSTNode {
-    public final ExprTy contextExpr;
-    public final ExprTy optionalVars;   // nullable
+    public ExprTy contextExpr;
+    public ExprTy optionalVars;   // nullable
 
     public WithItemTy(ExprTy contextExpr, ExprTy optionalVars, SourceRange sourceRange) {
         super(sourceRange);

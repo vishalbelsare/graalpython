@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,8 +41,6 @@
 package com.oracle.graal.python.builtins.modules.io;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PBufferedRWPair;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PBufferedReader;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PBufferedWriter;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.J_CLOSE;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.J_CLOSED;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.J_FLUSH;
@@ -69,29 +67,35 @@ import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITABLE;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITE;
 import static com.oracle.graal.python.nodes.ErrorMessages.IO_UNINIT;
 import static com.oracle.graal.python.nodes.ErrorMessages.THE_S_OBJECT_IS_BEING_GARBAGE_COLLECTED;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.RuntimeError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueError;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyErrChainExceptions;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonQuaternaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.IsNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
@@ -106,12 +110,27 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 @CoreFunctions(extendClasses = PBufferedRWPair)
 public final class BufferedRWPairBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = BufferedRWPairBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return BufferedRWPairBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 3, parameterNames = {"$self", "reader", "writer", "buffer_size"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "BufferedRWPair", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class BufferedRWPairNode extends PythonBuiltinNode {
+        @Specialization
+        static PRWPair doNew(Object cls, @SuppressWarnings("unused") Object arg,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            // data filled in subsequent __init__ call - see BufferedRWPairBuiltins.InitNode
+            return PFactory.createRWPair(cls, getInstanceShape.execute(cls));
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "BufferedRWPair", minNumOfPositionalArgs = 3, parameterNames = {"$self", "reader", "writer", "buffer_size"})
     @ArgumentClinic(name = "buffer_size", conversion = ArgumentClinic.ClinicConversion.Int, defaultValue = "BufferedReaderBuiltins.DEFAULT_BUFFER_SIZE", useDefaultForNone = true)
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonQuaternaryClinicBuiltinNode {
@@ -123,18 +142,18 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
 
         @Specialization
         static PNone doInit(VirtualFrame frame, PRWPair self, Object reader, Object writer, int bufferSize,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached IOBaseBuiltins.CheckBoolMethodHelperNode checkReadableNode,
                         @Cached IOBaseBuiltins.CheckBoolMethodHelperNode checkWritableNode,
                         @Cached BufferedReaderBuiltins.BufferedReaderInit initReaderNode,
                         @Cached BufferedWriterBuiltins.BufferedWriterInit initWriterNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             checkReadableNode.checkReadable(frame, inliningTarget, reader);
             checkWritableNode.checkWriteable(frame, inliningTarget, writer);
-            self.setReader(factory.createBufferedReader(PBufferedReader));
-            initReaderNode.execute(frame, inliningTarget, self.getReader(), reader, bufferSize, factory);
-            self.setWriter(factory.createBufferedWriter(PBufferedWriter));
-            initWriterNode.execute(frame, inliningTarget, self.getWriter(), writer, bufferSize, factory);
+            self.setReader(PFactory.createBufferedReader(language));
+            initReaderNode.execute(frame, inliningTarget, self.getReader(), reader, bufferSize);
+            self.setWriter(PFactory.createBufferedWriter(language));
+            initWriterNode.execute(frame, inliningTarget, self.getWriter(), writer, bufferSize);
             return PNone.NONE;
         }
     }
@@ -148,8 +167,8 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = "!isInit(self)")
         static Object error(VirtualFrame frame, PRWPair self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
     }
 
@@ -162,8 +181,8 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = "!isInit(self)")
         static Object error(VirtualFrame frame, PRWPair self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
     }
 
@@ -176,8 +195,8 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = "!isInit(self)")
         static Object error(VirtualFrame frame, PRWPair self, Object arg,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
     }
 
@@ -190,8 +209,8 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = "!isInit(self)")
         static Object error(VirtualFrame frame, PRWPair self, Object arg,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, IO_UNINIT);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, IO_UNINIT);
         }
     }
 
@@ -200,7 +219,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class ReadNode extends ReaderInitCheckPythonBinaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object read(VirtualFrame frame, PRWPair self, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getReader(), T_READ, args);
         }
@@ -211,7 +230,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class PeekNode extends ReaderInitCheckPythonBinaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object peek(VirtualFrame frame, PRWPair self, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getReader(), T_PEEK, args);
         }
@@ -222,7 +241,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class Read1Node extends ReaderInitCheckPythonBinaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object read1(VirtualFrame frame, PRWPair self, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getReader(), T_READ1, args);
         }
@@ -233,7 +252,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class ReadIntoNode extends ReaderInitCheckPythonBinaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object readInto(VirtualFrame frame, PRWPair self, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getReader(), T_READINTO, args);
         }
@@ -244,7 +263,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class ReadInto1Node extends ReaderInitCheckPythonBinaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object readInto1(VirtualFrame frame, PRWPair self, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getReader(), T_READINTO1, args);
         }
@@ -255,7 +274,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class WriteNode extends WriterInitCheckPythonBinaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object write(VirtualFrame frame, PRWPair self, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getWriter(), T_WRITE, args);
         }
@@ -266,7 +285,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class FlushNode extends WriterInitCheckPythonUnaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object doit(VirtualFrame frame, PRWPair self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getWriter(), T_FLUSH);
         }
@@ -277,7 +296,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class ReadableNode extends ReaderInitCheckPythonUnaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object doit(VirtualFrame frame, PRWPair self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getReader(), T_READABLE);
         }
@@ -288,7 +307,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class WritableNode extends WriterInitCheckPythonUnaryBuiltinNode {
         @Specialization(guards = "isInit(self)")
         static Object doit(VirtualFrame frame, PRWPair self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethod) {
             return callMethod.execute(frame, inliningTarget, self.getWriter(), T_WRITABLE);
         }
@@ -300,13 +319,13 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object close(VirtualFrame frame, PRWPair self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethodReader,
                         @Cached PyObjectCallMethodObjArgs callMethodWriter,
                         @Cached InlinedConditionProfile gotException,
                         @Cached InlinedBranchProfile hasException,
                         @Cached PyErrChainExceptions chainExceptions,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             PException writeEx = null;
             if (self.getWriter() != null) {
                 try {
@@ -316,7 +335,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
                     writeEx = e;
                 }
             } else {
-                writeEx = raiseNode.get(inliningTarget).raise(ValueError, IO_UNINIT);
+                writeEx = raiseNode.raise(inliningTarget, ValueError, IO_UNINIT);
             }
 
             PException readEx;
@@ -331,7 +350,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
                     readEx = e;
                 }
             } else {
-                readEx = raiseNode.get(inliningTarget).raise(ValueError, IO_UNINIT);
+                readEx = raiseNode.raise(inliningTarget, ValueError, IO_UNINIT);
             }
 
             hasException.enter(inliningTarget);
@@ -352,7 +371,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
     abstract static class IsAttyNode extends PythonUnaryBuiltinNode {
         @Specialization
         Object doit(VirtualFrame frame, PRWPair self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethodWriter,
                         @Cached PyObjectCallMethodObjArgs callMethodReader,
                         @Cached IsNode isNode,
@@ -372,7 +391,7 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "self.getWriter() != null")
         static Object doit(VirtualFrame frame, PRWPair self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetAttr getAttr) {
             return getAttr.execute(frame, inliningTarget, self.getWriter(), T_CLOSED);
         }
@@ -380,8 +399,8 @@ public final class BufferedRWPairBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Fallback
         static Object error(VirtualFrame frame, Object self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(RuntimeError, THE_S_OBJECT_IS_BEING_GARBAGE_COLLECTED, "BufferedRWPair");
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, RuntimeError, THE_S_OBJECT_IS_BEING_GARBAGE_COLLECTED, "BufferedRWPair");
         }
     }
 }

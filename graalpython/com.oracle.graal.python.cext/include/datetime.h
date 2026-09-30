@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2025, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -119,37 +119,57 @@ typedef struct
 } PyDateTime_DateTime;          /* hastzinfo true */
 
 
-PyAPI_FUNC(PyObject*) PyTruffle_PyDateTime_GET_TZINFO(PyObject*);
-PyAPI_FUNC(long) PyTruffle_PyDateTime_GET_LONG_FIELD(PyObject* o, const char* field_name);
+// GraalPy public API
+PyAPI_FUNC(int) GraalPyDateTime_GET_YEAR(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_GET_MONTH(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_GET_DAY(PyObject*);
+
+PyAPI_FUNC(int) GraalPyDateTime_DATE_GET_HOUR(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_DATE_GET_MINUTE(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_DATE_GET_SECOND(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_DATE_GET_MICROSECOND(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_DATE_GET_FOLD(PyObject*);
+PyAPI_FUNC(PyObject*) GraalPyDateTime_DATE_GET_TZINFO(PyObject*);
+
+PyAPI_FUNC(int) GraalPyDateTime_TIME_GET_HOUR(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_TIME_GET_MINUTE(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_TIME_GET_SECOND(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_TIME_GET_MICROSECOND(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_TIME_GET_FOLD(PyObject*);
+PyAPI_FUNC(PyObject*) GraalPyDateTime_TIME_GET_TZINFO(PyObject*);
+
+PyAPI_FUNC(int) GraalPyDateTime_DELTA_GET_DAYS(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_DELTA_GET_SECONDS(PyObject*);
+PyAPI_FUNC(int) GraalPyDateTime_DELTA_GET_MICROSECONDS(PyObject*);
 
 /* Apply for date and datetime instances. */
 
 // o is a pointer to a time or a datetime object.
-#define _PyDateTime_HAS_TZINFO(o)  (PyTruffle_PyDateTime_GET_TZINFO((PyObject*)o) != Py_None)
+#define _PyDateTime_HAS_TZINFO(o)  (GraalPyDateTime_DATE_GET_TZINFO((PyObject*)o) != Py_None)
 
-#define PyDateTime_GET_YEAR(o)     ((int)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "year"))
-#define PyDateTime_GET_MONTH(o)    ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "month"))
-#define PyDateTime_GET_DAY(o)      ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "day"))
+#define PyDateTime_GET_YEAR(o)     (GraalPyDateTime_GET_YEAR((PyObject*)o))
+#define PyDateTime_GET_MONTH(o)    ((unsigned char)GraalPyDateTime_GET_MONTH((PyObject*)o))
+#define PyDateTime_GET_DAY(o)      ((unsigned char)GraalPyDateTime_GET_DAY((PyObject*)o))
 
-#define PyDateTime_DATE_GET_HOUR(o)        ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "hour"))
-#define PyDateTime_DATE_GET_MINUTE(o)      ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "minute"))
-#define PyDateTime_DATE_GET_SECOND(o)      ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "second"))
-#define PyDateTime_DATE_GET_MICROSECOND(o)              ((int)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "microsecond"))
-#define PyDateTime_DATE_GET_FOLD(o)        ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "fold"))
-#define PyDateTime_DATE_GET_TZINFO(o)      (PyTruffle_PyDateTime_GET_TZINFO((PyObject*)o))
+#define PyDateTime_DATE_GET_HOUR(o)        ((unsigned char)GraalPyDateTime_DATE_GET_HOUR((PyObject*)o))
+#define PyDateTime_DATE_GET_MINUTE(o)      ((unsigned char)GraalPyDateTime_DATE_GET_MINUTE((PyObject*)o))
+#define PyDateTime_DATE_GET_SECOND(o)      ((unsigned char)GraalPyDateTime_DATE_GET_SECOND((PyObject*)o))
+#define PyDateTime_DATE_GET_MICROSECOND(o) (GraalPyDateTime_DATE_GET_MICROSECOND((PyObject*)o))
+#define PyDateTime_DATE_GET_FOLD(o)        ((unsigned char)GraalPyDateTime_DATE_GET_FOLD((PyObject*)o))
+#define PyDateTime_DATE_GET_TZINFO(o)      (GraalPyDateTime_DATE_GET_TZINFO((PyObject*)o))
 
 /* Apply for time instances. */
-#define PyDateTime_TIME_GET_HOUR(o)        ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "hour"))
-#define PyDateTime_TIME_GET_MINUTE(o)      ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "minute"))
-#define PyDateTime_TIME_GET_SECOND(o)      ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "second"))
-#define PyDateTime_TIME_GET_MICROSECOND(o)              ((int)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "microsecond"))
-#define PyDateTime_TIME_GET_FOLD(o)        ((unsigned char)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "fold"))
-#define PyDateTime_TIME_GET_TZINFO(o)      (PyTruffle_PyDateTime_GET_TZINFO((PyObject*)o))
+#define PyDateTime_TIME_GET_HOUR(o)        ((unsigned char)GraalPyDateTime_TIME_GET_HOUR((PyObject*)o))
+#define PyDateTime_TIME_GET_MINUTE(o)      ((unsigned char)GraalPyDateTime_TIME_GET_MINUTE((PyObject*)o))
+#define PyDateTime_TIME_GET_SECOND(o)      ((unsigned char)GraalPyDateTime_TIME_GET_SECOND((PyObject*)o))
+#define PyDateTime_TIME_GET_MICROSECOND(o) (GraalPyDateTime_TIME_GET_MICROSECOND((PyObject*)o))
+#define PyDateTime_TIME_GET_FOLD(o)        ((unsigned char)GraalPyDateTime_TIME_GET_FOLD((PyObject*)o))
+#define PyDateTime_TIME_GET_TZINFO(o)      (GraalPyDateTime_TIME_GET_TZINFO((PyObject*)o))
 
 /* Apply for time delta instances */
-#define PyDateTime_DELTA_GET_DAYS(o)         ((int)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "days"))
-#define PyDateTime_DELTA_GET_SECONDS(o)      ((int)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "seconds"))
-#define PyDateTime_DELTA_GET_MICROSECONDS(o)            ((int)PyTruffle_PyDateTime_GET_LONG_FIELD((PyObject*)o, "microseconds"))
+#define PyDateTime_DELTA_GET_DAYS(o)         (GraalPyDateTime_DELTA_GET_DAYS((PyObject*)o))
+#define PyDateTime_DELTA_GET_SECONDS(o)      (GraalPyDateTime_DELTA_GET_SECONDS((PyObject*)o))
+#define PyDateTime_DELTA_GET_MICROSECONDS(o) (GraalPyDateTime_DELTA_GET_MICROSECONDS((PyObject*)o))
 
 
 
@@ -202,60 +222,60 @@ static PyDateTime_CAPI *PyDateTimeAPI = NULL;
 #define PyDateTime_TimeZone_UTC PyDateTimeAPI->TimeZone_UTC
 
 /* Macros for type checking when not building the Python core. */
-#define PyDate_Check(op) PyObject_TypeCheck(op, PyDateTimeAPI->DateType)
-#define PyDate_CheckExact(op) Py_IS_TYPE(op, PyDateTimeAPI->DateType)
+#define PyDate_Check(op) PyObject_TypeCheck((op), PyDateTimeAPI->DateType)
+#define PyDate_CheckExact(op) Py_IS_TYPE((op), PyDateTimeAPI->DateType)
 
-#define PyDateTime_Check(op) PyObject_TypeCheck(op, PyDateTimeAPI->DateTimeType)
-#define PyDateTime_CheckExact(op) Py_IS_TYPE(op, PyDateTimeAPI->DateTimeType)
+#define PyDateTime_Check(op) PyObject_TypeCheck((op), PyDateTimeAPI->DateTimeType)
+#define PyDateTime_CheckExact(op) Py_IS_TYPE((op), PyDateTimeAPI->DateTimeType)
 
-#define PyTime_Check(op) PyObject_TypeCheck(op, PyDateTimeAPI->TimeType)
-#define PyTime_CheckExact(op) Py_IS_TYPE(op, PyDateTimeAPI->TimeType)
+#define PyTime_Check(op) PyObject_TypeCheck((op), PyDateTimeAPI->TimeType)
+#define PyTime_CheckExact(op) Py_IS_TYPE((op), PyDateTimeAPI->TimeType)
 
-#define PyDelta_Check(op) PyObject_TypeCheck(op, PyDateTimeAPI->DeltaType)
-#define PyDelta_CheckExact(op) Py_IS_TYPE(op, PyDateTimeAPI->DeltaType)
+#define PyDelta_Check(op) PyObject_TypeCheck((op), PyDateTimeAPI->DeltaType)
+#define PyDelta_CheckExact(op) Py_IS_TYPE((op), PyDateTimeAPI->DeltaType)
 
-#define PyTZInfo_Check(op) PyObject_TypeCheck(op, PyDateTimeAPI->TZInfoType)
-#define PyTZInfo_CheckExact(op) Py_IS_TYPE(op, PyDateTimeAPI->TZInfoType)
+#define PyTZInfo_Check(op) PyObject_TypeCheck((op), PyDateTimeAPI->TZInfoType)
+#define PyTZInfo_CheckExact(op) Py_IS_TYPE((op), PyDateTimeAPI->TZInfoType)
 
 
 /* Macros for accessing constructors in a simplified fashion. */
 #define PyDate_FromDate(year, month, day) \
-    PyDateTimeAPI->Date_FromDate(year, month, day, PyDateTimeAPI->DateType)
+    PyDateTimeAPI->Date_FromDate((year), (month), (day), PyDateTimeAPI->DateType)
 
 #define PyDateTime_FromDateAndTime(year, month, day, hour, min, sec, usec) \
-    PyDateTimeAPI->DateTime_FromDateAndTime(year, month, day, hour, \
-        min, sec, usec, Py_None, PyDateTimeAPI->DateTimeType)
+    PyDateTimeAPI->DateTime_FromDateAndTime((year), (month), (day), (hour), \
+        (min), (sec), (usec), Py_None, PyDateTimeAPI->DateTimeType)
 
 #define PyDateTime_FromDateAndTimeAndFold(year, month, day, hour, min, sec, usec, fold) \
-    PyDateTimeAPI->DateTime_FromDateAndTimeAndFold(year, month, day, hour, \
-        min, sec, usec, Py_None, fold, PyDateTimeAPI->DateTimeType)
+    PyDateTimeAPI->DateTime_FromDateAndTimeAndFold((year), (month), (day), (hour), \
+        (min), (sec), (usec), Py_None, (fold), PyDateTimeAPI->DateTimeType)
 
 #define PyTime_FromTime(hour, minute, second, usecond) \
-    PyDateTimeAPI->Time_FromTime(hour, minute, second, usecond, \
+    PyDateTimeAPI->Time_FromTime((hour), (minute), (second), (usecond), \
         Py_None, PyDateTimeAPI->TimeType)
 
 #define PyTime_FromTimeAndFold(hour, minute, second, usecond, fold) \
-    PyDateTimeAPI->Time_FromTimeAndFold(hour, minute, second, usecond, \
-        Py_None, fold, PyDateTimeAPI->TimeType)
+    PyDateTimeAPI->Time_FromTimeAndFold((hour), (minute), (second), (usecond), \
+        Py_None, (fold), PyDateTimeAPI->TimeType)
 
 #define PyDelta_FromDSU(days, seconds, useconds) \
-    PyDateTimeAPI->Delta_FromDelta(days, seconds, useconds, 1, \
+    PyDateTimeAPI->Delta_FromDelta((days), (seconds), (useconds), 1, \
         PyDateTimeAPI->DeltaType)
 
 #define PyTimeZone_FromOffset(offset) \
-    PyDateTimeAPI->TimeZone_FromTimeZone(offset, NULL)
+    PyDateTimeAPI->TimeZone_FromTimeZone((offset), NULL)
 
 #define PyTimeZone_FromOffsetAndName(offset, name) \
-    PyDateTimeAPI->TimeZone_FromTimeZone(offset, name)
+    PyDateTimeAPI->TimeZone_FromTimeZone((offset), (name))
 
 /* Macros supporting the DB API. */
 #define PyDateTime_FromTimestamp(args) \
     PyDateTimeAPI->DateTime_FromTimestamp( \
-        (PyObject*) (PyDateTimeAPI->DateTimeType), args, NULL)
+        (PyObject*) (PyDateTimeAPI->DateTimeType), (args), NULL)
 
 #define PyDate_FromTimestamp(args) \
     PyDateTimeAPI->Date_FromTimestamp( \
-        (PyObject*) (PyDateTimeAPI->DateType), args)
+        (PyObject*) (PyDateTimeAPI->DateType), (args))
 
 #endif   /* !defined(_PY_DATETIME_IMPL) */
 

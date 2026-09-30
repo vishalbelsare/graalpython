@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -26,26 +26,30 @@
 package com.oracle.graal.python.builtins.objects.function;
 
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DOC__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___TEXT_SIGNATURE__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_DOT;
 
-import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.BoundBuiltinCallable;
-import com.oracle.graal.python.builtins.Builtin;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.cext.common.CExtContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PExternalFunctionWrapper;
+import com.oracle.graal.python.builtins.objects.cext.capi.PyMethodFlags;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.str.StringUtils;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetNameNode;
-import com.oracle.graal.python.nodes.PRootNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot;
 import com.oracle.graal.python.nodes.function.BuiltinFunctionRootNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
@@ -63,39 +67,45 @@ import com.oracle.truffle.api.strings.TruffleString;
  * <li>{@code method_descriptor} - Used for unbound methods on a type. Example:
  * {@code str.startswith}
  * <li>{@code wrapper_descriptor} - Used for unbound slot methods on a type. Example:
- * {@code str.__str__}
+ * {@code str.__str__}.
  * </ul>
  */
 @ExportLibrary(InteropLibrary.class)
 public final class PBuiltinFunction extends PythonBuiltinObject implements BoundBuiltinCallable<PBuiltinFunction> {
-
     private final PString name;
     private final TruffleString qualname;
     private final Object enclosingType;
-    private final RootCallTarget callTarget;
+    private final RootNode functionRootNode;
     private final Signature signature;
     private final int flags;
-    private BuiltinMethodDescriptor descriptor;
+    private final TpSlot slot;
+    private final PExternalFunctionWrapper slotWrapper;
     @CompilationFinal(dimensions = 1) private final Object[] defaults;
     @CompilationFinal(dimensions = 1) private final PKeyword[] kwDefaults;
 
-    public PBuiltinFunction(PythonBuiltinClassType cls, Shape shape, TruffleString name, Object enclosingType, Object[] defaults, PKeyword[] kwDefaults, int flags, RootCallTarget callTarget) {
+    @CompilationFinal private RootCallTarget callTarget;
+
+    public PBuiltinFunction(PythonBuiltinClassType cls, Shape shape, TruffleString name, Object enclosingType, Object[] defaults, PKeyword[] kwDefaults, int flags, RootNode functionRootNode,
+                    Signature signature,
+                    TpSlot slot, PExternalFunctionWrapper slotWrapper) {
         super(cls, shape);
         this.name = PythonUtils.toPString(name);
         if (enclosingType != null) {
-            this.qualname = StringUtils.cat(GetNameNode.doSlowPath(enclosingType), T_DOT, name);
+            this.qualname = StringUtils.cat(GetNameNode.executeUncached(enclosingType), T_DOT, name);
         } else {
             this.qualname = name;
         }
         this.enclosingType = enclosingType;
-        this.callTarget = callTarget;
-        this.signature = ((PRootNode) callTarget.getRootNode()).getSignature();
+        this.functionRootNode = functionRootNode;
+        this.signature = signature;
         this.flags = flags;
         this.defaults = defaults;
         this.kwDefaults = kwDefaults != null ? kwDefaults : generateKwDefaults(signature);
+        this.slot = slot;
+        this.slotWrapper = slotWrapper;
     }
 
-    private static PKeyword[] generateKwDefaults(Signature signature) {
+    public static PKeyword[] generateKwDefaults(Signature signature) {
         TruffleString[] keywordNames = signature.getKeywordNames();
         PKeyword[] kwDefaults = PKeyword.create(keywordNames.length);
         for (int i = 0; i < keywordNames.length; i++) {
@@ -104,36 +114,41 @@ public final class PBuiltinFunction extends PythonBuiltinObject implements Bound
         return kwDefaults;
     }
 
+    /**
+     * Creates the array for default values. This will reuse {@link PythonUtils#EMPTY_OBJECT_ARRAY}
+     * if {@code numDefaults} is {@code 0}.
+     */
     public static Object[] generateDefaults(int numDefaults) {
+        if (numDefaults == 0) {
+            return PythonUtils.EMPTY_OBJECT_ARRAY;
+        }
         Object[] defaults = new Object[numDefaults];
         Arrays.fill(defaults, PNone.NO_VALUE);
         return defaults;
     }
 
     public RootNode getFunctionRootNode() {
-        return callTarget.getRootNode();
+        return functionRootNode;
+    }
+
+    /**
+     * Wrapped slot value ({@code d_wrapped} in CPython). Valid only if this object represents
+     * {@code wrapper_descriptor}.
+     */
+    public TpSlot getSlot() {
+        return slot;
+    }
+
+    /**
+     * Slot wrapper ({@code d_base#wrapper} in CPython). Valid only if this object represents
+     * {@code wrapper_descriptor}.
+     */
+    public PExternalFunctionWrapper getSlotWrapper() {
+        return slotWrapper;
     }
 
     public NodeFactory<? extends PythonBuiltinBaseNode> getBuiltinNodeFactory() {
-        RootNode functionRootNode = getFunctionRootNode();
-        if (functionRootNode instanceof BuiltinFunctionRootNode) {
-            return ((BuiltinFunctionRootNode) functionRootNode).getFactory();
-        } else {
-            return null;
-        }
-    }
-
-    public boolean isReverseOperationSlot() {
-        return isReverseOperationSlot(callTarget);
-    }
-
-    public static boolean isReverseOperationSlot(RootCallTarget ct) {
-        RootNode functionRootNode = ct.getRootNode();
-        if (functionRootNode instanceof BuiltinFunctionRootNode) {
-            return ((BuiltinFunctionRootNode) functionRootNode).getBuiltin().reverseOperation();
-        } else {
-            return false;
-        }
+        return functionRootNode instanceof BuiltinFunctionRootNode builtinRoot ? builtinRoot.getFactory() : null;
     }
 
     public int getFlags() {
@@ -141,16 +156,11 @@ public final class PBuiltinFunction extends PythonBuiltinObject implements Bound
     }
 
     public boolean isStatic() {
-        return (flags & CExtContext.METH_STATIC) != 0;
+        return (flags & PyMethodFlags.METH_STATIC) != 0;
     }
 
     public boolean needsDeclaringType() {
-        return (flags & CExtContext.METH_METHOD) != 0;
-    }
-
-    @TruffleBoundary
-    public static int getFlags(Builtin builtin, RootCallTarget callTarget) {
-        return getFlags(builtin, ((PRootNode) callTarget.getRootNode()).getSignature());
+        return (flags & PyMethodFlags.METH_METHOD) != 0;
     }
 
     @TruffleBoundary
@@ -160,23 +170,23 @@ public final class PBuiltinFunction extends PythonBuiltinObject implements Bound
         }
         int flags = 0;
         if (builtin.isClassmethod()) {
-            flags |= CExtContext.METH_CLASS;
+            flags |= PyMethodFlags.METH_CLASS;
         }
         if (builtin.isStaticmethod()) {
-            flags |= CExtContext.METH_STATIC;
+            flags |= PyMethodFlags.METH_STATIC;
         }
-        if (!signature.takesKeywordArgs() && !signature.takesVarArgs()) {
+        if (!signature.takesKeywordArgs() && !signature.takesVarArgs() && PythonBuiltins.numDefaults(builtin) == 0) {
             int params = signature.getParameterIds().length;
             if (params == 1) {
                 // only 'self'
-                return flags | CExtContext.METH_NOARGS;
+                return flags | PyMethodFlags.METH_NOARGS;
             } else if (params == 2) {
-                return flags | CExtContext.METH_O;
+                return flags | PyMethodFlags.METH_O;
             }
         }
-        flags |= CExtContext.METH_VARARGS;
+        flags |= PyMethodFlags.METH_VARARGS;
         if (signature.takesKeywordArgs()) {
-            flags |= CExtContext.METH_KEYWORDS;
+            flags |= PyMethodFlags.METH_KEYWORDS;
         }
         return flags;
     }
@@ -190,7 +200,32 @@ public final class PBuiltinFunction extends PythonBuiltinObject implements Bound
     }
 
     public RootCallTarget getCallTarget() {
-        return callTarget;
+        RootCallTarget ct = callTarget;
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.SLOWPATH_PROBABILITY, ct == null)) {
+            if (CompilerDirectives.inCompiledCode() && CompilerDirectives.isPartialEvaluationConstant(this)) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+            }
+            ct = initializeCallTarget();
+        }
+        return ct;
+    }
+
+    @TruffleBoundary
+    private RootCallTarget initializeCallTarget() {
+        RootCallTarget ct = callTarget;
+        if (ct == null) {
+            ct = functionRootNode.getCallTarget();
+            callTarget = ct;
+        }
+        return ct;
+    }
+
+    public boolean declaresExplicitSelf() {
+        return !(functionRootNode instanceof BuiltinFunctionRootNode builtinRoot) || builtinRoot.declaresExplicitSelf();
+    }
+
+    public boolean forceSplitDirectCalls() {
+        return functionRootNode instanceof BuiltinFunctionRootNode builtinRoot && builtinRoot.getBuiltin().forceSplitDirectCalls();
     }
 
     public TruffleString getName() {
@@ -216,12 +251,16 @@ public final class PBuiltinFunction extends PythonBuiltinObject implements Bound
     }
 
     @Override
-    public PBuiltinFunction boundToObject(PythonBuiltinClassType klass, PythonObjectFactory factory) {
+    public PBuiltinFunction boundToObject(PythonBuiltinClassType klass, PythonLanguage language) {
         if (klass == enclosingType) {
             return this;
         } else {
-            PBuiltinFunction func = factory.createBuiltinFunction(this, klass);
+            PBuiltinFunction func = PFactory.createBuiltinFunction(language, this, klass);
             func.setAttribute(T___DOC__, getAttribute(T___DOC__));
+            Object textSignature = getAttribute(T___TEXT_SIGNATURE__);
+            if (textSignature != PNone.NO_VALUE) {
+                func.setAttribute(T___TEXT_SIGNATURE__, textSignature);
+            }
             return func;
         }
     }
@@ -243,24 +282,5 @@ public final class PBuiltinFunction extends PythonBuiltinObject implements Bound
     @ExportMessage
     TruffleString getExecutableName() {
         return getName();
-    }
-
-    public void setDescriptor(BuiltinMethodDescriptor value) {
-        assert value.getName().equals(getName().toJavaStringUncached()) && getBuiltinNodeFactory() == value.getFactory() : getName() + " vs " + value;
-        // Only make sure that info is fully initialized, otherwise it is fine if it is set multiple
-        // times from different threads, all of them should set the same value
-        VarHandle.storeStoreFence();
-        BuiltinMethodDescriptor local = descriptor;
-        assert local == null || local == value : value;
-        this.descriptor = value;
-    }
-
-    /**
-     * The descriptor is set lazily once this builtin function is stored in any special method slot.
-     * I.e., one can assume that any builtin function looked up via special method slots has its
-     * descriptor set.
-     */
-    public BuiltinMethodDescriptor getDescriptor() {
-        return descriptor;
     }
 }

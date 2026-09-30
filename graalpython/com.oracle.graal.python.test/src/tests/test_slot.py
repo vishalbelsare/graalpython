@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -55,6 +55,31 @@ class TestSlots(unittest.TestCase):
             obj.world
         obj.world = "world"
         self.assertEqual(obj.world, "world")
+
+    def test_repeated_uninitialized_slot_read(self):
+        class C:
+            __slots__ = ("attr",)
+
+        def read_attr(obj):
+            return obj.attr
+
+        for _ in range(5):
+            with self.assertRaises(AttributeError):
+                read_attr(C())
+
+    def test_slot_descriptor_wrong_owner(self):
+        class Owner:
+            __slots__ = ("attr",)
+
+        class Other:
+            __slots__ = ("other",)
+            attr = Owner.attr
+
+        instance = Other()
+        instance.other = 42
+        for _ in range(5):
+            with self.assertRaises(TypeError):
+                instance.attr
         
     def test_slots_must_be_identifiers(self):
         class C: __slots__ = ['a', '_1', '_', 'a1']
@@ -145,19 +170,19 @@ class TestSlots(unittest.TestCase):
         
         class A: __slots__ = ["__weakref__"]
         class B: __slots__ = ["__weakref__"]
-        with self.assertRaisesRegex(TypeError, '__weakref__ slot disallowed: either we already got one, or __itemsize__ != 0'):
+        with self.assertRaisesRegex(TypeError, '__weakref__ slot disallowed: we already got one'):
             class C(A, B): __slots__ = ["__weakref__"]
 
         class A: pass
         class B: __slots__ = ["__weakref__"]        
-        with self.assertRaisesRegex(TypeError, '__weakref__ slot disallowed: either we already got one, or __itemsize__ != 0'):
+        with self.assertRaisesRegex(TypeError, '__weakref__ slot disallowed: we already got one'):
             class C(A, B): __slots__ = ["__weakref__"]                
         
         class A: pass
         class B: pass
         with self.assertRaisesRegex(TypeError, '__dict__ slot disallowed: we already got one'):
             class C(A, B): __slots__ = ["__dict__", "__dict__"]
-        with self.assertRaisesRegex(TypeError, '__weakref__ slot disallowed: either we already got one, or __itemsize__ != 0'):
+        with self.assertRaisesRegex(TypeError, '__weakref__ slot disallowed: we already got one'):
             class C(A, B): __slots__ = ["__weakref__", "__weakref__"]
             
     def test_itemsize_and_non_empty_slots(self):
@@ -172,6 +197,18 @@ class TestSlots(unittest.TestCase):
         class C:
             __slots__ = ('a', 'b')
         self.assertRaises(AttributeError, setattr, C(), 'c', 42)
+
+    def test_write_attr_without_dict_after_warmup(self):
+        class C:
+            __slots__ = ()
+
+        obj = C()
+
+        def write_attr():
+            obj.x = 42
+
+        for _ in range(20):
+            self.assertRaises(AttributeError, write_attr)
 
 if __name__ == "__main__":
     unittest.main()

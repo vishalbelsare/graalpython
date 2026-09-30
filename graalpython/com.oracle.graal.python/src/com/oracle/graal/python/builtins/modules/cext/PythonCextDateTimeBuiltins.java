@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -62,11 +62,12 @@ import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTern
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
 import com.oracle.graal.python.builtins.objects.cext.capi.PyDateTimeCAPIWrapper;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
 import com.oracle.graal.python.nodes.argument.keywords.ExpandKeywordStarargsNode;
 import com.oracle.graal.python.nodes.argument.positional.ExecutePositionalStarargsNode;
-import com.oracle.graal.python.nodes.call.special.CallVarargsMethodNode;
+import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -78,60 +79,60 @@ import com.oracle.truffle.api.nodes.Node;
 public final class PythonCextDateTimeBuiltins {
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {Int, Int, Int, PyTypeObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_Date_FromDate extends CApiQuaternaryBuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_Date_FromDate extends CApiQuaternaryBuiltinNode {
         @Specialization
         static Object values(int year, int month, int day, Object type,
-                        @Cached CallVarargsMethodNode call) {
-            return call.execute(null, type, new Object[]{year, month, day}, PKeyword.EMPTY_KEYWORDS);
+                        @Cached CallNode call) {
+            return call.execute(null, type, year, month, day);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {Int, Int, Int, Int, Int, Int, Int, PyObject, PyTypeObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_DateTime_FromDateAndTime extends CApi9BuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_DateTime_FromDateAndTime extends CApi9BuiltinNode {
         @Specialization
         static Object values(int year, int month, int day, int hour, int minute, int second, int usecond, Object tzinfo, Object type,
-                        @Cached CallVarargsMethodNode call) {
-            return call.execute(null, type, new Object[]{year, month, day, hour, minute, second, usecond, tzinfo}, PKeyword.EMPTY_KEYWORDS);
+                        @Cached CallNode call) {
+            return call.execute(null, type, year, month, day, hour, minute, second, usecond, tzinfo);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {Int, Int, Int, Int, PyObject, PyTypeObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_Time_FromTime extends CApi6BuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_Time_FromTime extends CApi6BuiltinNode {
         @Specialization
         static Object values(int hour, int minute, int second, int usecond, Object tzinfo, Object type,
-                        @Cached CallVarargsMethodNode call) {
-            return call.execute(null, type, new Object[]{hour, minute, second, usecond, tzinfo}, PKeyword.EMPTY_KEYWORDS);
+                        @Cached CallNode call) {
+            return call.execute(null, type, hour, minute, second, usecond, tzinfo);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {Int, Int, Int, Int, PyTypeObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_Delta_FromDelta extends CApi5BuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_Delta_FromDelta extends CApi5BuiltinNode {
         @Specialization
         static Object values(int days, int seconds, int useconds, @SuppressWarnings("unused") int normalize, Object type,
-                        @Cached CallVarargsMethodNode call) {
+                        @Cached CallNode call) {
             // TODO: "normalize" is ignored for the time being
-            return call.execute(null, type, new Object[]{days, seconds, useconds}, PKeyword.EMPTY_KEYWORDS);
+            return call.execute(null, type, days, seconds, useconds);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_TimeZone_FromTimeZone extends CApiBinaryBuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_TimeZone_FromTimeZone extends CApiBinaryBuiltinNode {
         @Specialization
         Object values(Object offset, Object name,
-                        @Cached CallVarargsMethodNode call) {
-            return call.execute(null, getCApiContext().timezoneType, new Object[]{offset, name}, PKeyword.EMPTY_KEYWORDS);
+                        @Cached CallNode call) {
+            return call.execute(null, getCApiContext().timezoneType, offset, name);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject, PyObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_DateTime_FromTimestamp extends CApiTernaryBuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_DateTime_FromTimestamp extends CApiTernaryBuiltinNode {
         @Specialization
         static Object values(Object type, Object args, Object kwargs,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ExecutePositionalStarargsNode starArgsNode,
                         @Cached ExpandKeywordStarargsNode kwArgsNode,
                         @Cached PyObjectLookupAttr lookupNode,
-                        @Cached CallVarargsMethodNode call) {
+                        @Cached CallNode call) {
             Object[] callArgs = starArgsNode.executeWith(null, args);
             PKeyword[] kwds = kwArgsNode.execute(inliningTarget, kwargs);
             Object fromTSCallable = lookupNode.execute(null, inliningTarget, type, T_FROMTIMESTAMP);
@@ -140,44 +141,230 @@ public final class PythonCextDateTimeBuiltins {
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_Date_FromTimestamp extends CApiBinaryBuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_Date_FromTimestamp extends CApiBinaryBuiltinNode {
         @Specialization
         static Object values(Object type, Object args,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ExecutePositionalStarargsNode starArgsNode,
                         @Cached PyObjectLookupAttr lookupNode,
-                        @Cached CallVarargsMethodNode call) {
+                        @Cached CallNode call) {
             Object[] callArgs = starArgsNode.executeWith(null, args);
             Object fromTSCallable = lookupNode.execute(null, inliningTarget, type, T_FROMTIMESTAMP);
-            return call.execute(null, fromTSCallable, callArgs, PKeyword.EMPTY_KEYWORDS);
+            return call.execute(null, fromTSCallable, callArgs);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {Int, Int, Int, Int, Int, Int, Int, PyObject, Int, PyTypeObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_DateTime_FromDateAndTimeAndFold extends CApi10BuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_DateTime_FromDateAndTimeAndFold extends CApi10BuiltinNode {
         @Specialization
         static Object values(int year, int month, int day, int hour, int minute, int second, int usecond, Object tzinfo, int fold, Object type,
-                        @Cached CallVarargsMethodNode call) {
+                        @Cached CallNode call) {
             return call.execute(null, type, new Object[]{year, month, day, hour, minute, second, usecond, tzinfo}, new PKeyword[]{new PKeyword(T_FOLD, fold)});
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {Int, Int, Int, Int, PyObject, Int, PyTypeObject}, call = Ignored)
-    abstract static class PyTruffleDateTimeCAPI_Time_FromTimeAndFold extends CApi7BuiltinNode {
+    abstract static class GraalPyPrivate_DateTimeCAPI_Time_FromTimeAndFold extends CApi7BuiltinNode {
         @Specialization
         static Object values(int hour, int minute, int second, int usecond, Object tzinfo, int fold, Object type,
-                        @Cached CallVarargsMethodNode call) {
+                        @Cached CallNode call) {
             return call.execute(null, type, new Object[]{hour, minute, second, usecond, tzinfo}, new PKeyword[]{new PKeyword(T_FOLD, fold)});
         }
     }
 
-    @CApiBuiltin(ret = PyObjectBorrowed, args = {PyObject}, call = Direct)
-    abstract static class PyTruffle_PyDateTime_GET_TZINFO extends CApiUnaryBuiltinNode {
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_GET_YEAR extends CApiUnaryBuiltinNode {
         @Specialization
         static Object get(Object obj,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_YEAR));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_GET_MONTH extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_MONTH));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_GET_DAY extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_DAY));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DATE_GET_HOUR extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_HOUR));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DATE_GET_MINUTE extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_MINUTE));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DATE_GET_SECOND extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_SECOND));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DATE_GET_MICROSECOND extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_MICROSECOND));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DATE_GET_FOLD extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_FOLD));
+        }
+    }
+
+    @CApiBuiltin(ret = PyObjectBorrowed, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DATE_GET_TZINFO extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetAttr getAttr) {
             return getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_TZINFO);
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_TIME_GET_HOUR extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_HOUR));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_TIME_GET_MINUTE extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_MINUTE));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_TIME_GET_SECOND extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_SECOND));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_TIME_GET_MICROSECOND extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_MICROSECOND));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_TIME_GET_FOLD extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_FOLD));
+        }
+    }
+
+    @CApiBuiltin(ret = PyObjectBorrowed, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_TIME_GET_TZINFO extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr) {
+            return getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_TZINFO);
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DELTA_GET_DAYS extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_DAYS));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DELTA_GET_SECONDS extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_SECONDS));
+        }
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyObject}, call = Direct)
+    abstract static class GraalPyDateTime_DELTA_GET_MICROSECONDS extends CApiUnaryBuiltinNode {
+        @Specialization
+        static Object get(Object obj,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetAttr getAttr,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            return asSizeNode.executeExact(null, inliningTarget, getAttr.execute(inliningTarget, obj, PyDateTimeCAPIWrapper.T_MICROSECONDS));
         }
     }
 }

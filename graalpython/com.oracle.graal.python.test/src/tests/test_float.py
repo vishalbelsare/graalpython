@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -51,12 +51,34 @@ toHex = float.hex
 
 class BasicTests(unittest.TestCase):
 
+    def test_is_integer(self):
+        assert not (3.14).is_integer()
+        assert not (-3.14).is_integer()
+        assert (3.0).is_integer()
+        assert (-3.0).is_integer()
+        assert (0.0).is_integer()
+        assert (-0.0).is_integer()
+        assert (-6.642122310788808 * 10**250).is_integer()
+        assert not (2**52 - 1 + 0.5).is_integer()
+        # for doubles this big, all representable values are integers...
+        assert (2**52 + 0.5).is_integer()
+
+    def test_pow_overflow(self):
+        self.assertRaises(OverflowError, pow, 10.0, 400)
+        self.assertRaises(OverflowError, pow, 10.0, 400.0)
+        self.assertRaises(OverflowError, pow, -1e308, 3.0)
+        self.assertEqual(pow(INF, 2.0), INF)
+        self.assertEqual(pow(2.0, INF), INF)
+
     def test_rounding(self):
         assert round(1.123, 0) == 1
         assert round(1.123, 1) == 1.1
         assert round(1.123, 2) == 1.12
         assert round(1.123, 3) == 1.123
         assert round(1.123, 100) == 1.123
+        assert round(1e23) == 99999999999999991611392
+        assert round(-1e23) == -99999999999999991611392
+        assert round(8.98846567431158e307) == 2**1023
         import sys
         if sys.version_info.minor >= 6:
             assert 1.123.__round__(None) == 1
@@ -85,8 +107,8 @@ class BasicTests(unittest.TestCase):
             pass
         else:
             assert False, "rounding with a float should have raised"
-            
-        class F: 
+
+        class F:
             pass
 
         setattr(F, "__round__", round)
@@ -96,8 +118,8 @@ class BasicTests(unittest.TestCase):
             pass
         else:
             assert False, "rounding with a non-float should have raised"
-            
-        class F(float): 
+
+        class F(float):
             pass
 
         setattr(F, "__round__", round)
@@ -107,7 +129,7 @@ class BasicTests(unittest.TestCase):
             pass
         else:
             assert False, "rounding with only 1 arg should have raised"
-        
+
         round(F(4.2), 1)
 
         def r(o):
@@ -135,6 +157,23 @@ class BasicTests(unittest.TestCase):
         assert round(C(), 1) == 1
         a = object()
         assert round(C(), a) == a
+
+    def test_round_missing_special_method(self):
+        class MissingRound:
+            def __getattr__(self, name):
+                if name == "__round__":
+                    return lambda *args: 42
+                raise AttributeError(name)
+
+        with self.assertRaisesRegex(TypeError, "__round__"):
+            round(MissingRound())
+
+    def test_round_returns_notimplemented(self):
+        class NotImplementedRound:
+            def __round__(self, *args):
+                return NotImplemented
+
+        assert round(NotImplementedRound()) is NotImplemented
 
     def test_create(self):
         class Obj:
@@ -281,6 +320,9 @@ class BasicTests(unittest.TestCase):
             self.assertFalse(num < ninf)
             self.assertFalse(num <= ninf)
 
+    def test_too_large_exponent(self):
+        self.assertEqual(float(9.6652344473471409e+13020482957104346813665225475455405808065502685256002111130525326263065544707062128277904331411231482727389186536355106830667631510992459549990606158658919), float('inf'))
+
 
 fromHex = float.fromhex
 
@@ -388,7 +430,7 @@ class HexFloatTests(unittest.TestCase):
             '\n \t',
             '\f',
             # TODO fix in our implementation
-            #'\v', 
+            #'\v',
             '\r'
             ]
         for inp, expected in value_pairs:
@@ -732,8 +774,8 @@ class HexFloatTests(unittest.TestCase):
         class F(float):
             def _new_(cls, value):
                 return float._new_(cls, value + 1)
-        
-            @classmethod 
+
+            @classmethod
             def fromhex(cls, value1, value2):
                 return super(F, cls).fromhex(value1 + value2)
 
@@ -745,7 +787,7 @@ class MyFloat(float):
     pass
 
 class RealImagConjugateTests(unittest.TestCase):
-    
+
     def test_real_imag(self):
         def builtinTest(number):
             a = float(number)
@@ -849,12 +891,12 @@ class FormatTests(unittest.TestCase):
         # empty presentation type should format in the same way as str
         # (issue 5920)
         x = 100/7.
-        
+
         self.assertEqual(format(x, ''), str(x))
         self.assertEqual(format(x, '-'), str(x))
         self.assertEqual(format(x, '>'), str(x))
         self.assertEqual(format(x, '2'), str(x))
-        
+
         self.assertEqual(format(1.0, 'f'), '1.000000')
 
         self.assertEqual(format(-1.0, 'f'), '-1.000000')
@@ -863,7 +905,7 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(format(-1.0, ' f'), '-1.000000')
         self.assertEqual(format( 1.0, '+f'), '+1.000000')
         self.assertEqual(format(-1.0, '+f'), '-1.000000')
-        
+
         # % formatting
         self.assertEqual(format(-1.0, '%'), '-100.000000%')
 
@@ -874,8 +916,8 @@ class FormatTests(unittest.TestCase):
         #  in particular int specifiers
         for format_spec in ([chr(x) for x in range(ord('a'), ord('z')+1)] +
                             [chr(x) for x in range(ord('A'), ord('Z')+1)]):
-            
-            if not format_spec in 'eEfFgGn%rN':
+
+            if not format_spec in 'eEfFgGn%rNz':
                 self.assertRaises(ValueError, format, 0.0, format_spec)
                 self.assertRaises(ValueError, format, 1.0, format_spec)
                 self.assertRaises(ValueError, format, -1.0, format_spec)
@@ -889,7 +931,38 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(format(NAN, 'F'), 'NAN')
         self.assertEqual(format(INF, 'f'), 'inf')
         self.assertEqual(format(INF, 'F'), 'INF')
-    
+        self.assertEqual(format(INF, '07,f'), '0000inf')
+        self.assertEqual(format(NAN, '07,f'), '0000nan')
+        self.assertEqual(format(-INF, '07_f'), '-000inf')
+
+    def test_negative_zero_format(self):
+        self.assertEqual(format(0.0, 'zf'), '0.000000')
+        self.assertEqual(format(-0.0, 'z.1f'), '0.0')
+        self.assertEqual(format(-0.01, 'z.1f'), '0.0')
+        self.assertEqual(format(-0.09, 'z.1f'), '-0.1')
+        self.assertEqual(format(-0.001, 'z.2e'), '-1.00e-03')
+        self.assertEqual(format(-0.001, 'z.2g'), '-0.001')
+        self.assertEqual(format(-0.001, 'z.2%'), '-0.10%')
+
+        self.assertEqual(format(-0.0, ' z.0f'), ' 0')
+        self.assertEqual(format(-0.0, '+z.0f'), '+0')
+        self.assertEqual(format(-0.0, '-z.0f'), '0')
+        self.assertEqual(format(-0.0, 'z>6.1f'), 'zz-0.0')
+        self.assertEqual(format(-0.0, 'z>z6.1f'), 'zzz0.0')
+
+        self.assertEqual(format(-0, 'z.1f'), '0.0')
+        self.assertEqual(format(complex(0.0, -0.01), 'z.1f'), '0.0+0.0j')
+        self.assertEqual(format(complex(-0.0, -0.0), 'z'), '(0+0j)')
+
+        with self.assertRaisesRegex(ValueError, 'Negative zero coercion'):
+            format(0, 'zd')
+        with self.assertRaisesRegex(ValueError, 'Negative zero coercion'):
+            format('x', 'zs')
+        with self.assertRaises(ValueError):
+            format(0.0, 'z+f')
+        with self.assertRaises(ValueError):
+            format(0.0, 'fz')
+
     def test_format_testfile(self):
         with open(format_testfile) as testfile:
             for line in testfile:

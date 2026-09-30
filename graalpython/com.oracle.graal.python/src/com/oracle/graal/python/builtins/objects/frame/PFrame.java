@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,31 +42,39 @@ package com.oracle.graal.python.builtins.objects.frame;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.code.CodeNodes.GetCodeRootNode;
 import com.oracle.graal.python.builtins.objects.code.PCode;
-import com.oracle.graal.python.builtins.objects.frame.FrameBuiltins.GetLocalsNode;
+import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.nodes.frame.GetFrameLocalsNode;
-import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
-import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.graal.python.nodes.frame.ReadFrameNode;
+import com.oracle.graal.python.runtime.CallerFlags;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
-import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.bytecode.BytecodeFrame;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.nodes.RootNode;
 
 public final class PFrame extends PythonBuiltinObject {
-    private Object[] arguments;
-    private final MaterializedFrame locals;
-    private Object localsDict;
+    private static final int UNINITIALIZED_LINE = -2;
+
+    private boolean materializedFrame;
+    private BytecodeFrame bytecodeFrame;
+
+    private final Object customLocals;
+    private PythonObject globals;
     private final Reference virtualFrameInfo;
-    private Node location;
-    private RootCallTarget callTarget;
-    private int line = -2;
-    private int lasti = -1;
+    private final Thread thread;
+    private BytecodeNode bytecodeNode;
+    private PFunction function;
+    private PCode code;
+    private int line = UNINITIALIZED_LINE;
+    private int bci = -1;
 
     /*
      * when emitting trace events, the line number will not be correct by default, so it has be
@@ -74,11 +82,22 @@ public final class PFrame extends PythonBuiltinObject {
      */
     private boolean lockLine = false;
 
+    // -3 for jumps not allowed, -2 for no jump, otherwise the line to jump to - only should be set
+    // in a trace function.
+    public static final int DISALLOW_JUMPS = -3;
+    public static final int NO_JUMP = -2;
+    private int jumpDestLine = DISALLOW_JUMPS;
     private Object localTraceFun = null;
+    private PDict extraLocals;
+    private PDict evalLocalsCache;
 
     private boolean traceLine = true;
 
-    private PFrame.Reference backref = null;
+    /**
+     * The last {@link CallerFlags} that were used the last time the frame was synced or passed down
+     * to a callee. See {@link #needsRefresh(VirtualFrame, int)} for more details.
+     */
+    private int lastCallerFlags;
 
     public Object getLocalTraceFun() {
         return localTraceFun;
@@ -96,31 +115,66 @@ public final class PFrame extends PythonBuiltinObject {
         this.traceLine = traceLine;
     }
 
+    public boolean isTraceArgument() {
+        return jumpDestLine != DISALLOW_JUMPS;
+    }
+
+    public int getJumpDestLine() {
+        return jumpDestLine;
+    }
+
+    public void setJumpDestLine(int jumpDestLine) {
+        this.jumpDestLine = jumpDestLine;
+    }
+
+    public PDict getExtraLocals() {
+        return extraLocals;
+    }
+
+    public void setExtraLocals(PDict extraLocals) {
+        this.extraLocals = extraLocals;
+    }
+
+    /**
+     * A frame-owned dictionary used to provide the borrowed-reference semantics of
+     * {@code PyEval_GetLocals} for optimized frames.
+     */
+    public PDict getEvalLocalsCache() {
+        return evalLocalsCache;
+    }
+
+    public void setEvalLocalsCache(PDict evalLocalsCache) {
+        this.evalLocalsCache = evalLocalsCache;
+    }
+
     // TODO: frames: this is a large object, think about how to make this
     // smaller
     public static final class Reference {
-        public static final Reference EMPTY = new Reference(null);
+        public static final Reference EMPTY = new Reference(null, null);
 
         // The Python-level frame
         private PFrame pyFrame = null;
 
-        // The location of the last call
-        private Node callNode = null;
+        private final RootNode rootNode;
 
         // A flag whether this frame is escaped. A Truffle frame is escaped if the corresponding
         // PFrame may be used without having the Truffle frame on the stack. This flag is also set
         // by a callee frame to inform the caller that it should materialize itself when it returns.
         private boolean escaped = false;
 
-        private final Reference callerInfo;
+        private Reference callerInfo;
 
-        public Reference(Reference callerInfo) {
+        public Reference(RootNode rootNode, Reference callerInfo) {
+            this.rootNode = rootNode;
             this.callerInfo = callerInfo;
         }
 
-        public void setBackref(PFrame.Reference backref) {
-            assert pyFrame != null : "setBackref should only be called when the PFrame escaped";
-            pyFrame.setBackref(backref);
+        public RootNode getRootNode() {
+            return rootNode;
+        }
+
+        public void setCallerInfo(Reference callerInfo) {
+            this.callerInfo = callerInfo;
         }
 
         public void markAsEscaped() {
@@ -140,76 +194,118 @@ public final class PFrame extends PythonBuiltinObject {
             this.pyFrame = escapedFrame;
         }
 
-        public Node getCallNode() {
-            return callNode;
-        }
-
-        public void setCallNode(Node callNode) {
-            this.callNode = callNode;
-        }
-
         public Reference getCallerInfo() {
             return callerInfo;
         }
     }
 
-    public PFrame(PythonLanguage lang, Reference virtualFrameInfo, Node location, MaterializedFrame locals) {
+    public PFrame(PythonLanguage lang, Reference virtualFrameInfo, BytecodeNode bytecodeNode, Object functionOrCode, Object customLocals) {
         super(PythonBuiltinClassType.PFrame, PythonBuiltinClassType.PFrame.getInstanceShape(lang));
         this.virtualFrameInfo = virtualFrameInfo;
-        this.locals = locals;
-        this.location = location;
+        this.bytecodeNode = bytecodeNode;
+        if (functionOrCode instanceof PFunction function) {
+            this.function = function;
+        } else if (functionOrCode instanceof PCode code) {
+            this.code = code;
+        }
+        this.customLocals = customLocals;
+        // Mark everything as current for now. MaterializeFrameNode will set lastCallerFlags to a
+        // narrower value if needed
+        this.lastCallerFlags = CallerFlags.ALL_FRAME_FLAGS;
+        this.thread = Thread.currentThread();
     }
 
-    public PFrame(PythonLanguage lang, @SuppressWarnings("unused") Object threadState, PCode code, PythonObject globals, Object localsDict) {
+    public PFrame(PythonLanguage lang, @SuppressWarnings("unused") long threadState, PCode code, PythonObject globals, Object customLocals) {
         super(PythonBuiltinClassType.PFrame, PythonBuiltinClassType.PFrame.getInstanceShape(lang));
         // TODO: frames: extract the information from the threadState object
-        Object[] frameArgs = PArguments.create();
-        PArguments.setGlobals(frameArgs, globals);
-        PArguments.setSpecialArgument(frameArgs, localsDict);
-        Reference curFrameInfo = new Reference(null);
+        this.globals = globals;
+        this.code = code;
+        Reference curFrameInfo = new Reference(code.getRootNode(), Reference.EMPTY);
         this.virtualFrameInfo = curFrameInfo;
         curFrameInfo.setPyFrame(this);
-        this.location = GetCodeRootNode.executeUncached(code);
-        this.line = this.location == null ? code.getFirstLineNo() : -2;
-        this.arguments = frameArgs;
-        this.locals = null;
-        this.localsDict = localsDict;
+        this.line = code.getFirstLineNo();
+        this.customLocals = customLocals;
+        // This is a synthetic frame, there will be no sync, mark everything as current
+        this.lastCallerFlags = CallerFlags.ALL_FRAME_FLAGS;
+        this.thread = null;
     }
 
     /**
-     * Get the locals synced by {@link MaterializeFrameNode}. May be null when using custom locals.
-     * In most cases, you should use {@link GetFrameLocalsNode}.
+     * Get the bytecode frame with locals backing this frame. May be copied from the real frame or it might be materialized,
+     * depending on how the PFrame was synced. May be null when using custom locals or when a
+     * safepoint could not recover the executing BytecodeNode. In most
+     * cases, you should use {@link GetFrameLocalsNode} to get a copy of the locals instead of this method.
      */
-    public MaterializedFrame getLocals() {
-        return locals;
+    public BytecodeFrame getBytecodeFrame() {
+        return bytecodeFrame;
+    }
+
+    public void setBytecodeFrame(BytecodeFrame bytecodeFrame, boolean materialized) {
+        this.bytecodeFrame = bytecodeFrame;
+        this.materializedFrame = materialized;
+    }
+
+    /**
+     * PFrame is created once for each real frame, but some information in it, like locals and
+     * lasti+lineno can get out of sync when the frame is still executing. The PFrame is normally
+     * updated by the caller when the callee requests it. But the PFrame might sometimes be passed
+     * down before the callee has set the flags to request the update and thus the callee might see
+     * stale info. This method can tell that this happened and an explicit update via
+     * {@link ReadFrameNode#refreshFrame(VirtualFrame, Reference, int)} is needed.
+     *
+     * @param frame The current frame. If the current executing frame is this PFrame, then sync is
+     *            always needed.
+     * @param callerFlags Specifies which fields should be checked for needing sync. It should be
+     *            flags from {@link CallerFlags}.
+     */
+    public boolean needsRefresh(VirtualFrame frame, int callerFlags) {
+        if (outdatedCallerFlags(callerFlags)) {
+            return true;
+        }
+        if ((CallerFlags.needsLocals(callerFlags) && syncsLocals()) || CallerFlags.needsLasti(callerFlags)) {
+            if (frame != null && PArguments.getCurrentFrameInfo(frame) == getRef()) {
+                return true;
+            }
+            // Frames from other threads need to go through slow path
+            return thread != null && thread != Thread.currentThread();
+        }
+        return false;
+    }
+
+    public boolean outdatedCallerFlags(int callerFlags) {
+        if (CallerFlags.needsLocals(callerFlags) && !syncsLocals()) {
+            callerFlags &= ~(CallerFlags.NEEDS_LOCALS | CallerFlags.NEEDS_MATERIALIZED_LOCALS);
+        }
+        return (callerFlags & lastCallerFlags) != callerFlags;
+    }
+
+    public void setLastCallerFlags(int lastCallerFlags) {
+        this.lastCallerFlags = lastCallerFlags;
     }
 
     /**
      * Use {@link GetFrameLocalsNode} instead of accessing this directly.
      */
-    public Object getLocalsDict() {
-        return localsDict;
+    public Object getCustomLocals() {
+        return customLocals;
     }
 
-    public boolean hasCustomLocals() {
-        return locals == null;
+    public boolean hasMaterializedFrame() {
+        return materializedFrame;
     }
 
-    public void setLocalsDict(Object dict) {
-        localsDict = dict;
+    public boolean syncsLocals() {
+        // An unavailable safepoint location cannot provide locals. A later materialization with
+        // a valid BytecodeNode restores synchronization.
+        return customLocals == null && !materializedFrame && bytecodeNode != null;
     }
 
     public PFrame.Reference getRef() {
         return virtualFrameInfo;
     }
 
-    public PFrame.Reference getBackref() {
-        return backref;
-    }
-
-    public void setBackref(PFrame.Reference backref) {
-        assert this.backref == null || this.backref == backref : "setBackref tried to set a backref different to the one that was previously attached";
-        this.backref = backref;
+    public Thread getThread() {
+        return thread;
     }
 
     public void setLine(int line) {
@@ -217,6 +313,13 @@ public final class PFrame extends PythonBuiltinObject {
             return;
         }
         this.line = line;
+    }
+
+    public void resetLine() {
+        if (lockLine) {
+            return;
+        }
+        this.line = UNINITIALIZED_LINE;
     }
 
     public void setLineLock(int line) {
@@ -228,75 +331,76 @@ public final class PFrame extends PythonBuiltinObject {
         this.lockLine = false;
     }
 
+    public boolean didJump() {
+        return jumpDestLine > NO_JUMP;
+    }
+
     @TruffleBoundary
     public int getLine() {
-        if (line == -2) {
-            if (location == null) {
+        if (line == UNINITIALIZED_LINE) {
+            if (bytecodeNode == null) {
                 line = -1;
-            } else if (location instanceof PBytecodeRootNode) {
-                return ((PBytecodeRootNode) location).bciToLine(lasti);
             } else {
-                SourceSection sourceSection = location.getEncapsulatingSourceSection();
-                if (sourceSection == null) {
-                    return -1;
-                } else {
-                    // The location can change, so we shouldn't cache the value
-                    return sourceSection.getStartLine();
-                }
+                PBytecodeDSLRootNode rootNode = (PBytecodeDSLRootNode) bytecodeNode.getRootNode();
+                return rootNode.bciToLine(getBci(), bytecodeNode);
             }
         }
         return line;
     }
 
     /**
-     * Prefer to use the
-     * {@link com.oracle.graal.python.builtins.objects.frame.FrameBuiltins.GetGlobalsNode}.<br/>
-     * <br/>
-     *
-     * Returns a dictionary with the locals, possibly creating it from the frame. Note that the
-     * dictionary may have been modified and should then be updated with the current frame locals.
-     * To that end, use the {@link GetLocalsNode} instead of calling this method directly.
+     * Get the frame globals. Might be a dictionary or a PythonModule.
      */
     public PythonObject getGlobals() {
-        return PArguments.getGlobals(arguments);
+        return globals;
     }
 
     public RootCallTarget getTarget() {
-        if (callTarget == null) {
-            if (location != null) {
-                callTarget = PythonUtils.getOrCreateCallTarget(location.getRootNode());
-            } else if (getRef() != null && getRef().getCallNode() != null) {
-                callTarget = PythonUtils.getOrCreateCallTarget(getRef().getCallNode().getRootNode());
-            }
+        return getCode().getRootCallTarget();
+    }
+
+    public PFunction getFunction() {
+        return function;
+    }
+
+    public PCode getCode() {
+        if (code == null && function != null) {
+            code = function.getCode();
         }
-        return callTarget;
+        return code;
     }
 
-    public Object[] getArguments() {
-        return arguments;
+    public void setGlobals(PythonObject globals) {
+        this.globals = globals;
     }
 
-    public void setArguments(Object[] arguments2) {
-        this.arguments = arguments2;
+    public void setBytecodeNode(BytecodeNode bytecodeNode) {
+        this.bytecodeNode = bytecodeNode;
     }
 
-    public void setLocation(Node location) {
-        this.location = location;
+    public BytecodeNode getBytecodeNode() {
+        return bytecodeNode;
     }
 
-    public Node getLocation() {
-        return location;
+    public int getBci() {
+        return bci;
     }
 
-    /**
-     * Last bytecode instruction. Since we don't have bytecode this is -1 by default, but can be set
-     * to a different value to distinguish started generators from unstarted
-     */
+    public void setBci(int bci) {
+        this.lastCallerFlags |= CallerFlags.NEEDS_LASTI;
+        this.bci = bci;
+    }
+
     public int getLasti() {
-        return lasti;
+        assert CallerFlags.needsLasti(lastCallerFlags) : "Missing frame location sync";
+        return bciToLasti(bci, bytecodeNode);
     }
 
-    public void setLasti(int lasti) {
-        this.lasti = lasti;
+    @TruffleBoundary
+    public static int bciToLasti(int bci, Node location) {
+        if (bci >= 0 && location instanceof BytecodeNode bytecodeNode) {
+            return PBytecodeDSLRootNode.bciToLasti(bci, bytecodeNode);
+        }
+        return -1;
     }
 }

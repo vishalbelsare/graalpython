@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,16 +42,12 @@ package com.oracle.graal.python.nodes.object;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
-import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.truffle.PythonTypes;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -59,8 +55,6 @@ import com.oracle.truffle.api.strings.TruffleString;
  * Checks whether the object is a foreign object, i.e. is neither a python primitive value, nor a
  * python object.
  */
-@TypeSystemReference(PythonTypes.class)
-@ImportStatic({PGuards.class})
 @GenerateUncached
 @GenerateInline
 @GenerateCached(false)
@@ -68,8 +62,17 @@ public abstract class IsForeignObjectNode extends PNodeWithContext {
 
     public abstract boolean execute(Node inliningTarget, Object object);
 
+    // This is useful as a guard and much better than the inlined node in terms of host inlining
+    // code size.
+    // The generated uncached node doesn't work as a guard because of @TruffleBoundary.
     public static boolean executeUncached(Object object) {
-        return IsForeignObjectNodeGen.getUncached().execute(null, object);
+        return !(object instanceof Boolean ||
+                        object instanceof Integer ||
+                        object instanceof Long ||
+                        object instanceof Double ||
+                        object instanceof TruffleString ||
+                        object instanceof PythonAbstractObject ||
+                        object instanceof PythonBuiltinClassType);
     }
 
     @Specialization

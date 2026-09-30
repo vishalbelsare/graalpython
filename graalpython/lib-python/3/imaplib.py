@@ -52,6 +52,9 @@ AllowedVersions = ('IMAP4REV1', 'IMAP4')        # Most recent first
 # search command can be quite large, so we now use 1M.
 _MAXLINE = 1000000
 
+# Data larger than this will be read in chunks, to prevent extreme
+# overallocation.
+_SAFE_BUF_SIZE = 1 << 20
 
 #       Commands
 
@@ -145,7 +148,7 @@ class IMAP4:
                       the global default socket timeout is used
 
     All IMAP4rev1 commands are supported by methods of the same
-    name (in lower-case).
+    name (in lowercase).
 
     All arguments to commands are converted to strings, except for
     AUTHENTICATE, and the last argument to APPEND which is passed as
@@ -315,7 +318,13 @@ class IMAP4:
 
     def read(self, size):
         """Read 'size' bytes from remote."""
-        return self.file.read(size)
+        cursize = min(size, _SAFE_BUF_SIZE)
+        data = self.file.read(cursize)
+        while cursize < size and len(data) == cursize:
+            delta = min(cursize, size - cursize)
+            data += self.file.read(delta)
+            cursize += delta
+        return data
 
 
     def readline(self):
@@ -411,8 +420,6 @@ class IMAP4:
         else:
             date_time = None
         literal = MapCRLF.sub(CRLF, message)
-        if self.utf8_enabled:
-            literal = b'UTF8 (' + literal + b')'
         self.literal = literal
         return self._simple_command(name, mailbox, flags, date_time)
 
@@ -609,7 +616,7 @@ class IMAP4:
         """
         typ, dat = self._simple_command('LOGIN', user, self._quote(password))
         if typ != 'OK':
-            raise self.error(dat[-1])
+            raise self.error(dat[-1].decode('UTF-8', 'replace'))
         self.state = 'AUTH'
         return typ, dat
 
@@ -626,9 +633,17 @@ class IMAP4:
     def _CRAM_MD5_AUTH(self, challenge):
         """ Authobject to use with CRAM-MD5 authentication. """
         import hmac
-        pwd = (self.password.encode('utf-8') if isinstance(self.password, str)
-                                             else self.password)
-        return self.user + " " + hmac.HMAC(pwd, challenge, 'md5').hexdigest()
+
+        if isinstance(self.password, str):
+            password = self.password.encode('utf-8')
+        else:
+            password = self.password
+
+        try:
+            authcode = hmac.HMAC(password, challenge, 'md5')
+        except ValueError:  # HMAC-MD5 is not available
+            raise self.error("CRAM-MD5 authentication is not supported")
+        return f"{self.user} {authcode.hexdigest()}"
 
 
     def logout(self):
@@ -994,7 +1009,11 @@ class IMAP4:
                 literator = literal
             else:
                 literator = None
-                data = data + bytes(' {%s}' % len(literal), self._encoding)
+                if self.utf8_enabled:
+                    data = data + bytes(' UTF8 (~{%s}' % len(literal), self._encoding)
+                    literal = literal + b')'
+                else:
+                    data = data + bytes(' {%s}' % len(literal), self._encoding)
 
         if __debug__:
             if self.debug >= 4:
@@ -1285,16 +1304,12 @@ if HAVE_SSL:
 
         """IMAP4 client class over SSL connection
 
-        Instantiate with: IMAP4_SSL([host[, port[, keyfile[, certfile[, ssl_context[, timeout=None]]]]]])
+        Instantiate with: IMAP4_SSL([host[, port[, ssl_context[, timeout=None]]]])
 
                 host - host's name (default: localhost);
                 port - port number (default: standard IMAP4 SSL port);
-                keyfile - PEM formatted file that contains your private key (default: None);
-                certfile - PEM formatted certificate chain file (default: None);
                 ssl_context - a SSLContext object that contains your certificate chain
                               and private key (default: None)
-                Note: if ssl_context is provided, then parameters keyfile or
-                certfile should not be set otherwise ValueError is raised.
                 timeout - socket timeout (default: None) If timeout is not given or is None,
                           the global default socket timeout is used
 
@@ -1302,23 +1317,10 @@ if HAVE_SSL:
         """
 
 
-        def __init__(self, host='', port=IMAP4_SSL_PORT, keyfile=None,
-                     certfile=None, ssl_context=None, timeout=None):
-            if ssl_context is not None and keyfile is not None:
-                raise ValueError("ssl_context and keyfile arguments are mutually "
-                                 "exclusive")
-            if ssl_context is not None and certfile is not None:
-                raise ValueError("ssl_context and certfile arguments are mutually "
-                                 "exclusive")
-            if keyfile is not None or certfile is not None:
-                import warnings
-                warnings.warn("keyfile and certfile are deprecated, use a "
-                              "custom ssl_context instead", DeprecationWarning, 2)
-            self.keyfile = keyfile
-            self.certfile = certfile
+        def __init__(self, host='', port=IMAP4_SSL_PORT,
+                     *, ssl_context=None, timeout=None):
             if ssl_context is None:
-                ssl_context = ssl._create_stdlib_context(certfile=certfile,
-                                                         keyfile=keyfile)
+                ssl_context = ssl._create_stdlib_context()
             self.ssl_context = ssl_context
             IMAP4.__init__(self, host, port, timeout)
 

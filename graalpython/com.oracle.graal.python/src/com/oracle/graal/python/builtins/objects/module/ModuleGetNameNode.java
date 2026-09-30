@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,7 +44,7 @@ import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.SpecialAttributeNames;
-import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromModuleNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.truffle.api.dsl.Cached;
@@ -65,17 +65,21 @@ public abstract class ModuleGetNameNode extends Node {
 
     public abstract TruffleString execute(Node inliningTarget, Object module);
 
+    public static TruffleString executeUncached(Object module) {
+        return ModuleGetNameNodeGen.getUncached().execute(null, module);
+    }
+
     @Specialization
     static TruffleString doPythonModule(Node inliningTarget, PythonModule module,
-                    @Cached(inline = false) ReadAttributeFromObjectNode readNameNode,
+                    @Cached ReadAttributeFromModuleNode readNameNode,
                     @Cached CastToTruffleStringNode castToTruffleStringNode,
-                    @Cached PRaiseNode.Lazy raiseNode) {
+                    @Cached PRaiseNode raiseNode) {
 
         try {
             Object name = readNameNode.execute(module, SpecialAttributeNames.T___NAME__);
             return castToTruffleStringNode.execute(inliningTarget, name);
         } catch (CannotCastException e) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.SystemError, ErrorMessages.NAMELESS_MODULE);
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.SystemError, ErrorMessages.NAMELESS_MODULE);
         }
     }
 }

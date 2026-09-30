@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,34 +40,39 @@
  */
 package com.oracle.graal.python.builtins.modules.functools;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.FutureWarning;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.nodes.ErrorMessages.INVALID_PARTIAL_STATE;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_ARG_MUST_BE_CALLABLE;
 import static com.oracle.graal.python.nodes.ErrorMessages.TYPE_S_TAKES_AT_LEAST_ONE_ARGUMENT;
+import static com.oracle.graal.python.nodes.ErrorMessages.WARN_PARTIAL_WILL_BE_METHOD_DESCRIPTOR;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DICT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CALL__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___MODULE__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___QUALNAME__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEW__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_COMMA_SPACE;
+import static com.oracle.graal.python.nodes.StringLiterals.T_DOT;
 import static com.oracle.graal.python.nodes.StringLiterals.T_ELLIPSIS;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EQ;
 import static com.oracle.graal.python.nodes.StringLiterals.T_LPAREN;
 import static com.oracle.graal.python.nodes.StringLiterals.T_RPAREN;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageAddAllToOther;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageAddKeywords;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageCopy;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetItem;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
@@ -79,21 +84,25 @@ import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
-import com.oracle.graal.python.builtins.objects.object.ObjectNodes;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.DescrGetBuiltinNode;
 import com.oracle.graal.python.lib.PyCallableCheckNode;
+import com.oracle.graal.python.lib.PyDictCheckNode;
 import com.oracle.graal.python.lib.PyDictCheckExactNode;
+import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
 import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
 import com.oracle.graal.python.lib.PyTupleCheckExactNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.argument.keywords.ExpandKeywordStarargsNode;
 import com.oracle.graal.python.nodes.builtins.TupleNodes;
-import com.oracle.graal.python.nodes.call.special.CallVarargsMethodNode;
+import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
@@ -104,8 +113,9 @@ import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
 import com.oracle.graal.python.nodes.object.SetDictNode;
+import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -122,6 +132,7 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
 import com.oracle.truffle.api.strings.TruffleStringBuilder.AppendStringNode;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PPartial)
 public final class PartialBuiltins extends PythonBuiltins {
@@ -142,16 +153,29 @@ public final class PartialBuiltins extends PythonBuiltins {
         return newArgs;
     }
 
+    public static final TpSlots SLOTS = PartialBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return PartialBuiltinsFactory.getFactories();
     }
 
+    @Slot(value = SlotKind.tp_descr_get, isComplex = true)
+    @GenerateNodeFactory
+    abstract static class PartialDescrGetNode extends DescrGetBuiltinNode {
+        @Specialization
+        static Object get(VirtualFrame frame, PPartial self, Object obj, @SuppressWarnings("unused") Object type,
+                        @Cached WarningsModuleBuiltins.WarnNode warnNode) {
+            if (!(obj instanceof PNone)) {
+                warnNode.warnEx(frame, FutureWarning, WARN_PARTIAL_WILL_BE_METHOD_DESCRIPTOR, 1);
+            }
+            return self;
+        }
+    }
+
     // functools.partial(func, /, *args, **keywords)
-    @Builtin(name = J___NEW__, minNumOfPositionalArgs = 1, varArgsMarker = true, takesVarArgs = true, //
-                    takesVarKeywordArgs = true, constructsClass = PythonBuiltinClassType.PPartial, //
-                    doc = "partial(func, *args, **keywords) - new function with partial application\n" + //
-                                    "of the given arguments and keywords.\n")
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "partial", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     public abstract static class PartialNewNode extends PythonBuiltinNode {
         protected boolean isPartialWithoutDict(Node inliningTarget, GetDictIfExistsNode getDict, Object[] args, HashingStorageLen lenNode, boolean withKwDict) {
@@ -172,89 +196,92 @@ public final class PartialBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"atLeastOneArg(args)", "isPartialWithoutDict(inliningTarget, getDict, args, lenNode, false)"}, limit = "1")
         static Object createFromPartialWoDictWoKw(Object cls, Object[] args, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached GetDictIfExistsNode getDict,
                         @Exclusive @Cached InlinedConditionProfile hasArgsProfile,
                         @Exclusive @Cached InlinedConditionProfile hasKeywordsProfile,
                         @Exclusive @SuppressWarnings("unused") @Cached HashingStorageLen lenNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
             assert args[0] instanceof PPartial;
             final PPartial function = (PPartial) args[0];
             Object[] funcArgs = getNewPartialArgs(function, args, inliningTarget, hasArgsProfile, 1);
 
             PDict funcKwDict;
             if (hasKeywordsProfile.profile(inliningTarget, keywords.length > 0)) {
-                funcKwDict = factory.createDict(keywords);
+                funcKwDict = PFactory.createDict(language, keywords);
             } else {
-                funcKwDict = factory.createDict();
+                funcKwDict = PFactory.createDict(language);
             }
 
-            return factory.createPartial(cls, function.getFn(), funcArgs, funcKwDict);
+            return PFactory.createPartial(cls, getInstanceShape.execute(cls), function.getFn(), funcArgs, funcKwDict);
         }
 
         @Specialization(guards = {"atLeastOneArg(args)", "isPartialWithoutDict(inliningTarget, getDict, args, lenNode, true)", "!withKeywords(keywords)"}, limit = "1")
         static Object createFromPartialWoDictWKw(Object cls, Object[] args, @SuppressWarnings("unused") PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached GetDictIfExistsNode getDict,
                         @Exclusive @Cached InlinedConditionProfile hasArgsProfile,
                         @Exclusive @SuppressWarnings("unused") @Cached HashingStorageLen lenNode,
                         @Exclusive @Cached HashingStorageCopy copyNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
             assert args[0] instanceof PPartial;
             final PPartial function = (PPartial) args[0];
             Object[] funcArgs = getNewPartialArgs(function, args, inliningTarget, hasArgsProfile, 1);
-            return factory.createPartial(cls, function.getFn(), funcArgs, function.getKwCopy(inliningTarget, factory, copyNode));
+            return PFactory.createPartial(cls, getInstanceShape.execute(cls), function.getFn(), funcArgs, function.getKwCopy(inliningTarget, language, copyNode));
         }
 
         @Specialization(guards = {"atLeastOneArg(args)", "isPartialWithoutDict(inliningTarget, getDict, args, lenNode, true)", "withKeywords(keywords)"}, limit = "1")
         static Object createFromPartialWoDictWKwKw(VirtualFrame frame, Object cls, Object[] args, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached GetDictIfExistsNode getDict,
                         @Exclusive @Cached InlinedConditionProfile hasArgsProfile,
-                        @Exclusive @Cached HashingStorage.InitNode initNode,
                         @Exclusive @SuppressWarnings("unused") @Cached HashingStorageLen lenNode,
                         @Exclusive @Cached HashingStorageCopy copyHashingStorageNode,
-                        @Cached HashingStorageAddAllToOther addAllToOtherNode,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Cached HashingStorageAddKeywords addKeywordsNode,
+                        @Bind PythonLanguage language,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
             assert args[0] instanceof PPartial;
             final PPartial function = (PPartial) args[0];
             Object[] funcArgs = getNewPartialArgs(function, args, inliningTarget, hasArgsProfile, 1);
 
             HashingStorage storage = copyHashingStorageNode.execute(inliningTarget, function.getKw().getDictStorage());
-            PDict result = factory.createDict(storage);
-            addAllToOtherNode.execute(frame, inliningTarget, initNode.execute(frame, PNone.NO_VALUE, keywords), result);
+            PDict result = PFactory.createDict(language, storage);
+            addKeywordsNode.execute(frame, inliningTarget, keywords, result);
 
-            return factory.createPartial(cls, function.getFn(), funcArgs, result);
+            return PFactory.createPartial(cls, getInstanceShape.execute(cls), function.getFn(), funcArgs, result);
         }
 
         @Specialization(guards = {"atLeastOneArg(args)", "!isPartialWithoutDict(getDict, args)"}, limit = "1")
         static Object createGeneric(Object cls, Object[] args, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @SuppressWarnings("unused") @Exclusive @Cached GetDictIfExistsNode getDict,
                         @Exclusive @Cached InlinedConditionProfile hasKeywordsProfile,
                         @Cached PyCallableCheckNode callableCheckNode,
-                        @Shared @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind PythonLanguage language,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
             Object function = args[0];
             if (!callableCheckNode.execute(inliningTarget, function)) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_ARG_MUST_BE_CALLABLE, "the first");
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_ARG_MUST_BE_CALLABLE, "the first");
             }
 
             final Object[] funcArgs = PythonUtils.arrayCopyOfRange(args, 1, args.length);
             PDict funcKwDict;
             if (hasKeywordsProfile.profile(inliningTarget, keywords.length > 0)) {
-                funcKwDict = factory.createDict(keywords);
+                funcKwDict = PFactory.createDict(language, keywords);
             } else {
-                funcKwDict = factory.createDict();
+                funcKwDict = PFactory.createDict(language);
             }
-            return factory.createPartial(cls, function, funcArgs, funcKwDict);
+            return PFactory.createPartial(cls, getInstanceShape.execute(cls), function, funcArgs, funcKwDict);
         }
 
         @Specialization(guards = "!atLeastOneArg(args)")
         @SuppressWarnings("unused")
         static Object noCallable(Object cls, Object[] args, PKeyword[] keywords,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.TypeError, TYPE_S_TAKES_AT_LEAST_ONE_ARGUMENT, "partial");
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, TYPE_S_TAKES_AT_LEAST_ONE_ARGUMENT, "partial");
         }
     }
 
@@ -272,8 +299,8 @@ public final class PartialBuiltins extends PythonBuiltins {
     public abstract static class PartialArgsNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object doGet(PPartial self,
-                        @Cached PythonObjectFactory factory) {
-            return self.getArgsTuple(factory);
+                        @Bind PythonLanguage language) {
+            return self.getArgsTuple(language);
         }
     }
 
@@ -283,14 +310,14 @@ public final class PartialBuiltins extends PythonBuiltins {
     public abstract static class PartialDictNode extends PythonBinaryBuiltinNode {
         @Specialization(guards = "isNoValue(mapping)")
         static Object getDict(PPartial self, @SuppressWarnings("unused") PNone mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetOrCreateDictNode getDict) {
             return getDict.execute(inliningTarget, self);
         }
 
         @Specialization
         static Object setDict(PPartial self, PDict mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached SetDictNode setDict) {
             setDict.execute(inliningTarget, self, mapping);
             return PNone.NONE;
@@ -298,8 +325,8 @@ public final class PartialBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!isNoValue(mapping)", "!isDict(mapping)"})
         static Object setDict(@SuppressWarnings("unused") PPartial self, Object mapping,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
         }
     }
 
@@ -308,8 +335,8 @@ public final class PartialBuiltins extends PythonBuiltins {
     public abstract static class PartialKeywordsNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object doGet(PPartial self,
-                        @Cached PythonObjectFactory factory) {
-            return self.getOrCreateKw(factory);
+                        @Bind PythonLanguage language) {
+            return self.getOrCreateKw(language);
         }
     }
 
@@ -318,11 +345,11 @@ public final class PartialBuiltins extends PythonBuiltins {
     public abstract static class PartialReduceNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object reduce(PPartial self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached GetDictIfExistsNode getDictIfExistsNode,
                         @Cached GetOrCreateDictNode getOrCreateDictNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             final PDict dict;
             if (self.getShape().getPropertyCount() > 0) {
                 dict = getOrCreateDictNode.execute(inliningTarget, self);
@@ -330,9 +357,9 @@ public final class PartialBuiltins extends PythonBuiltins {
                 dict = getDictIfExistsNode.execute(self);
             }
             final Object type = getClassNode.execute(inliningTarget, self);
-            final PTuple fnTuple = factory.createTuple(new Object[]{self.getFn()});
-            final PTuple argsTuple = factory.createTuple(new Object[]{self.getFn(), self.getArgsTuple(factory), self.getKw(), (dict != null) ? dict : PNone.NONE});
-            return factory.createTuple(new Object[]{type, fnTuple, argsTuple});
+            final PTuple fnTuple = PFactory.createTuple(language, new Object[]{self.getFn()});
+            final PTuple argsTuple = PFactory.createTuple(language, new Object[]{self.getFn(), self.getArgsTuple(language), self.getKw(), (dict != null) ? dict : PNone.NONE});
+            return PFactory.createTuple(language, new Object[]{type, fnTuple, argsTuple});
         }
     }
 
@@ -341,52 +368,54 @@ public final class PartialBuiltins extends PythonBuiltins {
     public abstract static class PartialSetStateNode extends PythonBinaryBuiltinNode {
 
         @Specialization
-        @SuppressWarnings("truffle-static-method")
-        static Object setState(VirtualFrame frame, PPartial self, PTuple state,
-                        @Bind("this") Node inliningTarget,
+        static Object setState(VirtualFrame frame, PPartial self, Object state,
+                        @Bind Node inliningTarget,
                         @Cached SetDictNode setDictNode,
                         @Cached DeleteDictNode deleteDictNode,
                         @Cached SequenceNodes.GetSequenceStorageNode storageNode,
                         @Cached SequenceStorageNodes.ToArrayNode arrayNode,
                         @Cached PyCallableCheckNode callableCheckNode,
+                        @Cached PyTupleCheckNode tupleCheckNode,
                         @Cached PyTupleCheckExactNode tupleCheckExactNode,
+                        @Cached PyDictCheckNode dictCheckNode,
                         @Cached PyDictCheckExactNode dictCheckExactNode,
-                        @Cached TupleBuiltins.GetItemNode getItemNode,
+                        @Cached PyTupleGetItem getItemNode,
                         @Cached TupleNodes.ConstructTupleNode constructTupleNode,
-                        @Cached HashingCollectionNodes.GetHashingStorageNode getHashingStorageNode,
+                        @Cached TupleNodes.GetTupleStorage getTupleStorage,
                         @Cached HashingStorageCopy copyStorageNode,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            if (state.getSequenceStorage().length() != 4) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, INVALID_PARTIAL_STATE);
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
+            if (!tupleCheckNode.execute(inliningTarget, state) || getTupleStorage.execute(inliningTarget, state).length() != 4) {
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, INVALID_PARTIAL_STATE);
             }
 
-            final Object function = getItemNode.execute(frame, state, 0);
-            final Object fnArgs = getItemNode.execute(frame, state, 1);
-            final Object fnKwargs = getItemNode.execute(frame, state, 2);
-            final Object dict = getItemNode.execute(frame, state, 3);
+            final Object function = getItemNode.execute(inliningTarget, state, 0);
+            final Object fnArgs = getItemNode.execute(inliningTarget, state, 1);
+            final Object fnKwargs = getItemNode.execute(inliningTarget, state, 2);
+            final Object dict = getItemNode.execute(inliningTarget, state, 3);
 
             if (!callableCheckNode.execute(inliningTarget, function) ||
-                            !PGuards.isPTuple(fnArgs) ||
-                            (fnKwargs != PNone.NONE && !PGuards.isDict(fnKwargs))) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, INVALID_PARTIAL_STATE);
+                            !tupleCheckNode.execute(inliningTarget, fnArgs) ||
+                            (fnKwargs != PNone.NONE && !PGuards.isDict(fnKwargs)) ||
+                            (dict != PNone.NONE && !dictCheckNode.execute(inliningTarget, dict))) {
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, INVALID_PARTIAL_STATE);
             }
 
             self.setFn(function);
 
             final PTuple fnArgsTuple;
-            if (!tupleCheckExactNode.execute(inliningTarget, fnArgs)) {
-                fnArgsTuple = constructTupleNode.execute(frame, fnArgs);
-            } else {
+            if (fnArgs instanceof PTuple && tupleCheckExactNode.execute(inliningTarget, fnArgs)) {
                 fnArgsTuple = (PTuple) fnArgs;
+            } else {
+                fnArgsTuple = constructTupleNode.execute(frame, fnArgs);
             }
             self.setArgs(inliningTarget, fnArgsTuple, storageNode, arrayNode);
 
             final PDict fnKwargsDict;
             if (fnKwargs == PNone.NONE) {
-                fnKwargsDict = factory.createDict();
+                fnKwargsDict = PFactory.createDict(language);
             } else if (!dictCheckExactNode.execute(inliningTarget, fnKwargs)) {
-                fnKwargsDict = factory.createDict(copyStorageNode.execute(inliningTarget, getHashingStorageNode.execute(frame, inliningTarget, fnKwargs)));
+                fnKwargsDict = PFactory.createDict(language, copyStorageNode.execute(inliningTarget, ((PDict) fnKwargs).getDictStorage()));
             } else {
                 fnKwargsDict = (PDict) fnKwargs;
             }
@@ -405,12 +434,13 @@ public final class PartialBuiltins extends PythonBuiltins {
         @Fallback
         @SuppressWarnings("unused")
         static Object fallback(Object self, Object state,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.TypeError, INVALID_PARTIAL_STATE);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, INVALID_PARTIAL_STATE);
         }
     }
 
-    @Builtin(name = J___CALL__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_call, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     protected abstract static class PartialCallNode extends PythonVarargsBuiltinNode {
         private static int indexOf(PKeyword[] keywords, PKeyword kw) {
@@ -428,9 +458,9 @@ public final class PartialBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "!self.hasKw(inliningTarget, lenNode)")
         static Object callWoDict(VirtualFrame frame, PPartial self, Object[] args, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile hasArgsProfile,
-                        @Shared @Cached CallVarargsMethodNode callNode,
+                        @Shared @Cached CallNode callNode,
                         @SuppressWarnings("unused") @Shared @Cached HashingStorageLen lenNode) {
             Object[] callArgs = getNewPartialArgs(self, args, inliningTarget, hasArgsProfile);
             return callNode.execute(frame, self.getFn(), callArgs, keywords);
@@ -438,10 +468,10 @@ public final class PartialBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.hasKw(inliningTarget, lenNode)", "!withKeywords(keywords)"})
         static Object callWDictWoKw(VirtualFrame frame, PPartial self, Object[] args, @SuppressWarnings("unused") PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached ExpandKeywordStarargsNode starargsNode,
                         @Shared @Cached InlinedConditionProfile hasArgsProfile,
-                        @Shared @Cached CallVarargsMethodNode callNode,
+                        @Shared @Cached CallNode callNode,
                         @SuppressWarnings("unused") @Shared @Cached HashingStorageLen lenNode) {
             Object[] callArgs = getNewPartialArgs(self, args, inliningTarget, hasArgsProfile);
             return callNode.execute(frame, self.getFn(), callArgs, starargsNode.execute(inliningTarget, self.getKw()));
@@ -449,10 +479,10 @@ public final class PartialBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"self.hasKw(inliningTarget, lenNode)", "withKeywords(keywords)"})
         static Object callWDictWKw(VirtualFrame frame, PPartial self, Object[] args, PKeyword[] keywords,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached ExpandKeywordStarargsNode starargsNode,
                         @Shared @Cached InlinedConditionProfile hasArgsProfile,
-                        @Shared @Cached CallVarargsMethodNode callNode,
+                        @Shared @Cached CallNode callNode,
                         @SuppressWarnings("unused") @Shared @Cached HashingStorageLen lenNode) {
             Object[] callArgs = getNewPartialArgs(self, args, inliningTarget, hasArgsProfile);
 
@@ -476,10 +506,10 @@ public final class PartialBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class PartialReprNode extends PythonUnaryBuiltinNode {
-        private static void reprArgs(VirtualFrame frame, Node inliningTarget, PPartial partial, TruffleStringBuilder sb, PyObjectReprAsTruffleStringNode reprNode,
+        private static void reprArgs(VirtualFrame frame, Node inliningTarget, PPartial partial, TruffleStringBuilderUTF32 sb, PyObjectReprAsTruffleStringNode reprNode,
                         TruffleStringBuilder.AppendStringNode appendStringNode) {
             for (Object arg : partial.getArgs()) {
                 appendStringNode.execute(sb, T_COMMA_SPACE);
@@ -487,7 +517,7 @@ public final class PartialBuiltins extends PythonBuiltins {
             }
         }
 
-        private static void reprKwArgs(VirtualFrame frame, Node inliningTarget, PPartial partial, TruffleStringBuilder sb, PyObjectReprAsTruffleStringNode reprNode,
+        private static void reprKwArgs(VirtualFrame frame, Node inliningTarget, PPartial partial, TruffleStringBuilderUTF32 sb, PyObjectReprAsTruffleStringNode reprNode,
                         PyObjectStrAsTruffleStringNode strNode, HashingStorageGetIterator getHashingStorageIterator, HashingStorageIteratorNext hashingStorageIteratorNext,
                         HashingStorageIteratorKey hashingStorageIteratorKey, HashingStorageGetItem getItem, AppendStringNode appendStringNode) {
             final PDict kwDict = partial.getKw();
@@ -507,26 +537,33 @@ public final class PartialBuiltins extends PythonBuiltins {
 
         @Specialization
         public static TruffleString repr(VirtualFrame frame, PPartial partial,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectStrAsTruffleStringNode strNode,
                         @Cached PyObjectReprAsTruffleStringNode reprNode,
-                        @Cached GetClassNode classNode,
-                        @Cached TypeNodes.GetNameNode nameNode,
-                        @Cached ObjectNodes.GetFullyQualifiedClassNameNode classNameNode,
+                        @Cached GetClassNode getClassNode,
+                        @Cached PyObjectGetAttr getAttrNode,
+                        @Cached CastToTruffleStringNode castToStringNode,
                         @Cached HashingStorageGetIterator getHashingStorageIterator,
                         @Cached HashingStorageIteratorNext hashingStorageIteratorNext,
                         @Cached HashingStorageIteratorKey hashingStorageIteratorKey,
                         @Cached HashingStorageGetItem getItem,
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode) {
-            final Object cls = classNode.execute(inliningTarget, partial);
-            final TruffleString name = (cls == PythonBuiltinClassType.PPartial) ? classNameNode.execute(frame, inliningTarget, partial) : nameNode.execute(inliningTarget, cls);
-            PythonContext ctxt = PythonContext.get(classNameNode);
+            // CPython's partial_repr combines PyType_GetModuleName and PyType_GetQualName.
+            Object type = getClassNode.execute(inliningTarget, partial);
+            TruffleString module = castToStringNode.execute(inliningTarget, getAttrNode.execute(frame, inliningTarget, type, T___MODULE__));
+            TruffleString qualName = castToStringNode.execute(inliningTarget, getAttrNode.execute(frame, inliningTarget, type, T___QUALNAME__));
+            TruffleStringBuilderUTF32 nameBuilder = TruffleStringBuilder.createUTF32();
+            appendStringNode.execute(nameBuilder, module);
+            appendStringNode.execute(nameBuilder, T_DOT);
+            appendStringNode.execute(nameBuilder, qualName);
+            final TruffleString name = toStringNode.execute(nameBuilder);
+            PythonContext ctxt = PythonContext.get(inliningTarget);
             if (!ctxt.reprEnter(partial)) {
                 return T_ELLIPSIS;
             }
             try {
-                TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+                TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
                 appendStringNode.execute(sb, name);
                 appendStringNode.execute(sb, T_LPAREN);
                 appendStringNode.execute(sb, reprNode.execute(frame, inliningTarget, partial.getFn()));
@@ -547,8 +584,8 @@ public final class PartialBuiltins extends PythonBuiltins {
     public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object classGetItem(Object cls, Object key,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createGenericAlias(cls, key);
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2021, 2022, Oracle and/or its affiliates.
+/* Copyright (c) 2021, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2021 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -6,6 +6,60 @@
 /*[clinic input]
 preserve
 [clinic start generated code]*/
+
+#if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+#  include "pycore_gc.h"          // PyGC_Head
+#  include "pycore_runtime.h"     // _Py_SINGLETON()
+#endif
+#include "pycore_long.h"          // _PyLong_UnsignedLongLong_Converter()
+#include "pycore_modsupport.h"    // _PyArg_UnpackKeywords()
+
+PyDoc_STRVAR(pyexpat_xmlparser_SetReparseDeferralEnabled__doc__,
+"SetReparseDeferralEnabled($self, enabled, /)\n"
+"--\n"
+"\n"
+"Enable/Disable reparse deferral; enabled by default with Expat >=2.6.0.");
+
+#define PYEXPAT_XMLPARSER_SETREPARSEDEFERRALENABLED_METHODDEF    \
+    {"SetReparseDeferralEnabled", (PyCFunction)pyexpat_xmlparser_SetReparseDeferralEnabled, METH_O, pyexpat_xmlparser_SetReparseDeferralEnabled__doc__},
+
+static PyObject *
+pyexpat_xmlparser_SetReparseDeferralEnabled_impl(xmlparseobject *self,
+                                                 int enabled);
+
+static PyObject *
+pyexpat_xmlparser_SetReparseDeferralEnabled(xmlparseobject *self, PyObject *arg)
+{
+    PyObject *return_value = NULL;
+    int enabled;
+
+    enabled = PyObject_IsTrue(arg);
+    if (enabled < 0) {
+        goto exit;
+    }
+    return_value = pyexpat_xmlparser_SetReparseDeferralEnabled_impl(self, enabled);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(pyexpat_xmlparser_GetReparseDeferralEnabled__doc__,
+"GetReparseDeferralEnabled($self, /)\n"
+"--\n"
+"\n"
+"Retrieve reparse deferral enabled status; always returns false with Expat <2.6.0.");
+
+#define PYEXPAT_XMLPARSER_GETREPARSEDEFERRALENABLED_METHODDEF    \
+    {"GetReparseDeferralEnabled", (PyCFunction)pyexpat_xmlparser_GetReparseDeferralEnabled, METH_NOARGS, pyexpat_xmlparser_GetReparseDeferralEnabled__doc__},
+
+static PyObject *
+pyexpat_xmlparser_GetReparseDeferralEnabled_impl(xmlparseobject *self);
+
+static PyObject *
+pyexpat_xmlparser_GetReparseDeferralEnabled(xmlparseobject *self, PyObject *Py_UNUSED(ignored))
+{
+    return pyexpat_xmlparser_GetReparseDeferralEnabled_impl(self);
+}
 
 PyDoc_STRVAR(pyexpat_xmlparser_Parse__doc__,
 "Parse($self, data, isfinal=False, /)\n"
@@ -16,7 +70,7 @@ PyDoc_STRVAR(pyexpat_xmlparser_Parse__doc__,
 "`isfinal\' should be true at end of input.");
 
 #define PYEXPAT_XMLPARSER_PARSE_METHODDEF    \
-    {"Parse", (PyCFunction)(void(*)(void))pyexpat_xmlparser_Parse, METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_Parse__doc__},
+    {"Parse", _PyCFunction_CAST(pyexpat_xmlparser_Parse), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_Parse__doc__},
 
 static PyObject *
 pyexpat_xmlparser_Parse_impl(xmlparseobject *self, PyTypeObject *cls,
@@ -26,8 +80,19 @@ static PyObject *
 pyexpat_xmlparser_Parse(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
 {
     PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
     static const char * const _keywords[] = {"", "", NULL};
-    static _PyArg_Parser _parser = {NULL, _keywords, "Parse", 0};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "Parse",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
     PyObject *argsbuf[2];
     PyObject *data;
     int isfinal = 0;
@@ -40,8 +105,8 @@ pyexpat_xmlparser_Parse(xmlparseobject *self, PyTypeObject *cls, PyObject *const
     if (nargs < 2) {
         goto skip_optional_posonly;
     }
-    isfinal = _PyLong_AsInt(args[1]);
-    if (isfinal == -1 && PyErr_Occurred()) {
+    isfinal = PyObject_IsTrue(args[1]);
+    if (isfinal < 0) {
         goto exit;
     }
 skip_optional_posonly:
@@ -58,7 +123,7 @@ PyDoc_STRVAR(pyexpat_xmlparser_ParseFile__doc__,
 "Parse XML data from file-like object.");
 
 #define PYEXPAT_XMLPARSER_PARSEFILE_METHODDEF    \
-    {"ParseFile", (PyCFunction)(void(*)(void))pyexpat_xmlparser_ParseFile, METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_ParseFile__doc__},
+    {"ParseFile", _PyCFunction_CAST(pyexpat_xmlparser_ParseFile), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_ParseFile__doc__},
 
 static PyObject *
 pyexpat_xmlparser_ParseFile_impl(xmlparseobject *self, PyTypeObject *cls,
@@ -68,8 +133,19 @@ static PyObject *
 pyexpat_xmlparser_ParseFile(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
 {
     PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
     static const char * const _keywords[] = {"", NULL};
-    static _PyArg_Parser _parser = {NULL, _keywords, "ParseFile", 0};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "ParseFile",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
     PyObject *argsbuf[1];
     PyObject *file;
 
@@ -145,8 +221,9 @@ PyDoc_STRVAR(pyexpat_xmlparser_GetInputContext__doc__,
 "\n"
 "Return the untranslated text of the input that caused the current event.\n"
 "\n"
-"If the event was generated by a large amount of text (such as a start tag\n"
-"for an element with many attributes), not all of the text may be available.");
+"If the event was generated by a large amount of text (such as\n"
+"a start tag for an element with many attributes), not all of the\n"
+"text may be available.");
 
 #define PYEXPAT_XMLPARSER_GETINPUTCONTEXT_METHODDEF    \
     {"GetInputContext", (PyCFunction)pyexpat_xmlparser_GetInputContext, METH_NOARGS, pyexpat_xmlparser_GetInputContext__doc__},
@@ -168,7 +245,7 @@ PyDoc_STRVAR(pyexpat_xmlparser_ExternalEntityParserCreate__doc__,
 "Create a parser for parsing an external entity based on the information passed to the ExternalEntityRefHandler.");
 
 #define PYEXPAT_XMLPARSER_EXTERNALENTITYPARSERCREATE_METHODDEF    \
-    {"ExternalEntityParserCreate", (PyCFunction)(void(*)(void))pyexpat_xmlparser_ExternalEntityParserCreate, METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_ExternalEntityParserCreate__doc__},
+    {"ExternalEntityParserCreate", _PyCFunction_CAST(pyexpat_xmlparser_ExternalEntityParserCreate), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_ExternalEntityParserCreate__doc__},
 
 static PyObject *
 pyexpat_xmlparser_ExternalEntityParserCreate_impl(xmlparseobject *self,
@@ -180,8 +257,19 @@ static PyObject *
 pyexpat_xmlparser_ExternalEntityParserCreate(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
 {
     PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
     static const char * const _keywords[] = {"", "", NULL};
-    static _PyArg_Parser _parser = {NULL, _keywords, "ExternalEntityParserCreate", 0};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "ExternalEntityParserCreate",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
     PyObject *argsbuf[2];
     const char *context;
     const char *encoding = NULL;
@@ -254,7 +342,7 @@ pyexpat_xmlparser_SetParamEntityParsing(xmlparseobject *self, PyObject *arg)
     PyObject *return_value = NULL;
     int flag;
 
-    flag = _PyLong_AsInt(arg);
+    flag = PyLong_AsInt(arg);
     if (flag == -1 && PyErr_Occurred()) {
         goto exit;
     }
@@ -272,12 +360,13 @@ PyDoc_STRVAR(pyexpat_xmlparser_UseForeignDTD__doc__,
 "\n"
 "Allows the application to provide an artificial external subset if one is not specified as part of the document instance.\n"
 "\n"
-"This readily allows the use of a \'default\' document type controlled by the\n"
-"application, while still getting the advantage of providing document type\n"
-"information to the parser. \'flag\' defaults to True if not provided.");
+"This readily allows the use of a \'default\' document type controlled\n"
+"by the application, while still getting the advantage of providing\n"
+"document type information to the parser.  \'flag\' defaults to True if\n"
+"not provided.");
 
 #define PYEXPAT_XMLPARSER_USEFOREIGNDTD_METHODDEF    \
-    {"UseForeignDTD", (PyCFunction)(void(*)(void))pyexpat_xmlparser_UseForeignDTD, METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_UseForeignDTD__doc__},
+    {"UseForeignDTD", _PyCFunction_CAST(pyexpat_xmlparser_UseForeignDTD), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_UseForeignDTD__doc__},
 
 static PyObject *
 pyexpat_xmlparser_UseForeignDTD_impl(xmlparseobject *self, PyTypeObject *cls,
@@ -287,8 +376,19 @@ static PyObject *
 pyexpat_xmlparser_UseForeignDTD(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
 {
     PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
     static const char * const _keywords[] = {"", NULL};
-    static _PyArg_Parser _parser = {NULL, _keywords, "UseForeignDTD", 0};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "UseForeignDTD",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
     PyObject *argsbuf[1];
     int flag = 1;
 
@@ -312,6 +412,264 @@ exit:
 
 #endif /* (XML_COMBINED_VERSION >= 19505) */
 
+#if (XML_COMBINED_VERSION >= 20400)
+
+PyDoc_STRVAR(pyexpat_xmlparser_SetBillionLaughsAttackProtectionActivationThreshold__doc__,
+"SetBillionLaughsAttackProtectionActivationThreshold($self, threshold, /)\n"
+"--\n"
+"\n"
+"Sets the number of output bytes needed to activate protection against billion laughs attacks.\n"
+"\n"
+"The number of output bytes includes amplification from entity expansion\n"
+"and reading DTD files.\n"
+"\n"
+"Parser objects usually have a protection activation threshold of 8 MiB,\n"
+"but the actual default value depends on the underlying Expat library.\n"
+"\n"
+"Activation thresholds below 4 MiB are known to break support for DITA 1.3\n"
+"payload and are hence not recommended.");
+
+#define PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONACTIVATIONTHRESHOLD_METHODDEF    \
+    {"SetBillionLaughsAttackProtectionActivationThreshold", _PyCFunction_CAST(pyexpat_xmlparser_SetBillionLaughsAttackProtectionActivationThreshold), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_SetBillionLaughsAttackProtectionActivationThreshold__doc__},
+
+static PyObject *
+pyexpat_xmlparser_SetBillionLaughsAttackProtectionActivationThreshold_impl(xmlparseobject *self,
+                                                                           PyTypeObject *cls,
+                                                                           unsigned long long threshold);
+
+static PyObject *
+pyexpat_xmlparser_SetBillionLaughsAttackProtectionActivationThreshold(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
+    static const char * const _keywords[] = {"", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "SetBillionLaughsAttackProtectionActivationThreshold",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[1];
+    unsigned long long threshold;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser, 1, 1, 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    if (!_PyLong_UnsignedLongLong_Converter(args[0], &threshold)) {
+        goto exit;
+    }
+    return_value = pyexpat_xmlparser_SetBillionLaughsAttackProtectionActivationThreshold_impl(self, cls, threshold);
+
+exit:
+    return return_value;
+}
+
+#endif /* (XML_COMBINED_VERSION >= 20400) */
+
+#if (XML_COMBINED_VERSION >= 20400)
+
+PyDoc_STRVAR(pyexpat_xmlparser_SetBillionLaughsAttackProtectionMaximumAmplification__doc__,
+"SetBillionLaughsAttackProtectionMaximumAmplification($self, max_factor,\n"
+"                                                     /)\n"
+"--\n"
+"\n"
+"Sets the maximum tolerated amplification factor for protection against billion laughs attacks.\n"
+"\n"
+"The amplification factor is calculated as \"(direct + indirect) / direct\"\n"
+"while parsing, where \"direct\" is the number of bytes read from the primary\n"
+"document in parsing and \"indirect\" is the number of bytes added by expanding\n"
+"entities and reading external DTD files, combined.\n"
+"\n"
+"The \'max_factor\' value must be a non-NaN floating point value greater than\n"
+"or equal to 1.0. Amplification factors greater than 30,000 can be observed\n"
+"in the middle of parsing even with benign files in practice. In particular,\n"
+"the activation threshold should be carefully chosen to avoid false positives.\n"
+"\n"
+"Parser objects usually have a maximum amplification factor of 100,\n"
+"but the actual default value depends on the underlying Expat library.");
+
+#define PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONMAXIMUMAMPLIFICATION_METHODDEF    \
+    {"SetBillionLaughsAttackProtectionMaximumAmplification", _PyCFunction_CAST(pyexpat_xmlparser_SetBillionLaughsAttackProtectionMaximumAmplification), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_SetBillionLaughsAttackProtectionMaximumAmplification__doc__},
+
+static PyObject *
+pyexpat_xmlparser_SetBillionLaughsAttackProtectionMaximumAmplification_impl(xmlparseobject *self,
+                                                                            PyTypeObject *cls,
+                                                                            float max_factor);
+
+static PyObject *
+pyexpat_xmlparser_SetBillionLaughsAttackProtectionMaximumAmplification(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
+    static const char * const _keywords[] = {"", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "SetBillionLaughsAttackProtectionMaximumAmplification",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[1];
+    float max_factor;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser, 1, 1, 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    if (PyFloat_CheckExact(args[0])) {
+        max_factor = (float) (PyFloat_AS_DOUBLE(args[0]));
+    }
+    else
+    {
+        max_factor = (float) PyFloat_AsDouble(args[0]);
+        if (max_factor == -1.0 && PyErr_Occurred()) {
+            goto exit;
+        }
+    }
+    return_value = pyexpat_xmlparser_SetBillionLaughsAttackProtectionMaximumAmplification_impl(self, cls, max_factor);
+
+exit:
+    return return_value;
+}
+
+#endif /* (XML_COMBINED_VERSION >= 20400) */
+
+#if (XML_COMBINED_VERSION >= 20702)
+
+PyDoc_STRVAR(pyexpat_xmlparser_SetAllocTrackerActivationThreshold__doc__,
+"SetAllocTrackerActivationThreshold($self, threshold, /)\n"
+"--\n"
+"\n"
+"Sets the number of allocated bytes of dynamic memory needed to activate protection against disproportionate use of RAM.\n"
+"\n"
+"Parser objects usually have an allocation activation threshold of 64 MiB,\n"
+"but the actual default value depends on the underlying Expat library.");
+
+#define PYEXPAT_XMLPARSER_SETALLOCTRACKERACTIVATIONTHRESHOLD_METHODDEF    \
+    {"SetAllocTrackerActivationThreshold", _PyCFunction_CAST(pyexpat_xmlparser_SetAllocTrackerActivationThreshold), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_SetAllocTrackerActivationThreshold__doc__},
+
+static PyObject *
+pyexpat_xmlparser_SetAllocTrackerActivationThreshold_impl(xmlparseobject *self,
+                                                          PyTypeObject *cls,
+                                                          unsigned long long threshold);
+
+static PyObject *
+pyexpat_xmlparser_SetAllocTrackerActivationThreshold(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
+    static const char * const _keywords[] = {"", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "SetAllocTrackerActivationThreshold",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[1];
+    unsigned long long threshold;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser, 1, 1, 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    if (!_PyLong_UnsignedLongLong_Converter(args[0], &threshold)) {
+        goto exit;
+    }
+    return_value = pyexpat_xmlparser_SetAllocTrackerActivationThreshold_impl(self, cls, threshold);
+
+exit:
+    return return_value;
+}
+
+#endif /* (XML_COMBINED_VERSION >= 20702) */
+
+#if (XML_COMBINED_VERSION >= 20702)
+
+PyDoc_STRVAR(pyexpat_xmlparser_SetAllocTrackerMaximumAmplification__doc__,
+"SetAllocTrackerMaximumAmplification($self, max_factor, /)\n"
+"--\n"
+"\n"
+"Sets the maximum amplification factor between direct input and bytes of dynamic memory allocated.\n"
+"\n"
+"The amplification factor is calculated as \"allocated / direct\" while\n"
+"parsing, where \"direct\" is the number of bytes read from the primary\n"
+"document in parsing and \"allocated\" is the number of bytes of\n"
+"dynamic memory allocated in the parser hierarchy.\n"
+"\n"
+"The \'max_factor\' value must be a non-NaN floating point value\n"
+"greater than or equal to 1.0.  Amplification factors greater than\n"
+"100.0 can be observed near the start of parsing even with benign\n"
+"files in practice.  In particular, the activation threshold should\n"
+"be carefully chosen to avoid false positives.\n"
+"\n"
+"Parser objects usually have a maximum amplification factor of 100,\n"
+"but the actual default value depends on the underlying Expat library.");
+
+#define PYEXPAT_XMLPARSER_SETALLOCTRACKERMAXIMUMAMPLIFICATION_METHODDEF    \
+    {"SetAllocTrackerMaximumAmplification", _PyCFunction_CAST(pyexpat_xmlparser_SetAllocTrackerMaximumAmplification), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, pyexpat_xmlparser_SetAllocTrackerMaximumAmplification__doc__},
+
+static PyObject *
+pyexpat_xmlparser_SetAllocTrackerMaximumAmplification_impl(xmlparseobject *self,
+                                                           PyTypeObject *cls,
+                                                           float max_factor);
+
+static PyObject *
+pyexpat_xmlparser_SetAllocTrackerMaximumAmplification(xmlparseobject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+    #  define KWTUPLE (PyObject *)&_Py_SINGLETON(tuple_empty)
+    #else
+    #  define KWTUPLE NULL
+    #endif
+
+    static const char * const _keywords[] = {"", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "SetAllocTrackerMaximumAmplification",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[1];
+    float max_factor;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser, 1, 1, 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    if (PyFloat_CheckExact(args[0])) {
+        max_factor = (float) (PyFloat_AS_DOUBLE(args[0]));
+    }
+    else
+    {
+        max_factor = (float) PyFloat_AsDouble(args[0]);
+        if (max_factor == -1.0 && PyErr_Occurred()) {
+            goto exit;
+        }
+    }
+    return_value = pyexpat_xmlparser_SetAllocTrackerMaximumAmplification_impl(self, cls, max_factor);
+
+exit:
+    return return_value;
+}
+
+#endif /* (XML_COMBINED_VERSION >= 20702) */
+
 PyDoc_STRVAR(pyexpat_ParserCreate__doc__,
 "ParserCreate($module, /, encoding=None, namespace_separator=None,\n"
 "             intern=<unrepresentable>)\n"
@@ -320,7 +678,7 @@ PyDoc_STRVAR(pyexpat_ParserCreate__doc__,
 "Return a new XML parser object.");
 
 #define PYEXPAT_PARSERCREATE_METHODDEF    \
-    {"ParserCreate", (PyCFunction)(void(*)(void))pyexpat_ParserCreate, METH_FASTCALL|METH_KEYWORDS, pyexpat_ParserCreate__doc__},
+    {"ParserCreate", _PyCFunction_CAST(pyexpat_ParserCreate), METH_FASTCALL|METH_KEYWORDS, pyexpat_ParserCreate__doc__},
 
 static PyObject *
 pyexpat_ParserCreate_impl(PyObject *module, const char *encoding,
@@ -330,8 +688,32 @@ static PyObject *
 pyexpat_ParserCreate(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
 {
     PyObject *return_value = NULL;
+    #if 0 // GraalPy change
+    // #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+
+    #define NUM_KEYWORDS 3
+    static struct {
+        PyGC_Head _this_is_not_used;
+        PyObject_VAR_HEAD
+        PyObject *ob_item[NUM_KEYWORDS];
+    } _kwtuple = {
+        .ob_base = PyVarObject_HEAD_INIT(&PyTuple_Type, NUM_KEYWORDS)
+        .ob_item = { &_Py_ID(encoding), &_Py_ID(namespace_separator), &_Py_ID(intern), },
+    };
+    #undef NUM_KEYWORDS
+    #define KWTUPLE (&_kwtuple.ob_base.ob_base)
+
+    #else  // !Py_BUILD_CORE
+    #  define KWTUPLE NULL
+    #endif  // !Py_BUILD_CORE
+
     static const char * const _keywords[] = {"encoding", "namespace_separator", "intern", NULL};
-    static _PyArg_Parser _parser = {NULL, _keywords, "ParserCreate", 0};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "ParserCreate",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
     PyObject *argsbuf[3];
     Py_ssize_t noptargs = nargs + (kwnames ? PyTuple_GET_SIZE(kwnames) : 0) - 0;
     const char *encoding = NULL;
@@ -430,4 +812,20 @@ exit:
 #ifndef PYEXPAT_XMLPARSER_USEFOREIGNDTD_METHODDEF
     #define PYEXPAT_XMLPARSER_USEFOREIGNDTD_METHODDEF
 #endif /* !defined(PYEXPAT_XMLPARSER_USEFOREIGNDTD_METHODDEF) */
-/*[clinic end generated code: output=5d60049d385d5d56 input=a9049054013a1b77]*/
+
+#ifndef PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONACTIVATIONTHRESHOLD_METHODDEF
+    #define PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONACTIVATIONTHRESHOLD_METHODDEF
+#endif /* !defined(PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONACTIVATIONTHRESHOLD_METHODDEF) */
+
+#ifndef PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONMAXIMUMAMPLIFICATION_METHODDEF
+    #define PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONMAXIMUMAMPLIFICATION_METHODDEF
+#endif /* !defined(PYEXPAT_XMLPARSER_SETBILLIONLAUGHSATTACKPROTECTIONMAXIMUMAMPLIFICATION_METHODDEF) */
+
+#ifndef PYEXPAT_XMLPARSER_SETALLOCTRACKERACTIVATIONTHRESHOLD_METHODDEF
+    #define PYEXPAT_XMLPARSER_SETALLOCTRACKERACTIVATIONTHRESHOLD_METHODDEF
+#endif /* !defined(PYEXPAT_XMLPARSER_SETALLOCTRACKERACTIVATIONTHRESHOLD_METHODDEF) */
+
+#ifndef PYEXPAT_XMLPARSER_SETALLOCTRACKERMAXIMUMAMPLIFICATION_METHODDEF
+    #define PYEXPAT_XMLPARSER_SETALLOCTRACKERMAXIMUMAMPLIFICATION_METHODDEF
+#endif /* !defined(PYEXPAT_XMLPARSER_SETALLOCTRACKERMAXIMUMAMPLIFICATION_METHODDEF) */
+/*[clinic end generated code: output=1994a20170f2325d input=a9049054013a1b77]*/

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@ import argparse
 import os
 import sys
 import tokenize
+import io
 
 from pegen.build import generate_token_definitions
 from pegen.grammar_parser import GeneratedParser as GrammarParser
@@ -69,9 +70,31 @@ def main():
     with open(args.tokens_file, "r") as tok_file:
         all_tokens, exact_tokens, non_exact_tokens = generate_token_definitions(tok_file)
 
-    with open(args.output_file, "w") as file:
-        gen = JavaParserGenerator(grammar, all_tokens, exact_tokens, non_exact_tokens, file, debug=args.debug)
-        gen.generate(os.path.basename(args.grammar_file))
+    # Determine which line separator to use
+    if os.path.exists(args.output_file):
+        with open(args.output_file, "rb") as f:
+            raw_old_content = f.read()
+            if b'\r\n' in raw_old_content:
+                linesep = '\r\n'
+            else:
+                linesep = '\n'
+        with open(args.output_file, "r", encoding="utf-8") as f:
+            old_content = f.read()
+    else:
+        old_content = None
+        linesep = os.linesep
+
+    out = io.StringIO()
+    class_name = os.path.splitext(os.path.basename(args.output_file))[0]
+    gen = JavaParserGenerator(grammar, all_tokens, exact_tokens, non_exact_tokens, out, class_name, debug=args.debug)
+    gen.generate(os.path.basename(args.grammar_file))
+
+    if out.getvalue() != old_content:
+        print(f"Writing new {args.output_file}")
+        with open(args.output_file, "w", encoding="utf-8", newline=linesep) as f:
+            f.write(out.getvalue())
+    else:
+        print(f"{args.output_file} not modified")
 
 
 if __name__ == '__main__':

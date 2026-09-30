@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,15 +42,13 @@ package com.oracle.graal.python.builtins.objects.cext;
 
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTypeObject__tp_name;
 
-import java.util.Objects;
-
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAcquireLibrary;
 import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
-import com.oracle.graal.python.builtins.objects.cext.capi.PythonNativeWrapper;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeObjectReference;
 import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.memoryview.PMemoryView;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.interop.PForeignToPTypeNode;
@@ -58,7 +56,6 @@ import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.graal.python.runtime.GilNode;
-import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -76,42 +73,64 @@ import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.library.ExportMessage.Ignore;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedExactClassProfile;
-import com.oracle.truffle.api.profiles.ValueProfile;
-import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.utilities.TriState;
 
+/**
+ * A simple wrapper around objects created through the Python C API that can be cast to PyObject*.
+ */
 @ExportLibrary(InteropLibrary.class)
 @ExportLibrary(PythonBufferAcquireLibrary.class)
 public final class PythonAbstractNativeObject extends PythonAbstractObject implements PythonNativeObject, PythonNativeClass {
 
-    public final Object object;
+    /**
+     * A pointer to the native object ({@code PyObject *}).
+     */
+    public final long pointer;
+    public TpSlots slots;
     public NativeObjectReference ref;
 
-    public PythonAbstractNativeObject(Object object) {
-        assert !(object instanceof Number || object instanceof PythonNativeWrapper || object instanceof String || object instanceof TruffleString);
-        this.object = object;
+    /**
+     * Replicates the native references of this native object in Java.
+     * <p>
+     * Native objects, that have a traverse function, may have references (i.e. native fields of
+     * type {@code PyObject *}) to other objects. Whenever the Python GC detects a possible
+     * reference cycle, we will replicate those native references in Java to give control to the
+     * Java GC when objects may die.
+     * </p>
+     */
+    private Object[] replicatedNativeReferences;
+
+    public PythonAbstractNativeObject(long pointer) {
+        assert pointer != UNINITIALIZED;
+        this.pointer = pointer;
     }
 
+    @Override
     public int compareTo(Object o) {
         return 0;
     }
 
-    public void lookupChanged() {
-        // TODO invalidate cached native MRO
-        CompilerDirectives.transferToInterpreter();
-        throw new UnsupportedOperationException("not yet implemented");
+    /**
+     * For a description, see {@link #replicatedNativeReferences}.
+     */
+    public void setReplicatedNativeReferences(Object[] replicatedNativeReferences) {
+        this.replicatedNativeReferences = replicatedNativeReferences;
+    }
+
+    public Object[] getReplicatedNativeReferences() {
+        return replicatedNativeReferences;
     }
 
     @Override
-    public Object getPtr() {
-        return object;
+    public long getPtr() {
+        return pointer;
     }
 
     @Override
     public int hashCode() {
         CompilerAsserts.neverPartOfCompilation();
         // this is important for the default '__hash__' implementation
-        return Objects.hashCode(object);
+        return Long.hashCode(pointer);
     }
 
     @Ignore
@@ -124,70 +143,49 @@ public final class PythonAbstractNativeObject extends PythonAbstractObject imple
             return false;
         }
         PythonAbstractNativeObject other = (PythonAbstractNativeObject) obj;
-        return Objects.equals(object, other.object);
+        return pointer == other.pointer;
     }
 
-    public boolean equalsProfiled(Object obj, ValueProfile profile) {
-        if (this == obj) {
-            return true;
-        }
-        if (obj == null || getClass() != obj.getClass()) {
-            return false;
-        }
-        PythonAbstractNativeObject other = (PythonAbstractNativeObject) obj;
-        return Objects.equals(profile.profile(object), profile.profile(other.object));
+    @TruffleBoundary
+    public String toStringWithContext() {
+        return toString();
     }
 
     @Override
     public String toString() {
         CompilerAsserts.neverPartOfCompilation();
-        return PythonUtils.formatJString("PythonAbstractNativeObject(%s)", object);
+        return String.format("PythonAbstractNativeObject(0x%x)", pointer);
     }
 
     @ExportMessage
-    int identityHashCode(@CachedLibrary("this.object") InteropLibrary lib) throws UnsupportedMessageException {
-        if (lib.isPointer(object)) {
-            return Long.hashCode(lib.asPointer(object));
-        } else {
-            return lib.identityHashCode(object);
-        }
+    int identityHashCode() {
+        return Long.hashCode(pointer);
     }
 
     @ExportMessage
     boolean isIdentical(Object other, InteropLibrary otherInterop,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached InlinedExactClassProfile otherProfile,
                     @Exclusive @CachedLibrary(limit = "1") InteropLibrary thisLib,
-                    @Exclusive @CachedLibrary(limit = "3") InteropLibrary lib1,
-                    @Exclusive @CachedLibrary(limit = "3") InteropLibrary lib2,
                     @Exclusive @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
         try {
             Object profiled = otherProfile.profile(inliningTarget, other);
-            if (profiled instanceof PythonAbstractNativeObject) {
-                Object otherPtr = ((PythonAbstractNativeObject) other).getPtr();
-                if (lib1.isPointer(getPtr())) {
-                    if (lib2.isPointer(otherPtr)) {
-                        try {
-                            return lib1.asPointer(getPtr()) == lib2.asPointer(otherPtr);
-                        } catch (UnsupportedMessageException e) {
-                            throw CompilerDirectives.shouldNotReachHere(e);
-                        }
-                    } else {
-                        return false;
-                    }
-                } else {
-                    if (lib2.isPointer(otherPtr)) {
-                        return false;
-                    } else {
-                        return lib1.isIdentical(getPtr(), otherPtr, lib2);
-                    }
-                }
+            if (profiled instanceof PythonAbstractNativeObject otherNativeObject) {
+                return pointer == otherNativeObject.pointer;
             }
             return otherInterop.isIdentical(profiled, this, thisLib);
         } finally {
             gil.release(mustRelease);
         }
+    }
+
+    public void setTpSlots(TpSlots slots) {
+        this.slots = slots;
+    }
+
+    public TpSlots getTpSlots() {
+        return slots;
     }
 
     @ExportMessage
@@ -208,7 +206,7 @@ public final class PythonAbstractNativeObject extends PythonAbstractObject imple
 
     @ExportMessage(library = InteropLibrary.class)
     boolean isMetaObject(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached TypeNodes.IsTypeNode isType,
                     @Exclusive @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
@@ -221,7 +219,7 @@ public final class PythonAbstractNativeObject extends PythonAbstractObject imple
 
     @ExportMessage
     boolean isMetaInstance(Object instance,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached TypeNodes.IsTypeNode isType,
                     @Cached GetClassNode getClassNode,
                     @Cached PForeignToPTypeNode convert,
@@ -240,7 +238,7 @@ public final class PythonAbstractNativeObject extends PythonAbstractObject imple
 
     @ExportMessage
     String getMetaSimpleName(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isType") @Cached TypeNodes.IsTypeNode isType,
                     @Shared("getTypeMember") @Cached CStructAccess.ReadCharPtrNode getTpNameNode,
                     @Shared("castToJavaStringNode") @Cached CastToJavaStringNode castToJavaStringNode,
@@ -250,16 +248,16 @@ public final class PythonAbstractNativeObject extends PythonAbstractObject imple
 
     @TruffleBoundary
     private static String getSimpleName(String fqname) {
-        int firstDot = fqname.indexOf('.');
-        if (firstDot != -1) {
-            return fqname.substring(firstDot + 1);
+        int lastDot = fqname.lastIndexOf('.');
+        if (lastDot != -1) {
+            return fqname.substring(lastDot + 1);
         }
         return fqname;
     }
 
     @ExportMessage
     String getMetaQualifiedName(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isType") @Cached TypeNodes.IsTypeNode isType,
                     @Shared("getTypeMember") @Cached CStructAccess.ReadCharPtrNode getTpNameNode,
                     @Shared("castToJavaStringNode") @Cached CastToJavaStringNode castToJavaStringNode,
@@ -282,14 +280,14 @@ public final class PythonAbstractNativeObject extends PythonAbstractObject imple
 
     @ExportMessage
     boolean hasBuffer(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached CExtNodes.HasNativeBufferNode hasNativeBuffer) {
         return hasNativeBuffer.execute(inliningTarget, this);
     }
 
     @ExportMessage
     Object acquire(int flags,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached CExtNodes.CreateMemoryViewFromNativeNode createMemoryView) {
         PMemoryView mv = createMemoryView.execute(inliningTarget, this, flags);
         mv.setShouldReleaseImmediately(true);

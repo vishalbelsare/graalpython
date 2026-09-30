@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -32,6 +32,7 @@ import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___LOADER__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___PACKAGE__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___SPEC__;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
@@ -40,26 +41,21 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.nodes.PGuards;
-import com.oracle.graal.python.nodes.object.SetDictNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
+import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PythonModule extends PythonObject {
 
-    @CompilationFinal(dimensions = 1) static final Object[] INITIAL_MODULE_ATTRS = new Object[]{T___NAME__, T___DOC__, T___PACKAGE__, T___LOADER__, T___SPEC__, T___CACHED__, T___FILE__};
-
-    /**
-     * Stores the native {@code PyModuleDef *} structure if this modules was created via the
-     * multi-phase extension module initialization mechanism.
-     */
-    private Object nativeModuleDef;
-    private Object nativeModuleState;
+    private NativeModuleData nativeModuleData;
 
     private PythonBuiltins builtins;
+    private Object moduleState;
 
+    @TruffleBoundary
     public PythonModule(Object clazz, Shape instanceShape) {
         super(clazz, instanceShape);
         setAttribute(T___NAME__, PNone.NO_VALUE);
@@ -69,6 +65,7 @@ public final class PythonModule extends PythonObject {
         setAttribute(T___SPEC__, PNone.NO_VALUE);
         setAttribute(T___CACHED__, PNone.NO_VALUE);
         setAttribute(T___FILE__, PNone.NO_VALUE);
+        GetOrCreateDictNode.ensureModuleDict(this);
     }
 
     /**
@@ -84,6 +81,7 @@ public final class PythonModule extends PythonObject {
         setAttribute(T___SPEC__, PNone.NONE);
         setAttribute(T___CACHED__, PNone.NO_VALUE);
         setAttribute(T___FILE__, PNone.NO_VALUE);
+        GetOrCreateDictNode.ensureModuleDict(lang, this);
     }
 
     /**
@@ -91,11 +89,8 @@ public final class PythonModule extends PythonObject {
      */
     @TruffleBoundary
     public static PythonModule createInternal(TruffleString moduleName) {
-        PythonObjectFactory factory = PythonObjectFactory.getUncached();
-        PythonModule pythonModule = new PythonModule(PythonLanguage.get(null), moduleName);
-        PDict dict = factory.createDictFixedStorage(pythonModule);
-        SetDictNode.executeUncached(pythonModule, dict);
-        return pythonModule;
+        PythonLanguage language = PythonLanguage.get(null);
+        return new PythonModule(language, moduleName);
     }
 
     public PythonBuiltins getBuiltins() {
@@ -106,26 +101,121 @@ public final class PythonModule extends PythonObject {
         this.builtins = builtins;
     }
 
+    public <T> T getModuleState(Class<T> clazz) {
+        return clazz.cast(moduleState);
+    }
+
+    public void setModuleState(Object moduleState) {
+        this.moduleState = moduleState;
+    }
+
     @Override
     public String toString() {
         Object attribute = this.getAttribute(T___NAME__);
         return "<module '" + (PGuards.isNoValue(attribute) ? "?" : attribute) + "'>";
     }
 
-    public Object getNativeModuleDef() {
-        return nativeModuleDef;
+    private NativeModuleData ensureNativeModuleData() {
+        if (nativeModuleData == null) {
+            nativeModuleData = new NativeModuleData();
+        }
+        return nativeModuleData;
     }
 
-    public void setNativeModuleDef(Object nativeModuleDef) {
-        this.nativeModuleDef = nativeModuleDef;
+    public long getNativeModuleDef() {
+        return nativeModuleData != null ? nativeModuleData.def : NULLPTR;
     }
 
-    public Object getNativeModuleState() {
-        return nativeModuleState;
+    public void setNativeModuleDef(long nativeModuleDef) {
+        ensureNativeModuleData().def = nativeModuleDef;
     }
 
-    public void setNativeModuleState(Object nativeModuleState) {
-        this.nativeModuleState = nativeModuleState;
+    public long getNativeModuleState() {
+        return nativeModuleData != null ? nativeModuleData.state : NULLPTR;
     }
 
+    public void setNativeModuleState(long nativeModuleState) {
+        ensureNativeModuleData().state = nativeModuleState;
+    }
+
+    public long getNativeModuleStateSize() {
+        return nativeModuleData != null ? nativeModuleData.stateSize : 0;
+    }
+
+    public void setNativeModuleStateSize(long nativeModuleStateSize) {
+        ensureNativeModuleData().stateSize = nativeModuleStateSize;
+    }
+
+    public long getNativeModuleTraverse() {
+        return nativeModuleData != null ? nativeModuleData.stateTraverse : NULLPTR;
+    }
+
+    public void setNativeModuleTraverse(long nativeModuleTraverse) {
+        ensureNativeModuleData().stateTraverse = nativeModuleTraverse;
+    }
+
+    public long getNativeModuleClear() {
+        return nativeModuleData != null ? nativeModuleData.stateClear : NULLPTR;
+    }
+
+    public void setNativeModuleClear(long nativeModuleClear) {
+        ensureNativeModuleData().stateClear = nativeModuleClear;
+    }
+
+    public long getNativeModuleFree() {
+        return nativeModuleData != null ? nativeModuleData.stateFree : NULLPTR;
+    }
+
+    public void setNativeModuleFree(long nativeModuleFree) {
+        ensureNativeModuleData().stateFree = nativeModuleFree;
+    }
+
+    public long getNativeModuleExec() {
+        return nativeModuleData != null ? nativeModuleData.exec : NULLPTR;
+    }
+
+    public void setNativeModuleExec(long nativeModuleExec) {
+        ensureNativeModuleData().exec = nativeModuleExec;
+    }
+
+    public long getNativeModuleToken() {
+        return nativeModuleData != null ? nativeModuleData.token : NULLPTR;
+    }
+
+    public void setNativeModuleToken(long nativeModuleToken) {
+        ensureNativeModuleData().token = nativeModuleToken;
+    }
+
+    public boolean isNativeModuleTokenIsDef() {
+        return nativeModuleData != null && nativeModuleData.tokenIsDef;
+    }
+
+    public void setNativeModuleTokenIsDef(boolean nativeModuleTokenIsDef) {
+        ensureNativeModuleData().tokenIsDef = nativeModuleTokenIsDef;
+    }
+
+    public boolean isNativeModuleRequiresGil() {
+        return nativeModuleData != null && nativeModuleData.requiresGil;
+    }
+
+    public void setNativeModuleRequiresGil(boolean nativeModuleRequiresGil) {
+        ensureNativeModuleData().requiresGil = nativeModuleRequiresGil;
+    }
+
+    /**
+     * For a description, see {@link NativeModuleData#replicatedNativeReferences}.
+     */
+    public void setReplicatedNativeReferences(Object[] replicatedNativeReferences) {
+        ensureNativeModuleData().replicatedNativeReferences = replicatedNativeReferences;
+    }
+
+    public Object[] getReplicatedNativeReferences() {
+        return nativeModuleData != null ? nativeModuleData.replicatedNativeReferences : null;
+    }
+
+    public PDict getDict() {
+        // PythonModule always have a dict
+        CompilerAsserts.neverPartOfCompilation();
+        return GetDictIfExistsNode.getDictUncached(this);
+    }
 }

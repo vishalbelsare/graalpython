@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,38 +41,36 @@
 #include "capi.h"
 
 PyObject* PyDescr_NewClassMethod(PyTypeObject *type, PyMethodDef *method) {
-    int flags = PyMethodDef_ml_flags(method);
-    return GraalPyTruffleDescr_NewClassMethod(method,
-                    PyMethodDef_ml_name(method),
-					PyMethodDef_ml_doc(method),
-                    flags,
-                    get_method_flags_wrapper(flags),
-					PyMethodDef_ml_meth(method),
+    return GraalPyPrivate_Descr_NewClassMethod(method,
+                    method->ml_name,
+                    method->ml_doc,
+                    method->ml_flags,
+                    method->ml_meth,
                     type);
 }
 
 PyObject* PyDescr_NewGetSet(PyTypeObject *type, PyGetSetDef *getset) {
-    getter getter_fun = PyGetSetDef_get(getset);
-    setter setter_fun = PyGetSetDef_set(getset);
-    return GraalPyTruffleDescr_NewGetSet(PyGetSetDef_name(getset),
+    getter getter_fun = GraalPyPrivate_GET_PyGetSetDef_get(getset);
+    setter setter_fun = GraalPyPrivate_GET_PyGetSetDef_set(getset);
+    return GraalPyPrivate_Descr_NewGetSet(GraalPyPrivate_GET_PyGetSetDef_name(getset),
                     type,
                     getter_fun,
                     setter_fun,
-                    PyGetSetDef_doc(getset),
-					PyGetSetDef_closure(getset));
+                    GraalPyPrivate_GET_PyGetSetDef_doc(getset),
+                    GraalPyPrivate_GET_PyGetSetDef_closure(getset));
 }
 
 
-PyMethodDef* PyMethodDescrObject_GetMethod(PyObject* descr) {
-	return PyMethodDescrObject_d_method(descr);
+PyMethodDef* GraalPyMethodDescrObject_GetMethod(PyObject* descr) {
+    return GraalPyPrivate_GET_PyMethodDescrObject_d_method(descr);
 }
 
-PyTypeObject* PyDescrObject_GetType(PyObject* descr) {
-	return PyDescrObject_d_type(descr);
+PyTypeObject* GraalPyDescrObject_GetType(PyObject* descr) {
+    return GraalPyPrivate_GET_PyDescrObject_d_type(descr);
 }
 
-PyObject* PyDescrObject_GetName(PyObject* descr) {
-	return PyDescrObject_d_name(descr);
+PyObject* GraalPyDescrObject_GetName(PyObject* descr) {
+    return GraalPyPrivate_GET_PyDescrObject_d_name(descr);
 }
 
 int PyDescr_IsData(PyObject *ob) {

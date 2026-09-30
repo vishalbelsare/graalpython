@@ -1,70 +1,79 @@
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_asymmetry
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_decimals
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_eight_decimal_places
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_fractions
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_identical
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_identical_infinite
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_inf_ninf_nan
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_integers
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_near_zero
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_negative_tolerances
-*graalpython.lib-python.3.test.test_math.IsCloseTests.test_zero_tolerance
-*graalpython.lib-python.3.test.test_math.MathTests.testAcos
-*graalpython.lib-python.3.test.test_math.MathTests.testAcosh
-*graalpython.lib-python.3.test.test_math.MathTests.testAsin
-*graalpython.lib-python.3.test.test_math.MathTests.testAsinh
-*graalpython.lib-python.3.test.test_math.MathTests.testAtan
-*graalpython.lib-python.3.test.test_math.MathTests.testAtan2
-*graalpython.lib-python.3.test.test_math.MathTests.testAtanh
-*graalpython.lib-python.3.test.test_math.MathTests.testCeil
-*graalpython.lib-python.3.test.test_math.MathTests.testComb
-*graalpython.lib-python.3.test.test_math.MathTests.testConstants
-*graalpython.lib-python.3.test.test_math.MathTests.testCopysign
-*graalpython.lib-python.3.test.test_math.MathTests.testCos
-*graalpython.lib-python.3.test.test_math.MathTests.testCosh
-*graalpython.lib-python.3.test.test_math.MathTests.testDegrees
-*graalpython.lib-python.3.test.test_math.MathTests.testDist
-*graalpython.lib-python.3.test.test_math.MathTests.testExp
-*graalpython.lib-python.3.test.test_math.MathTests.testFabs
-*graalpython.lib-python.3.test.test_math.MathTests.testFactorial
-*graalpython.lib-python.3.test.test_math.MathTests.testFactorialHugeInputs
-*graalpython.lib-python.3.test.test_math.MathTests.testFactorialNonIntegers
-*graalpython.lib-python.3.test.test_math.MathTests.testFloor
-*graalpython.lib-python.3.test.test_math.MathTests.testFmod
-*graalpython.lib-python.3.test.test_math.MathTests.testFrexp
-*graalpython.lib-python.3.test.test_math.MathTests.testFsum
-*graalpython.lib-python.3.test.test_math.MathTests.testGcd
-*graalpython.lib-python.3.test.test_math.MathTests.testHypot
-*graalpython.lib-python.3.test.test_math.MathTests.testIsfinite
-*graalpython.lib-python.3.test.test_math.MathTests.testIsinf
-*graalpython.lib-python.3.test.test_math.MathTests.testIsnan
-*graalpython.lib-python.3.test.test_math.MathTests.testIsqrt
-*graalpython.lib-python.3.test.test_math.MathTests.testLdexp
-*graalpython.lib-python.3.test.test_math.MathTests.testLog
-*graalpython.lib-python.3.test.test_math.MathTests.testLog10
-*graalpython.lib-python.3.test.test_math.MathTests.testLog1p
-*graalpython.lib-python.3.test.test_math.MathTests.testLog2
-*graalpython.lib-python.3.test.test_math.MathTests.testLog2Exact
-*graalpython.lib-python.3.test.test_math.MathTests.testModf
-*graalpython.lib-python.3.test.test_math.MathTests.testPerm
-*graalpython.lib-python.3.test.test_math.MathTests.testPow
-*graalpython.lib-python.3.test.test_math.MathTests.testRadians
-*graalpython.lib-python.3.test.test_math.MathTests.testRemainder
-*graalpython.lib-python.3.test.test_math.MathTests.testSin
-*graalpython.lib-python.3.test.test_math.MathTests.testSinh
-*graalpython.lib-python.3.test.test_math.MathTests.testSqrt
-*graalpython.lib-python.3.test.test_math.MathTests.testTan
-*graalpython.lib-python.3.test.test_math.MathTests.testTanh
-*graalpython.lib-python.3.test.test_math.MathTests.testTanhSign
-*graalpython.lib-python.3.test.test_math.MathTests.test_exceptions
-*graalpython.lib-python.3.test.test_math.MathTests.test_inf_constant
-*graalpython.lib-python.3.test.test_math.MathTests.test_issue39871
-*graalpython.lib-python.3.test.test_math.MathTests.test_lcm
-*graalpython.lib-python.3.test.test_math.MathTests.test_math_dist_leak
-*graalpython.lib-python.3.test.test_math.MathTests.test_mtestfile
-*graalpython.lib-python.3.test.test_math.MathTests.test_nan_constant
-*graalpython.lib-python.3.test.test_math.MathTests.test_nextafter
-*graalpython.lib-python.3.test.test_math.MathTests.test_prod
-*graalpython.lib-python.3.test.test_math.MathTests.test_testfile
-*graalpython.lib-python.3.test.test_math.MathTests.test_trunc
-*graalpython.lib-python.3.test.test_math.MathTests.test_ulp
+DocFileCase.ieee754_txt @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.FMATests.test_fma_infinities @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.FMATests.test_fma_nan_results @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.FMATests.test_fma_overflow @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.FMATests.test_fma_single_round @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.FMATests.test_fma_zero_result @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.FMATests.test_random @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_asymmetry @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_decimals @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_eight_decimal_places @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_fractions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_identical @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_identical_infinite @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_inf_ninf_nan @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_integers @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_near_zero @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_negative_tolerances @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.IsCloseTests.test_zero_tolerance @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAcos @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAcosh @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAsin @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAsinh @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAtan @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAtan2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testAtanh @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testCeil @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testComb @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testConstants @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testCopysign @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testCos @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testCosh @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testDegrees @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testDist @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testExp @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFabs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFactorial @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFactorialNonIntegers @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFloor @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFmod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFrexp @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testFsum @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testGcd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testHypot @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testIsfinite @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testIsinf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testIsnan @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testIsqrt @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLdexp @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLdexp_denormal @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLog @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLog10 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLog1p @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLog2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testLog2Exact @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testModf @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testPerm @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testPow @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testRadians @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testRemainder @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testSin @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testSinh @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testSqrt @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testSumProd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testTan @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testTanh @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.testTanhSign @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_inf_constant @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_input_exceptions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_issue39871 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_lcm @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_math_dist_leak @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_mtestfile @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_nan_constant @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_nextafter @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_prod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_sumprod_stress @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_testfile @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_trunc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_math.MathTests.test_ulp @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

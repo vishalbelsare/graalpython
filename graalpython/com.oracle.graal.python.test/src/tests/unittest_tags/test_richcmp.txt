@@ -1,11 +1,11 @@
-*graalpython.lib-python.3.test.test_richcmp.DictTest.test_dicts
-*graalpython.lib-python.3.test.test_richcmp.ListTest.test_badentry
-*graalpython.lib-python.3.test.test_richcmp.ListTest.test_coverage
-*graalpython.lib-python.3.test.test_richcmp.ListTest.test_goodentry
-*graalpython.lib-python.3.test.test_richcmp.MiscTest.test_exception_message
-*graalpython.lib-python.3.test.test_richcmp.MiscTest.test_misbehavin
-*graalpython.lib-python.3.test.test_richcmp.MiscTest.test_not
-*graalpython.lib-python.3.test.test_richcmp.MiscTest.test_recursion
-*graalpython.lib-python.3.test.test_richcmp.NumberTest.test_basic
-*graalpython.lib-python.3.test.test_richcmp.NumberTest.test_values
-*graalpython.lib-python.3.test.test_richcmp.VectorTest.test_mixed
+test.test_richcmp.DictTest.test_dicts @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.ListTest.test_badentry @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.ListTest.test_coverage @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.ListTest.test_goodentry @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.MiscTest.test_exception_message @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.MiscTest.test_misbehavin @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.MiscTest.test_not @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.MiscTest.test_recursion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.NumberTest.test_basic @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.NumberTest.test_values @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_richcmp.VectorTest.test_mixed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

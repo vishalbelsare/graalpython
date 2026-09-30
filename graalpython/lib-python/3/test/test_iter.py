@@ -5,12 +5,14 @@ import unittest
 from test.support import cpython_only
 from test.support.os_helper import TESTFN, unlink
 from test.support import check_free_after_iterating, ALWAYS_EQ, NEVER_EQ
+from test.support import BrokenIter
 import pickle
 import collections.abc
-from test import support
 import functools
 import contextlib
 import builtins
+from test import support # GraalPy change
+import traceback
 
 # Test result of triple loop (too big to inline)
 TRIPLETS = [(0, 0, 0), (0, 0, 1), (0, 0, 2),
@@ -84,6 +86,16 @@ class NoIterClass:
 class BadIterableClass:
     def __iter__(self):
         raise ZeroDivisionError
+
+class CallableIterClass:
+    def __init__(self):
+        self.i = 0
+    def __call__(self):
+        i = self.i
+        self.i = i + 1
+        if i > 100:
+            raise IndexError # Emergency stop
+        return i
 
 class EmptyIterClass:
     def __len__(self):
@@ -278,6 +290,7 @@ class TestCase(unittest.TestCase):
             (bytearray(8),),
             ((1, 2, 3),),
             (lambda: 0, 0),
+            (tuple[int],)  # GenericAlias
         ]
 
         try:
@@ -292,7 +305,7 @@ class TestCase(unittest.TestCase):
             # listiter_reduce_general
             self.assertEqual(
                 run("reversed", orig["reversed"](list(range(8)))),
-                (iter, ([],))
+                (reversed, ([],))
             )
 
             for case in types:
@@ -318,16 +331,7 @@ class TestCase(unittest.TestCase):
 
     # Test two-argument iter() with callable instance
     def test_iter_callable(self):
-        class C:
-            def __init__(self):
-                self.i = 0
-            def __call__(self):
-                i = self.i
-                self.i = i + 1
-                if i > 100:
-                    raise IndexError # Emergency stop
-                return i
-        self.check_iterator(iter(C(), 10), list(range(10)), pickle=False)
+        self.check_iterator(iter(CallableIterClass(), 10), list(range(10)), pickle=True)
 
     # Test two-argument iter() with function
     def test_iter_function(self):
@@ -1142,6 +1146,46 @@ class TestCase(unittest.TestCase):
         for typ in (DefaultIterClass, NoIterClass):
             self.assertRaises(TypeError, iter, typ())
         self.assertRaises(ZeroDivisionError, iter, BadIterableClass())
+
+    def test_exception_locations(self):
+        # The location of an exception raised from __init__ or
+        # __next__ should be the iterator expression
+
+        def init_raises():
+            try:
+                for x in BrokenIter(init_raises=True):
+                    pass
+            except Exception as e:
+                return e
+
+        def next_raises():
+            try:
+                for x in BrokenIter(next_raises=True):
+                    pass
+            except Exception as e:
+                return e
+
+        def iter_raises():
+            try:
+                for x in BrokenIter(iter_raises=True):
+                    pass
+            except Exception as e:
+                return e
+
+        for func, expected in [(init_raises, "BrokenIter(init_raises=True)"),
+                               (next_raises, "BrokenIter(next_raises=True)"),
+                               (iter_raises, "BrokenIter(iter_raises=True)"),
+                              ]:
+            with self.subTest(func):
+                exc = func()
+                f = traceback.extract_tb(exc.__traceback__)[0]
+                indent = 16
+                co = func.__code__
+                self.assertEqual(f.lineno, co.co_firstlineno + 2)
+                self.assertEqual(f.end_lineno, co.co_firstlineno + 2)
+                self.assertEqual(f.line[f.colno - indent : f.end_colno - indent],
+                                 expected)
+
 
 
 if __name__ == "__main__":

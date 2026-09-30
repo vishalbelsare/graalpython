@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,17 @@
  */
 package com.oracle.graal.python.lib;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.NotImplementedError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 
-import com.oracle.graal.python.builtins.objects.PNotImplemented;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
@@ -62,11 +66,11 @@ import com.oracle.truffle.api.nodes.Node;
 @GenerateCached(false)
 @GenerateInline
 public abstract class PyLongAsDoubleNode extends PNodeWithContext {
-    public static Object executeUncached(Object object) {
+    public static double executeUncached(Object object) {
         return PyLongAsDoubleNodeGen.getUncached().execute(null, object);
     }
 
-    public abstract Object execute(Node inliningTarget, Object object);
+    public abstract double execute(Node inliningTarget, Object object);
 
     @Specialization
     static double doBoolean(boolean self) {
@@ -84,15 +88,22 @@ public abstract class PyLongAsDoubleNode extends PNodeWithContext {
     }
 
     @Specialization
-    double doPInt(PInt self) {
-        return self.doubleValueWithOverflow(this);
+    static double doPInt(Node inliningTarget, PInt self) {
+        return self.doubleValueWithOverflow(inliningTarget);
+    }
+
+    @Specialization(guards = "check.execute(inliningTarget, self)", limit = "1")
+    @InliningCutoff
+    static double doNative(Node inliningTarget, @SuppressWarnings("unused") PythonAbstractNativeObject self,
+                    @SuppressWarnings("unused") @Cached PyLongCheckNode check) {
+        CompilerDirectives.transferToInterpreterAndInvalidate();
+        throw PRaiseNode.raiseStatic(inliningTarget, NotImplementedError, ErrorMessages.CASTING_A_NATIVE_INT_OBJECT_IS_NOT_IMPLEMENTED_YET);
     }
 
     @Fallback
-    Object fallback(Object object) {
-        if (!PyLongCheckNode.executeUncached(object)) {
-            throw PRaiseNode.getUncached().raise(TypeError, ErrorMessages.INTEGER_REQUIRED);
-        }
-        return PNotImplemented.NOT_IMPLEMENTED;
+    @InliningCutoff
+    @SuppressWarnings("unused")
+    static double fallback(Node inliningTarget, Object object) {
+        throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.INTEGER_REQUIRED);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -25,58 +25,140 @@
  */
 package com.oracle.graal.python.builtins.objects.enumerate;
 
+import static com.oracle.graal.python.nodes.BuiltinNames.J_ENUMERATE;
+import static com.oracle.graal.python.nodes.PGuards.isInteger;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.CallSlotTpIterNextNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyNumberIndexNode;
+import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PEnumerate)
 public final class EnumerateBuiltins extends PythonBuiltins {
+    public static final TpSlots SLOTS = EnumerateBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return EnumerateBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    // enumerate(iterable, start=0)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_ENUMERATE, minNumOfPositionalArgs = 2, parameterNames = {"cls", "iterable", "start"})
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class EnumerateNode extends PythonBuiltinNode {
+
+        @Specialization(guards = "isNoValue(keywordArg)")
+        static PEnumerate doNoValue(VirtualFrame frame, Object cls, Object iterable, @SuppressWarnings("unused") PNone keywordArg,
+                        @Bind Node inliningTarget,
+                        @Shared("getIter") @Cached PyObjectGetIter getIter,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createEnumerate(cls, getInstanceShape.execute(cls), getIter.execute(frame, inliningTarget, iterable), 0);
+        }
 
         @Specialization
-        static Object doNext(VirtualFrame frame, PEnumerate self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile bigIntIndexProfile,
-                        @Cached GetNextNode next,
-                        @Cached PythonObjectFactory factory) {
-            Object index = self.getAndIncrementIndex(inliningTarget, factory, bigIntIndexProfile);
-            Object nextValue = next.execute(frame, self.getDecoratedIterator());
-            return factory.createTuple((new Object[]{index, nextValue}));
+        static PEnumerate doInt(VirtualFrame frame, Object cls, Object iterable, int start,
+                        @Bind Node inliningTarget,
+                        @Shared("getIter") @Cached PyObjectGetIter getIter,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createEnumerate(cls, getInstanceShape.execute(cls), getIter.execute(frame, inliningTarget, iterable), start);
+        }
+
+        @Specialization
+        static PEnumerate doLong(VirtualFrame frame, Object cls, Object iterable, long start,
+                        @Bind Node inliningTarget,
+                        @Shared("getIter") @Cached PyObjectGetIter getIter,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createEnumerate(cls, getInstanceShape.execute(cls), getIter.execute(frame, inliningTarget, iterable), start);
+        }
+
+        @Specialization
+        static PEnumerate doPInt(VirtualFrame frame, Object cls, Object iterable, PInt start,
+                        @Bind Node inliningTarget,
+                        @Shared("getIter") @Cached PyObjectGetIter getIter,
+                        @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createEnumerate(cls, getInstanceShape.execute(cls), getIter.execute(frame, inliningTarget, iterable), start);
+        }
+
+        static boolean isIntegerIndex(Object idx) {
+            return isInteger(idx) || idx instanceof PInt;
+        }
+
+        // see cpython://Objects/enumobject.c#enum_new_impl
+        // !isNoValue: specializations are shared, so an omitted start must not reach this branch
+        @Specialization(guards = {"!isIntegerIndex(start)", "!isNoValue(start)"})
+        static PEnumerate doGeneric(VirtualFrame frame, Object cls, Object iterable, Object start,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PyObjectGetIter getIter,
+                        @Exclusive @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PyNumberIndexNode indexNode,
+                        @Cached CastToJavaLongExactNode cast,
+                        @Cached InlinedConditionProfile bigIntIndexProfile) {
+            Object index = indexNode.execute(frame, inliningTarget, start);
+            Object iterator = getIter.execute(frame, inliningTarget, iterable);
+            Shape shape = getInstanceShape.execute(cls);
+            if (bigIntIndexProfile.profile(inliningTarget, index instanceof PInt)) {
+                return PFactory.createEnumerate(cls, shape, iterator, (PInt) index);
+            }
+            return PFactory.createEnumerate(cls, shape, iterator, cast.execute(inliningTarget, index));
         }
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
+    @GenerateNodeFactory
+    public abstract static class NextNode extends TpIterNextBuiltin {
+
+        @Specialization
+        static Object doNext(VirtualFrame frame, PEnumerate self,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached InlinedConditionProfile bigIntIndexProfile,
+                        @Cached GetObjectSlotsNode getSlots,
+                        @Cached CallSlotTpIterNextNode callIterNext) {
+            Object index = self.getAndIncrementIndex(inliningTarget, language, bigIntIndexProfile);
+            Object it = self.getDecoratedIterator();
+            Object nextValue = callIterNext.execute(frame, inliningTarget, getSlots.execute(inliningTarget, it).tp_iternext(), it);
+            return PFactory.createTuple(language, (new Object[]{index, nextValue}));
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
 
@@ -91,14 +173,14 @@ public final class EnumerateBuiltins extends PythonBuiltins {
     public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object reduce(PEnumerate self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
                         @Cached InlinedConditionProfile bigIntIndexProfile,
-                        @Cached GetClassNode getClassNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached GetClassNode getClassNode) {
             Object iterator = self.getDecoratedIterator();
             Object index = self.getIndex(inliningTarget, bigIntIndexProfile);
-            PTuple contents = factory.createTuple(new Object[]{iterator, index});
-            return factory.createTuple(new Object[]{getClassNode.execute(inliningTarget, self), contents});
+            PTuple contents = PFactory.createTuple(language, new Object[]{iterator, index});
+            return PFactory.createTuple(language, new Object[]{getClassNode.execute(inliningTarget, self), contents});
         }
     }
 
@@ -107,8 +189,8 @@ public final class EnumerateBuiltins extends PythonBuiltins {
     public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object classGetItem(Object cls, Object key,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createGenericAlias(cls, key);
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2022, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2017 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -12,12 +12,11 @@ extern "C" {
 #endif
 
 
-PyAPI_DATA(PyTypeObject) PyBool_Type;
+// PyBool_Type is declared by object.h
 
-#define PyBool_Check(x) Py_IS_TYPE(x, &PyBool_Type)
+#define PyBool_Check(x) Py_IS_TYPE((x), &PyBool_Type)
 
-/* Py_False and Py_True are the only two bools in existence.
-Don't forget to apply Py_INCREF() when returning either!!! */
+/* Py_False and Py_True are the only two bools in existence. */
 
 /* Don't use these directly */
 PyAPI_DATA(struct _longobject*) _Py_FalseStructReference;
@@ -26,8 +25,13 @@ PyAPI_DATA(struct _longobject*) _Py_TrueStructReference;
 #define _Py_FalseStruct (*_Py_FalseStructReference)
 
 /* Use these macros */
-#define Py_False ((PyObject *) _Py_FalseStructReference)
-#define Py_True ((PyObject *) _Py_TrueStructReference)
+#if defined(Py_LIMITED_API) && Py_LIMITED_API+0 >= 0x030D0000
+#  define Py_False Py_GetConstantBorrowed(Py_CONSTANT_FALSE)
+#  define Py_True Py_GetConstantBorrowed(Py_CONSTANT_TRUE)
+#else
+#  define Py_False ((PyObject *) _Py_FalseStructReference)
+#  define Py_True ((PyObject *) _Py_TrueStructReference)
+#endif
 
 // Test if an object is the True singleton, the same as "x is True" in Python.
 PyAPI_FUNC(int) Py_IsTrue(PyObject *x);
@@ -37,9 +41,16 @@ PyAPI_FUNC(int) Py_IsTrue(PyObject *x);
 PyAPI_FUNC(int) Py_IsFalse(PyObject *x);
 #define Py_IsFalse(x) Py_Is((x), Py_False)
 
-/* Macros for returning Py_True or Py_False, respectively */
-#define Py_RETURN_TRUE return Py_NewRef(Py_True)
-#define Py_RETURN_FALSE return Py_NewRef(Py_False)
+/* Macros for returning Py_True or Py_False, respectively.
+ * Only treat Py_True and Py_False as immortal in the limited C API 3.12
+ * and newer. */
+#if defined(Py_LIMITED_API) && Py_LIMITED_API+0 < 0x030c0000
+#  define Py_RETURN_TRUE return Py_NewRef(Py_True)
+#  define Py_RETURN_FALSE return Py_NewRef(Py_False)
+#else
+#  define Py_RETURN_TRUE return Py_True
+#  define Py_RETURN_FALSE return Py_False
+#endif
 
 /* Function to return a bool from a C long */
 PyAPI_FUNC(PyObject *) PyBool_FromLong(long);

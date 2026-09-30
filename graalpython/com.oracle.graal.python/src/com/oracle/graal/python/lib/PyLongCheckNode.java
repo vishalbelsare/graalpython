@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,12 +40,22 @@
  */
 package com.oracle.graal.python.lib;
 
+import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyObject__ob_type;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readLongField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readPtrField;
+
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.builtins.objects.type.TypeFlags;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.SpecialMethodNames;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
@@ -91,14 +101,24 @@ public abstract class PyLongCheckNode extends PNodeWithContext {
     }
 
     @Specialization
+    public static boolean doNative(PythonAbstractNativeObject nativeObject) {
+        long obType = readPtrField(nativeObject.pointer, PyObject__ob_type);
+        boolean isLongSubclass = (readLongField(obType, CFields.PyTypeObject__tp_flags) & TypeFlags.LONG_SUBCLASS) != 0L;
+        assert IsBuiltinObjectProfile.profileObjectUncached(nativeObject, PythonBuiltinClassType.PInt) == isLongSubclass;
+        return isLongSubclass;
+    }
+
+    @Specialization
+    @InliningCutoff
     static boolean doGeneric(Node inliningTarget, Object object,
                     @Cached GetClassNode getClassNode,
                     @Cached(inline = false) IsSubtypeNode isSubtypeNode,
+                    @Cached IsForeignObjectNode isForeignObjectNode,
                     @CachedLibrary(limit = "3") InteropLibrary interopLibrary) {
         Object type = getClassNode.execute(inliningTarget, object);
         if (isSubtypeNode.execute(type, PythonBuiltinClassType.PInt)) {
             return true;
-        } else if (type == PythonBuiltinClassType.ForeignObject) {
+        } else if (isForeignObjectNode.execute(inliningTarget, object)) {
             return interopLibrary.fitsInLong(object);
         }
         return false;

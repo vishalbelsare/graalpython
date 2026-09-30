@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,26 +40,35 @@
  */
 package com.oracle.graal.python.runtime.exception;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.MemoryError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.RecursionError;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_SYS;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ListIterator;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.exception.ExceptionNodes;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.generator.PGenerator;
 import com.oracle.graal.python.builtins.objects.traceback.LazyTraceback;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
 import com.oracle.graal.python.nodes.BuiltinNames;
-import com.oracle.graal.python.nodes.bytecode.FrameInfo;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLFrameInfo;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.exception.TopLevelExceptionHandler;
 import com.oracle.graal.python.nodes.function.BuiltinFunctionRootNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -67,8 +76,9 @@ import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleStackTrace;
 import com.oracle.truffle.api.TruffleStackTraceElement;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
 import com.oracle.truffle.api.interop.InteropLibrary;
@@ -85,6 +95,18 @@ public final class ExceptionUtils {
     @TruffleBoundary
     public static void printPythonLikeStackTrace() {
         CompilerAsserts.neverPartOfCompilation("printPythonLikeStackTrace is a debug method");
+        printStack(new PrintWriter(System.err, true), getStackTraceElements());
+    }
+
+    @TruffleBoundary
+    public static String getPythonLikeStackTrace() {
+        CompilerAsserts.neverPartOfCompilation("getPythonLikeStackTrace is a debug method");
+        var sw = new StringWriter();
+        printStack(new PrintWriter(sw, true), getStackTraceElements());
+        return sw.toString();
+    }
+
+    private static ArrayList<String> getStackTraceElements() {
         final ArrayList<String> stack = new ArrayList<>();
         Truffle.getRuntime().iterateFrames((FrameInstanceVisitor<Frame>) frameInstance -> {
             RootCallTarget target = (RootCallTarget) frameInstance.getCallTarget();
@@ -93,24 +115,36 @@ public final class ExceptionUtils {
             if (location == null) {
                 location = rootNode;
             }
-            int lineno = getLineno(frameInstance.getFrame(FrameInstance.FrameAccess.READ_ONLY));
+            int lineno = getLineno(frameInstance.getFrame(FrameInstance.FrameAccess.READ_ONLY), location, frameInstance);
             appendStackLine(stack, location, rootNode, true, lineno);
             return null;
         });
-        printStack(new PrintWriter(System.err, true), stack);
+        return stack;
     }
 
-    private static int getLineno(Frame frame) {
-        int lineno = -1;
-        if (frame != null) {
-            FrameDescriptor fd = frame.getFrameDescriptor();
-            if (fd.getInfo() instanceof FrameInfo) {
-                FrameInfo frameInfo = (FrameInfo) fd.getInfo();
-                int bci = frameInfo.getBci(frame);
-                lineno = frameInfo.getRootNode().bciToLine(bci);
+    private static int getLineno(Frame frame, Node location, FrameInstance frameInstance) {
+        if (frame != null && frame.getFrameDescriptor().getInfo() instanceof BytecodeDSLFrameInfo frameInfo) {
+            BytecodeNode bytecodeNode;
+            if (frameInstance != null) {
+                bytecodeNode = BytecodeNode.get(frameInstance);
+            } else {
+                // NB: This fails for the top stack frame, which has no BytecodeNode.
+                bytecodeNode = BytecodeNode.get(location);
+            }
+
+            if (bytecodeNode != null) {
+                if (PGenerator.isGeneratorFrame(frame)) {
+                    frame = PGenerator.getGeneratorFrame(frame);
+                }
+                int bci = bytecodeNode.getBytecodeIndex(frame);
+                SourceSection sourceLocation = bytecodeNode.getBytecodeLocation(bci).getSourceLocation();
+                if (sourceLocation != null) {
+                    return sourceLocation.getStartLine();
+                }
             }
         }
-        return lineno;
+        return -1;
+
     }
 
     @TruffleBoundary
@@ -138,17 +172,7 @@ public final class ExceptionUtils {
 
     @TruffleBoundary
     public static void printPythonLikeStackTrace(PrintWriter p, Throwable e) {
-        List<TruffleStackTraceElement> stackTrace = TruffleStackTrace.getStackTrace(e);
-        if (stackTrace != null) {
-            ArrayList<String> stack = new ArrayList<>();
-            for (TruffleStackTraceElement frame : stackTrace) {
-                Node location = frame.getLocation();
-                RootNode rootNode = frame.getTarget().getRootNode();
-                int lineno = getLineno(frame.getFrame());
-                appendStackLine(stack, location, rootNode, false, lineno);
-            }
-            printStack(p, stack);
-        }
+        printPythonLikeStackTraceNoMessage(p, e);
         InteropLibrary lib = InteropLibrary.getUncached();
         if (lib.isException(e) && lib.hasExceptionMessage(lib)) {
             try {
@@ -162,12 +186,27 @@ public final class ExceptionUtils {
         }
     }
 
+    @TruffleBoundary
+    public static void printPythonLikeStackTraceNoMessage(PrintWriter p, Throwable e) {
+        List<TruffleStackTraceElement> stackTrace = TruffleStackTrace.getStackTrace(e);
+        if (stackTrace != null) {
+            ArrayList<String> stack = new ArrayList<>();
+            for (TruffleStackTraceElement frame : stackTrace) {
+                Node location = frame.getLocation();
+                RootNode rootNode = frame.getTarget().getRootNode();
+                int lineno = getLineno(PGenerator.unwrapDSLGeneratorFrame(frame), location, null);
+                appendStackLine(stack, location, rootNode, false, lineno);
+            }
+            printStack(p, stack);
+        }
+    }
+
     private static void appendStackLine(ArrayList<String> stack, Node location, RootNode rootNode, boolean evenWithoutSource, int lineno) {
         if (rootNode instanceof TopLevelExceptionHandler) {
             return;
         }
         StringBuilder sb = new StringBuilder();
-        SourceSection sourceSection = location != null ? location.getEncapsulatingSourceSection() : null;
+        SourceSection sourceSection = location != null ? location.getEncapsulatingSourceSection() : rootNode.getSourceSection();
         if (sourceSection != null) {
             sb.append("  File \"");
             Source source = sourceSection.getSource();
@@ -177,11 +216,11 @@ public final class ExceptionUtils {
             sb.append(", in ");
             sb.append(rootNode.getName());
         } else if (evenWithoutSource) {
-            if (rootNode instanceof BuiltinFunctionRootNode) {
+            if (rootNode instanceof BuiltinFunctionRootNode builtinRoot) {
                 sb.append("  Builtin function ");
                 sb.append(rootNode.getName());
                 sb.append(" (node class ");
-                sb.append(((BuiltinFunctionRootNode) rootNode).getFactory().getNodeClass().getName());
+                sb.append(builtinRoot.getFactory().getNodeClass().getName());
                 sb.append(")");
             } else {
                 sb.append("  Builtin root ");
@@ -216,9 +255,9 @@ public final class ExceptionUtils {
         if (hook != PNone.NO_VALUE) {
             try {
                 // Note: it is important to pass frame 'null' because that will cause the
-                // CallNode to tread the invoke like a foreign call and access the top frame ref
+                // NewNode to tread the invoke like a foreign call and access the top frame ref
                 // in the context.
-                CallNode.getUncached().execute(null, hook, new Object[]{type, pythonException, tb}, PKeyword.EMPTY_KEYWORDS);
+                CallNode.executeUncached(hook, new Object[]{type, pythonException, tb}, PKeyword.EMPTY_KEYWORDS);
             } catch (PException internalError) {
                 // More complex handling of errors in exception printing is done in our
                 // Python code, if we get here, we just fall back to the launcher
@@ -239,7 +278,10 @@ public final class ExceptionUtils {
 
     @TruffleBoundary
     public static void printJavaStackTrace(PException e) {
-        LazyTraceback traceback = e.getTraceback();
+        LazyTraceback traceback = null;
+        if (e.getUnreifiedException() instanceof PBaseException pythonException) {
+            traceback = pythonException.getTraceback();
+        }
         // Find the exception for the original raise site (not for subsequent reraises)
         while (traceback != null && traceback.getNextChain() != null) {
             traceback = traceback.getNextChain();
@@ -259,5 +301,36 @@ public final class ExceptionUtils {
 
     public static PException wrapJavaException(Throwable e, Node node, PBaseException pythonException) {
         return PException.fromObject(pythonException, node, e);
+    }
+
+    public static PException wrapJavaExceptionIfApplicable(Node location, Throwable e) {
+        if (e instanceof StackOverflowError) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            PythonContext context = PythonContext.get(null);
+            context.ensureGilAfterFailure();
+            return ExceptionUtils.wrapJavaException(e, location, PFactory.createBaseException(context.getLanguage(), RecursionError, ErrorMessages.MAXIMUM_RECURSION_DEPTH_EXCEEDED, new Object[]{}));
+        }
+        if (e instanceof OutOfMemoryError) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            return ExceptionUtils.wrapJavaException(e, location, PFactory.createBaseException(PythonLanguage.get(null), MemoryError));
+        }
+        return null;
+    }
+
+    @TruffleBoundary
+    public static String getExceptionMessage(Object exception) {
+        final Object type = GetClassNode.executeUncached(exception);
+        String typeName = TypeNodes.GetNameNode.executeUncached(type).toJavaStringUncached();
+        String str;
+        try {
+            str = PyObjectStrAsTruffleStringNode.executeUncached(exception).toJavaStringUncached();
+        } catch (AbstractTruffleException e) {
+            str = "<exception str() failed>";
+        }
+        if (str.isEmpty()) {
+            return typeName;
+        } else {
+            return typeName + ": " + str;
+        }
     }
 }

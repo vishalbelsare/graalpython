@@ -1,16 +1,15 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2024, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
 
-import unittest
 import random
 import time
+import unittest
 
 
-class TestBasicOps:
-    def __init__(self):
-        super().__init__()
+class TestBasicOps(unittest.TestCase):
+    def setUp(self):
         self.gen = random.Random()
 
     def randomlist(self, n):
@@ -38,14 +37,18 @@ class TestBasicOps:
         class MySeed(object):
             def __hash__(self):
                 return -1729
-        for arg in [None, 0, 0, 1, 1, -1, -1, 10**20, -(10**20),
-                    3.14, 1+2j, 'a', tuple('abc'), MySeed()]:
+        for arg in [None, 0, 1, -1, 10**20, -(10**20),
+                    False, True, 3.14, 'a']:
             self.gen.seed(arg)
+
+        for arg in [1+2j, tuple('abc'), MySeed()]:
+            with self.assertRaises(TypeError):
+                self.gen.seed(arg)
+
         for arg in [list(range(3)), dict(one=1)]:
             self.assertRaises(TypeError, self.gen.seed, arg)
         self.assertRaises(TypeError, self.gen.seed, 1, 2, 3, 4)
         self.assertRaises(TypeError, type(self.gen), [])
-
     def test_shuffle(self):
         shuffle = self.gen.shuffle
         lst = []
@@ -123,7 +126,6 @@ class TestBasicOps:
 
     def test_sample_inputs(self):
         # SF bug #801342 -- population can be any iterable defining __len__()
-        self.gen.sample(set(range(20)), 2)
         self.gen.sample(range(20), 2)
         self.gen.sample(range(20), 2)
         self.gen.sample(str('abcdefghijklmnopqrst'), 2)
@@ -133,11 +135,6 @@ class TestBasicOps:
         self.assertRaises(TypeError, self.gen.sample, dict.fromkeys('abcdef'), 2)
 
     def test_choices(self):
-        import sys
-        return # TODO: re-enable once we update again
-        if sys.version_info.minor < 7:
-            return
-
         choices = self.gen.choices
         data = ['red', 'green', 'blue', 'yellow']
         str_data = 'abcd'

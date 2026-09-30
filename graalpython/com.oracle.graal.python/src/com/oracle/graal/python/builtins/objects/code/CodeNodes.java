@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,27 +42,19 @@ package com.oracle.graal.python.builtins.objects.code;
 
 import java.util.Arrays;
 
-import org.graalvm.polyglot.io.ByteSequence;
-
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.modules.MarshalModuleBuiltins;
-import com.oracle.graal.python.builtins.objects.code.CodeNodesFactory.GetCodeCallTargetNodeGen;
-import com.oracle.graal.python.builtins.objects.code.CodeNodesFactory.GetCodeRootNodeGen;
 import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.function.Signature;
-import com.oracle.graal.python.compiler.CodeUnit;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRootNode;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeGeneratorFunctionRootNode;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnit;
 import com.oracle.graal.python.nodes.util.BadOPCodeNode;
-import com.oracle.graal.python.runtime.ExecutionContext.IndirectCallContext;
-import com.oracle.graal.python.runtime.IndirectCallData;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
-import com.oracle.graal.python.util.Supplier;
-import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -76,114 +68,115 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
-import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public abstract class CodeNodes {
 
+    @SuppressWarnings("this-escape")
     public static class CreateCodeNode extends PNodeWithContext {
-        @SuppressWarnings("this-escape") // we only need the reference, doesn't matter that the
-                                         // object may not yet be fully constructed
-        private final IndirectCallData indirectCallData = IndirectCallData.createFor(this);
+        @Child private BoundaryCallData boundaryCallData = BoundaryCallData.createFor(this);
+
+        @TruffleBoundary
+        public static PCode executeUncached(int argcount,
+                        int posonlyargcount, int kwonlyargcount,
+                        int nlocals, int stacksize, int flags,
+                        byte[] codedata, Object[] constants, TruffleString[] names,
+                        TruffleString[] varnames, TruffleString[] freevars, TruffleString[] cellvars,
+                        TruffleString filename, TruffleString name, TruffleString qualname, int firstlineno,
+                        byte[] linetable) {
+            return executeInternal(null, null, BoundaryCallData.getUncached(),
+                            argcount, posonlyargcount, kwonlyargcount, nlocals, stacksize, flags, codedata,
+                            constants, names, varnames, freevars, cellvars,
+                            filename, name, qualname, firstlineno, linetable);
+        }
 
         public PCode execute(VirtualFrame frame, int argcount,
                         int posonlyargcount, int kwonlyargcount,
                         int nlocals, int stacksize, int flags,
                         byte[] codedata, Object[] constants, TruffleString[] names,
                         TruffleString[] varnames, TruffleString[] freevars, TruffleString[] cellvars,
-                        TruffleString filename, TruffleString name, int firstlineno,
+                        TruffleString filename, TruffleString name, TruffleString qualname, int firstlineno,
                         byte[] linetable) {
+            return executeInternal(frame, this, boundaryCallData,
+                            argcount, posonlyargcount, kwonlyargcount, nlocals, stacksize, flags, codedata,
+                            constants, names, varnames, freevars, cellvars,
+                            filename, name, qualname, firstlineno, linetable);
+        }
 
-            PythonLanguage language = PythonLanguage.get(this);
-            PythonContext context = PythonContext.get(this);
-            Object state = IndirectCallContext.enter(frame, language, context, indirectCallData);
+        private static PCode executeInternal(VirtualFrame frame, Node node, BoundaryCallData boundaryCallData,
+                        int argcount, int posonlyargcount, int kwonlyargcount,
+                        int nlocals, int stacksize, int flags,
+                        byte[] codedata, Object[] constants, TruffleString[] names,
+                        TruffleString[] varnames, TruffleString[] freevars, TruffleString[] cellvars,
+                        TruffleString filename, TruffleString name, TruffleString qualname, int firstlineno,
+                        byte[] linetable) {
+            PythonContext context = PythonContext.get(node);
+            PythonLanguage language = context.getLanguage(node);
+            Object state = BoundaryCallContext.enter(frame, language, context, boundaryCallData);
             try {
-                return createCode(language, context, argcount,
+                return createCode(language, argcount,
                                 posonlyargcount, kwonlyargcount, nlocals, stacksize, flags, codedata,
-                                constants, names, varnames, freevars, cellvars, filename, name, firstlineno, linetable);
+                                constants, names, varnames, freevars, cellvars,
+                                filename, name, qualname, firstlineno, linetable);
             } finally {
-                IndirectCallContext.exit(frame, language, context, state);
+                BoundaryCallContext.exit(frame, language, context, state);
             }
         }
 
         @TruffleBoundary
-        private static PCode createCode(PythonLanguage language, PythonContext context, int argCount,
+        private static PCode createCode(PythonLanguage language, int argCount,
                         int positionalOnlyArgCount, int kwOnlyArgCount,
                         int nlocals, int stacksize, int flags,
                         byte[] codedata, Object[] constants, TruffleString[] names,
                         TruffleString[] varnames, TruffleString[] freevars, TruffleString[] cellvars,
-                        TruffleString filename, TruffleString name, int firstlineno,
+                        TruffleString filename, TruffleString uninternedName, TruffleString qualname, int firstlineno,
                         byte[] linetable) {
+            filename = PythonUtils.internString(filename);
+            TruffleString name = PythonUtils.internString(uninternedName);
+            qualname = PythonUtils.internString(qualname);
 
-            RootCallTarget ct;
+            PRootNode rootNode;
             Signature signature;
             if (codedata.length == 0) {
-                ct = language.createCachedCallTarget(l -> new BadOPCodeNode(l, name), BadOPCodeNode.class, filename, name);
+                rootNode = language.createCachedRootNode(l -> new BadOPCodeNode(l, name), BadOPCodeNode.class, name.toJavaStringUncached());
                 /*
                  * We need to create a proper signature because this code path is used to create
                  * fake code objects for duck-typed function-like objects, such as Cython functions.
                  * Even if the code object is not executable, it will be used for introspection when
                  * you call `inspect.signature()` on such function-like object.
                  */
-                int posArgCount = argCount + positionalOnlyArgCount;
-                TruffleString[] parameterNames = Arrays.copyOf(varnames, posArgCount);
-                TruffleString[] kwOnlyNames = Arrays.copyOfRange(varnames, posArgCount, posArgCount + kwOnlyArgCount);
+                // Like CPython's co_argcount, argCount already includes positional-only arguments.
+                int posArgCount = argCount;
+                TruffleString[] parameterNames, kwOnlyNames;
+                if (varnames != null) {
+                    parameterNames = Arrays.copyOf(varnames, posArgCount);
+                    kwOnlyNames = Arrays.copyOfRange(varnames, posArgCount, posArgCount + kwOnlyArgCount);
+                } else {
+                    parameterNames = kwOnlyNames = PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
+                }
                 int varArgsIndex = (flags & PCode.CO_VARARGS) != 0 ? posArgCount : -1;
                 signature = new Signature(positionalOnlyArgCount,
                                 (flags & PCode.CO_VARKEYWORDS) != 0,
                                 varArgsIndex,
-                                positionalOnlyArgCount > 0,
                                 parameterNames,
                                 kwOnlyNames);
+                return PFactory.createCode(language, rootNode, signature, nlocals, stacksize, flags, constants, names, varnames, freevars, cellvars, filename, name, qualname, firstlineno, linetable);
             } else {
-                ct = create().deserializeForBytecodeInterpreter(language, codedata, cellvars, freevars);
-                signature = ((PRootNode) ct.getRootNode()).getSignature();
+                rootNode = deserializeForBytecodeInterpreter(language, codedata, cellvars, freevars, flags);
+                signature = rootNode.getSignature();
             }
-            if (filename != null) {
-                context.setCodeFilename(ct, filename);
-            }
-            PythonObjectFactory factory = context.factory();
-            return factory.createCode(ct, signature, nlocals, stacksize, flags, constants, names, varnames, freevars, cellvars, filename, name, firstlineno, linetable);
+            return PFactory.createCode(language, rootNode, signature, nlocals, stacksize, flags, constants, names, varnames, freevars, cellvars, filename, name, qualname, firstlineno, linetable);
         }
 
-        @SuppressWarnings("static-method")
-        private RootCallTarget deserializeForBytecodeInterpreter(PythonLanguage language, byte[] data, TruffleString[] cellvars, TruffleString[] freevars) {
-            CodeUnit code = MarshalModuleBuiltins.deserializeCodeUnit(data);
-            if (cellvars != null && !Arrays.equals(code.cellvars, cellvars) || freevars != null && !Arrays.equals(code.freevars, freevars)) {
-                code = new CodeUnit(code.name, code.qualname, code.argCount, code.kwOnlyArgCount, code.positionalOnlyArgCount, code.stacksize, code.code,
-                                code.srcOffsetTable, code.flags, code.names, code.varnames,
-                                cellvars != null ? cellvars : code.cellvars, freevars != null ? freevars : code.freevars,
-                                code.cell2arg, code.constants, code.primitiveConstants, code.exceptionHandlerRanges, code.conditionProfileCount,
-                                code.startLine, code.startColumn, code.endLine, code.endColumn,
-                                code.outputCanQuicken, code.variableShouldUnbox,
-                                code.generalizeInputsMap, code.generalizeVarsMap);
-            }
-            RootNode rootNode = PBytecodeRootNode.create(language, code, PythonUtils.createFakeSource());
-            if (code.isGeneratorOrCoroutine()) {
-                rootNode = new PBytecodeGeneratorFunctionRootNode(language, rootNode.getFrameDescriptor(), (PBytecodeRootNode) rootNode, code.name);
-            }
-            return PythonUtils.getOrCreateCallTarget(rootNode);
-        }
+        private static PRootNode deserializeForBytecodeInterpreter(PythonLanguage language, byte[] data, TruffleString[] cellvars, TruffleString[] freevars, int flags) {
+            RootNode rootNode;
 
-        @TruffleBoundary
-        public static PCode createCode(PythonContext context, int flags, byte[] codedata, TruffleString filename, int firstlineno, byte[] lnotab) {
-            boolean isNotAModule = (flags & PCode.CO_GRAALPYHON_MODULE) == 0;
-            String jFilename = filename.toJavaStringUncached();
-            PythonLanguage language = context.getLanguage();
-            Supplier<CallTarget> createCode = () -> {
-                ByteSequence bytes = ByteSequence.create(codedata);
-                Source source = Source.newBuilder(PythonLanguage.ID, bytes, jFilename).mimeType(PythonLanguage.MIME_TYPE_BYTECODE).cached(!language.isSingleContext()).build();
-                return context.getEnv().parsePublic(source);
-            };
-
-            PythonObjectFactory factory = context.factory();
-            if (context.isCoreInitialized() || isNotAModule) {
-                return factory.createCode(createCode, flags, firstlineno, lnotab, filename);
-            } else {
-                RootCallTarget ct = (RootCallTarget) language.cacheCode(filename, createCode);
-                return factory.createCode(ct, flags, firstlineno, lnotab, filename);
+            BytecodeDSLCodeUnit code = MarshalModuleBuiltins.deserializeCodeUnit(null, language, data);
+            if (code.flags != flags) {
+                code = code.withFlags(flags);
             }
+            rootNode = code.createRootNode(language, false);
+            return (PRootNode) rootNode;
         }
 
         @NeverDefault
@@ -197,30 +190,22 @@ public abstract class CodeNodes {
     @GenerateCached(false)
     public abstract static class GetCodeCallTargetNode extends PNodeWithContext {
 
-        GetCodeCallTargetNode() {
-        }
-
         public abstract RootCallTarget execute(Node inliningTarget, PCode code);
 
+        @TruffleBoundary
         public static RootCallTarget executeUncached(PCode code) {
-            return GetCodeCallTargetNodeGen.getUncached().execute(null, code);
+            return CodeNodesFactory.GetCodeCallTargetNodeGen.getUncached().execute(null, code);
         }
 
         @Specialization(guards = {"cachedCode == code", "isSingleContext()"}, limit = "2")
         static RootCallTarget doCachedCode(@SuppressWarnings("unused") PCode code,
-                        @SuppressWarnings("unused") @Cached(value = "code", weak = true) PCode cachedCode,
-                        @Cached(value = "code.initializeCallTarget()", weak = true) RootCallTarget cachedRootCallTarget) {
-            return cachedRootCallTarget;
+                        @Cached(value = "code", weak = true) PCode cachedCode) {
+            return cachedCode.getRootCallTarget();
         }
 
         @Specialization(replaces = "doCachedCode")
-        static RootCallTarget doGeneric(Node inliningTarget, PCode code,
-                        @Cached InlinedConditionProfile hasCtProfile) {
-            RootCallTarget ct = code.callTarget;
-            if (hasCtProfile.profile(inliningTarget, ct == null)) {
-                ct = code.initializeCallTarget();
-            }
-            return ct;
+        static RootCallTarget doGeneric(PCode code) {
+            return code.getRootCallTarget();
         }
     }
 
@@ -229,6 +214,11 @@ public abstract class CodeNodes {
     @GenerateCached(false)
     public abstract static class GetCodeSignatureNode extends PNodeWithContext {
         public abstract Signature execute(Node inliningTarget, PCode code);
+
+        @TruffleBoundary
+        public static Signature executeUncached(PCode code) {
+            return CodeNodesFactory.GetCodeSignatureNodeGen.getUncached().execute(null, code);
+        }
 
         @Specialization(guards = {"cachedCode == code", "isSingleContext(inliningTarget)"}, limit = "2")
         static Signature doCached(Node inliningTarget, @SuppressWarnings("unused") PCode code,
@@ -254,28 +244,8 @@ public abstract class CodeNodes {
         }
 
         @Specialization(replaces = "doCached")
-        static Signature doCode(Node inliningTarget, PCode code,
-                        @Cached InlinedConditionProfile signatureProfile,
-                        @Cached InlinedConditionProfile ctProfile) {
-            return code.getSignature(inliningTarget, signatureProfile);
-        }
-    }
-
-    @GenerateUncached
-    @GenerateInline
-    @GenerateCached(false)
-    public abstract static class GetCodeRootNode extends Node {
-
-        public abstract RootNode execute(Node inliningTarget, PCode code);
-
-        public static RootNode executeUncached(PCode code) {
-            return GetCodeRootNodeGen.getUncached().execute(null, code);
-        }
-
-        @Specialization
-        static RootNode doIt(Node inliningTarget, PCode code,
-                        @Cached GetCodeCallTargetNode getCodeCallTargetNode) {
-            return getCodeCallTargetNode.execute(inliningTarget, code).getRootNode();
+        static Signature doCode(PCode code) {
+            return code.getSignature();
         }
     }
 }

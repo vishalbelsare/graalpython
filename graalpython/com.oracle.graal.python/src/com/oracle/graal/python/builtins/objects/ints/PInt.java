@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -28,7 +28,9 @@ package com.oracle.graal.python.builtins.objects.ints;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.OverflowError;
 
 import java.math.BigInteger;
+import java.util.Objects;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
@@ -36,7 +38,7 @@ import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -51,6 +53,7 @@ import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.library.ExportMessage.Ignore;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @SuppressWarnings("truffle-abstract-export")
@@ -117,19 +120,16 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean isNumber(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) {
         PythonContext context = PythonContext.get(self);
-        if (isBoolean.profile(inliningTarget, this == context.getTrue() || this == context.getFalse())) {
-            return false;
-        }
-        return true;
+        return !isBoolean.profile(inliningTarget, this == context.getTrue() || this == context.getFalse());
     }
 
     @ExportMessage
     public boolean fitsInByte(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -141,7 +141,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     public byte asByte(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) throws UnsupportedMessageException {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -158,7 +158,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     boolean fitsInShort(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -170,7 +170,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage(limit = "1")
     short asShort(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this.intValue()") InteropLibrary interop) throws UnsupportedMessageException {
         if (isNumber(inliningTarget, isBoolean, interop)) {
@@ -187,7 +187,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean fitsInInt(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -199,7 +199,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     public int asInt(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) throws UnsupportedMessageException {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -216,7 +216,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean fitsInLong(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -228,7 +228,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage
     public long asLong(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this") InteropLibrary self) throws UnsupportedMessageException {
         if (isNumber(inliningTarget, isBoolean, self)) {
@@ -245,7 +245,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage(limit = "1")
     boolean fitsInFloat(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this.longValue()") InteropLibrary interop) {
         try {
@@ -257,7 +257,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage(limit = "1")
     float asFloat(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this.longValue()") InteropLibrary interop) throws UnsupportedMessageException {
         if (isNumber(inliningTarget, isBoolean, interop)) {
@@ -274,7 +274,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage(limit = "1")
     boolean fitsInDouble(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this.longValue()") InteropLibrary interop) {
         try {
@@ -286,7 +286,7 @@ public final class PInt extends PythonBuiltinObject {
 
     @ExportMessage(limit = "1")
     double asDouble(
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("isBoolean") @Cached InlinedConditionProfile isBoolean,
                     @CachedLibrary("this.longValue()") InteropLibrary interop) throws UnsupportedMessageException {
         if (isNumber(inliningTarget, isBoolean, interop)) {
@@ -336,6 +336,16 @@ public final class PInt extends PythonBuiltinObject {
     @TruffleBoundary
     private static int compareTo(BigInteger left, long right) {
         return left.compareTo(longToBigInteger(right));
+    }
+
+    @TruffleBoundary
+    public static int compareTo(long left, PInt right) {
+        if (Objects.equals(right.value, BigInteger.ZERO)) {
+            return Long.compare(left, 0);
+        } else if (Objects.equals(right.value, BigInteger.ONE)) {
+            return Long.compare(left, 1);
+        }
+        return longToBigInteger(left).compareTo(right.value);
     }
 
     @Override
@@ -390,7 +400,7 @@ public final class PInt extends PythonBuiltinObject {
     public static double doubleValueWithOverflow(Node raisingNode, BigInteger value) {
         double d = value.doubleValue();
         if (Double.isInfinite(d)) {
-            throw PRaiseNode.raiseUncached(raisingNode, OverflowError, ErrorMessages.INT_TOO_LARGE_TO_CONVERT_TO_FLOAT);
+            throw PRaiseNode.raiseStatic(raisingNode, OverflowError, ErrorMessages.INT_TOO_LARGE_TO_CONVERT_TO_FLOAT);
         }
         return d;
     }
@@ -588,6 +598,29 @@ public final class PInt extends PythonBuiltinObject {
         return val == (int) val;
     }
 
+    public static int long2int(Node inliningTarget, long size, InlinedBranchProfile errorProfile) {
+        int intSize = (int) size;
+        if (intSize != size) {
+            errorProfile.enter(inliningTarget);
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.OverflowError, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, size);
+        }
+        return intSize;
+    }
+
+    public static Object abs(int v) {
+        if (v == Integer.MIN_VALUE) {
+            return -(long) Integer.MIN_VALUE;
+        }
+        return Math.abs(v);
+    }
+
+    public static Object abs(Node inliningTarget, long v) {
+        if (v == Long.MIN_VALUE) {
+            return PFactory.createInt(PythonLanguage.get(inliningTarget), abs(PInt.longToBigInteger(v)));
+        }
+        return Math.abs(v);
+    }
+
     public BigInteger abs() {
         if (value.signum() < 0) {
             return abs(value);
@@ -645,7 +678,7 @@ public final class PInt extends PythonBuiltinObject {
         return value.compareTo(left) >= 0 && value.compareTo(right) <= 0;
     }
 
-    private boolean fitsIn(BigInteger left, BigInteger right) {
+    public boolean fitsIn(BigInteger left, BigInteger right) {
         return fitsIn(value, left, right);
     }
 
@@ -653,19 +686,24 @@ public final class PInt extends PythonBuiltinObject {
      * Creates a Python {@code int} object from a Java {@code long} value by interpreting it as an
      * unsigned number.
      *
-     * @param factory Python object factory
      * @param profile condition profile for the case when the unsigned value fits into Java
      *            {@code long}
      * @param value the value
      * @return either {@code Long} or {@code PInt} containing an unsigned value with bit pattern
      *         matching that of {@code value}
      */
-    public static Object createPythonIntFromUnsignedLong(Node inliningTarget, PythonObjectFactory factory, InlinedConditionProfile profile, long value) {
-        return profile.profile(inliningTarget, value >= 0) ? value : factory.createInt(longToUnsignedBigInt(value));
+    public static Object createPythonIntFromUnsignedLong(Node inliningTarget, PythonLanguage language, InlinedConditionProfile profile, long value) {
+        return profile.profile(inliningTarget, value >= 0) ? value : PFactory.createInt(language, longToUnsignedBigInt(value));
     }
 
     @TruffleBoundary
     private static BigInteger longToUnsignedBigInt(long l) {
         return BigInteger.valueOf(l >>> 32).shiftLeft(32).add(BigInteger.valueOf(l & 0xFFFFFFFFL));
+    }
+
+    @Ignore
+    public static boolean fitsInInt(long l) {
+        int i = (int) l;
+        return l == i;
     }
 }

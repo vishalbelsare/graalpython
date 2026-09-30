@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,8 +38,8 @@
 # SOFTWARE.
 
 import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+
+from . import CPyExtTestCase, CPyExtFunction, CPyExtType, assert_raises, CPyExtHeapType
 
 
 class DummyClass():
@@ -51,10 +51,6 @@ DummyInstance = DummyClass()
 
 
 class TestClassobject(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super().compile_module(name)
-
     testmod = type(sys)("foo")
 
     test_PyMethod_Function = CPyExtFunction(
@@ -80,3 +76,29 @@ class TestClassobject(CPyExtTestCase):
         argspec="O",
         arguments=["PyObject* func"],
     )
+
+    def test_name_qualname(self):
+        TypeWithName = CPyExtType('TypeWithName')
+        assert TypeWithName.__name__ == 'TypeWithName'
+        assert TypeWithName.__qualname__ == 'TypeWithName'
+        assert_raises(TypeError, setattr, '__name__', TypeWithName, "foo")
+        assert_raises(TypeError, setattr, '__qualname__', TypeWithName, "foo")
+
+        HeapTypeWithName = CPyExtHeapType('HeapTypeWithName')
+        assert HeapTypeWithName.__name__ == 'HeapTypeWithName'
+        assert HeapTypeWithName.__qualname__ == 'HeapTypeWithName'
+        HeapTypeWithName.__name__ = 'HeapTypeWithNameRenamed'
+        assert HeapTypeWithName.__name__ == 'HeapTypeWithNameRenamed'
+        HeapTypeWithName.__qualname__ = 'foo.HeapTypeWithNameRenamed'
+        assert HeapTypeWithName.__qualname__ == 'foo.HeapTypeWithNameRenamed'
+
+        DottedModuleType = CPyExtHeapType(
+            'DottedModuleType',
+            ready_code='spec.name = "pkg.mod.DottedModuleType";',
+            slots=[
+                '{Py_tp_doc, (void *)"DottedModuleType($self, /)\\n--\\n\\nReturn dotted module type metadata."}',
+            ],
+        )
+        assert DottedModuleType.__name__ == 'DottedModuleType'
+        assert DottedModuleType.__module__ == 'pkg.mod'
+        assert DottedModuleType.__doc__ == 'Return dotted module type metadata.'

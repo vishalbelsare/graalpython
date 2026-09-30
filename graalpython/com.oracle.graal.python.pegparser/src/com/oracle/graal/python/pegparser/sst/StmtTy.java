@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -58,10 +58,11 @@ public abstract class StmtTy extends SSTNode {
         public final ArgumentsTy args;
         public final StmtTy[] body;   // nullable
         public final ExprTy[] decoratorList;   // nullable
-        public final ExprTy returns;   // nullable
+        public ExprTy returns;   // nullable
         public final Object typeComment;   // nullable
+        public final TypeParamTy[] typeParams;   // nullable
 
-        public FunctionDef(String name, ArgumentsTy args, StmtTy[] body, ExprTy[] decoratorList, ExprTy returns, Object typeComment, SourceRange sourceRange) {
+        public FunctionDef(String name, ArgumentsTy args, StmtTy[] body, ExprTy[] decoratorList, ExprTy returns, Object typeComment, TypeParamTy[] typeParams, SourceRange sourceRange) {
             super(sourceRange);
             assert name != null;
             this.name = name;
@@ -71,6 +72,11 @@ public abstract class StmtTy extends SSTNode {
             this.decoratorList = decoratorList;
             this.returns = returns;
             this.typeComment = typeComment;
+            this.typeParams = typeParams;
+        }
+
+        public boolean isGeneric() {
+            return typeParams != null && typeParams.length > 0;
         }
 
         @Override
@@ -84,10 +90,11 @@ public abstract class StmtTy extends SSTNode {
         public final ArgumentsTy args;
         public final StmtTy[] body;   // nullable
         public final ExprTy[] decoratorList;   // nullable
-        public final ExprTy returns;   // nullable
+        public ExprTy returns;   // nullable
         public final Object typeComment;   // nullable
+        public final TypeParamTy[] typeParams;   // nullable
 
-        public AsyncFunctionDef(String name, ArgumentsTy args, StmtTy[] body, ExprTy[] decoratorList, ExprTy returns, Object typeComment, SourceRange sourceRange) {
+        public AsyncFunctionDef(String name, ArgumentsTy args, StmtTy[] body, ExprTy[] decoratorList, ExprTy returns, Object typeComment, TypeParamTy[] typeParams, SourceRange sourceRange) {
             super(sourceRange);
             assert name != null;
             this.name = name;
@@ -97,6 +104,11 @@ public abstract class StmtTy extends SSTNode {
             this.decoratorList = decoratorList;
             this.returns = returns;
             this.typeComment = typeComment;
+            this.typeParams = typeParams;
+        }
+
+        public boolean isGeneric() {
+            return typeParams != null && typeParams.length > 0;
         }
 
         @Override
@@ -111,8 +123,9 @@ public abstract class StmtTy extends SSTNode {
         public final KeywordTy[] keywords;   // nullable
         public final StmtTy[] body;   // nullable
         public final ExprTy[] decoratorList;   // nullable
+        public final TypeParamTy[] typeParams;   // nullable
 
-        public ClassDef(String name, ExprTy[] bases, KeywordTy[] keywords, StmtTy[] body, ExprTy[] decoratorList, SourceRange sourceRange) {
+        public ClassDef(String name, ExprTy[] bases, KeywordTy[] keywords, StmtTy[] body, ExprTy[] decoratorList, TypeParamTy[] typeParams, SourceRange sourceRange) {
             super(sourceRange);
             assert name != null;
             this.name = name;
@@ -120,6 +133,11 @@ public abstract class StmtTy extends SSTNode {
             this.keywords = keywords;
             this.body = body;
             this.decoratorList = decoratorList;
+            this.typeParams = typeParams;
+        }
+
+        public boolean isGeneric() {
+            return typeParams != null && typeParams.length > 0;
         }
 
         @Override
@@ -129,7 +147,7 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class Return extends StmtTy {
-        public final ExprTy value;   // nullable
+        public ExprTy value;   // nullable
 
         public Return(ExprTy value, SourceRange sourceRange) {
             super(sourceRange);
@@ -158,7 +176,7 @@ public abstract class StmtTy extends SSTNode {
 
     public static final class Assign extends StmtTy {
         public final ExprTy[] targets;   // nullable
-        public final ExprTy value;
+        public ExprTy value;
         public final Object typeComment;   // nullable
 
         public Assign(ExprTy[] targets, ExprTy value, Object typeComment, SourceRange sourceRange) {
@@ -175,10 +193,34 @@ public abstract class StmtTy extends SSTNode {
         }
     }
 
+    public static final class TypeAlias extends StmtTy {
+        public ExprTy name;
+        public final TypeParamTy[] typeParams;   // nullable
+        public ExprTy value;
+
+        public TypeAlias(ExprTy name, TypeParamTy[] typeParams, ExprTy value, SourceRange sourceRange) {
+            super(sourceRange);
+            assert name != null;
+            this.name = name;
+            this.typeParams = typeParams;
+            assert value != null;
+            this.value = value;
+        }
+
+        public boolean isGeneric() {
+            return typeParams != null && typeParams.length > 0;
+        }
+
+        @Override
+        public <T> T accept(SSTreeVisitor<T> visitor) {
+            return visitor.visit(this);
+        }
+    }
+
     public static final class AugAssign extends StmtTy {
-        public final ExprTy target;
+        public ExprTy target;
         public final OperatorTy op;
-        public final ExprTy value;
+        public ExprTy value;
 
         public AugAssign(ExprTy target, OperatorTy op, ExprTy value, SourceRange sourceRange) {
             super(sourceRange);
@@ -197,9 +239,9 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class AnnAssign extends StmtTy {
-        public final ExprTy target;
-        public final ExprTy annotation;
-        public final ExprTy value;   // nullable
+        public ExprTy target;
+        public ExprTy annotation;
+        public ExprTy value;   // nullable
         public final boolean isSimple;
 
         public AnnAssign(ExprTy target, ExprTy annotation, ExprTy value, boolean isSimple, SourceRange sourceRange) {
@@ -219,8 +261,8 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class For extends StmtTy {
-        public final ExprTy target;
-        public final ExprTy iter;
+        public ExprTy target;
+        public ExprTy iter;
         public final StmtTy[] body;   // nullable
         public final StmtTy[] orElse;   // nullable
         public final Object typeComment;   // nullable
@@ -243,8 +285,8 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class AsyncFor extends StmtTy {
-        public final ExprTy target;
-        public final ExprTy iter;
+        public ExprTy target;
+        public ExprTy iter;
         public final StmtTy[] body;   // nullable
         public final StmtTy[] orElse;   // nullable
         public final Object typeComment;   // nullable
@@ -267,7 +309,7 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class While extends StmtTy {
-        public final ExprTy test;
+        public ExprTy test;
         public final StmtTy[] body;   // nullable
         public final StmtTy[] orElse;   // nullable
 
@@ -286,7 +328,7 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class If extends StmtTy {
-        public final ExprTy test;
+        public ExprTy test;
         public final StmtTy[] body;   // nullable
         public final StmtTy[] orElse;   // nullable
 
@@ -341,7 +383,7 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class Match extends StmtTy {
-        public final ExprTy subject;
+        public ExprTy subject;
         public final MatchCaseTy[] cases;   // nullable
 
         public Match(ExprTy subject, MatchCaseTy[] cases, SourceRange sourceRange) {
@@ -358,8 +400,8 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class Raise extends StmtTy {
-        public final ExprTy exc;   // nullable
-        public final ExprTy cause;   // nullable
+        public ExprTy exc;   // nullable
+        public ExprTy cause;   // nullable
 
         public Raise(ExprTy exc, ExprTy cause, SourceRange sourceRange) {
             super(sourceRange);
@@ -393,9 +435,29 @@ public abstract class StmtTy extends SSTNode {
         }
     }
 
+    public static final class TryStar extends StmtTy {
+        public final StmtTy[] body;   // nullable
+        public final ExceptHandlerTy[] handlers;   // nullable
+        public final StmtTy[] orElse;   // nullable
+        public final StmtTy[] finalBody;   // nullable
+
+        public TryStar(StmtTy[] body, ExceptHandlerTy[] handlers, StmtTy[] orElse, StmtTy[] finalBody, SourceRange sourceRange) {
+            super(sourceRange);
+            this.body = body;
+            this.handlers = handlers;
+            this.orElse = orElse;
+            this.finalBody = finalBody;
+        }
+
+        @Override
+        public <T> T accept(SSTreeVisitor<T> visitor) {
+            return visitor.visit(this);
+        }
+    }
+
     public static final class Assert extends StmtTy {
-        public final ExprTy test;
-        public final ExprTy msg;   // nullable
+        public ExprTy test;
+        public ExprTy msg;   // nullable
 
         public Assert(ExprTy test, ExprTy msg, SourceRange sourceRange) {
             super(sourceRange);
@@ -471,7 +533,7 @@ public abstract class StmtTy extends SSTNode {
     }
 
     public static final class Expr extends StmtTy {
-        public final ExprTy value;
+        public ExprTy value;
 
         public Expr(ExprTy value, SourceRange sourceRange) {
             super(sourceRange);

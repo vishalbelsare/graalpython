@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,27 +41,28 @@
 package com.oracle.graal.python.builtins.modules.cext;
 
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
 
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiNullaryBuiltinNode;
-import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.runtime.PythonContext;
 
 public final class PythonCextBoolBuiltins {
 
-    @CApiBuiltin(ret = PyObjectTransfer, call = Ignored)
-    abstract static class PyTruffle_True extends CApiNullaryBuiltinNode {
-        @Specialization
-        static boolean run() {
-            return true;
-        }
+    // These two should only be used during C API initialization, so the performance hardly
+    // matters, but keeping their codesize small still makes sense.
+    @CApiBuiltin(ret = PyObjectRawPointer, call = Ignored, acquireGil = false, canRaise = false)
+    public static long GraalPyPrivate_True() {
+        Object trueValue = PythonContext.get(null).getTrue();
+        assert EnsurePythonObjectNode.doesNotNeedPromotion(trueValue);
+        return PythonToNativeInternalNode.executeUncached(trueValue, true);
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, call = Ignored)
-    abstract static class PyTruffle_False extends CApiNullaryBuiltinNode {
-        @Specialization
-        static boolean run() {
-            return false;
-        }
+    @CApiBuiltin(ret = PyObjectRawPointer, call = Ignored, acquireGil = false, canRaise = false)
+    public static long GraalPyPrivate_False() {
+        Object falseValue = PythonContext.get(null).getFalse();
+        assert EnsurePythonObjectNode.doesNotNeedPromotion(falseValue);
+        return PythonToNativeInternalNode.executeUncached(falseValue, true);
     }
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -89,3 +89,53 @@ def test_make_method():
 
     assert isinstance(method1(), A)
     assert method2(1) == "A is 1", method2(1)
+
+
+def test_method_qualname_uses_wrapped_callable():
+    import types
+
+    def f():
+        pass
+
+    class A:
+        def g(self):
+            pass
+
+        m = classmethod(f)
+
+    assert A().g.__qualname__ == "test_method_qualname_uses_wrapped_callable.<locals>.A.g"
+    assert types.MethodType(f, A).__qualname__ == "test_method_qualname_uses_wrapped_callable.<locals>.f"
+    assert A.m.__qualname__ == "test_method_qualname_uses_wrapped_callable.<locals>.f"
+    assert A.__dict__["m"].__qualname__ == "test_method_qualname_uses_wrapped_callable.<locals>.f"
+
+
+def test_method_getattribute_does_not_swallow_method_descriptor_attribute_error():
+    import types
+
+    class Callable:
+        def __init__(self):
+            self.name_calls = 0
+
+        def __call__(self, *args):
+            pass
+
+        def __getattribute__(self, name):
+            if name == "__name__":
+                calls = object.__getattribute__(self, "name_calls")
+                object.__setattr__(self, "name_calls", calls + 1)
+                if calls == 0:
+                    raise AttributeError("first lookup failure")
+                return "fallback-name"
+            return object.__getattribute__(self, name)
+
+    func = Callable()
+    method = types.MethodType(func, object())
+    try:
+        method.__name__
+    except AttributeError as e:
+        assert str(e) == "first lookup failure"
+    else:
+        assert False, "AttributeError was not raised"
+    assert func.name_calls == 1
+    assert method.__class__ is types.MethodType
+    assert method.__name__ == "fallback-name"

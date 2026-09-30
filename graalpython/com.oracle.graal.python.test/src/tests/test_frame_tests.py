@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,9 +36,9 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
+import os
 import sys
-
+from tests import util
 
 # IMPORTANT: DO NOT MOVE!
 # This test checks that lineno works on frames,
@@ -46,14 +46,73 @@ import sys
 def test_lineno():
     assert sys._getframe(0).f_lineno == 47
 
+if not util.IS_BYTECODE_DSL: # Blocked by GR-61955
+    # IMPORTANT: DO NOT MOVE!
+    def test_nested_lineno():
+        def test_nested():
+            return sys._getframe(0)
 
-# IMPORTANT: DO NOT MOVE!
-def test_nested_lineno():
-    def test_nested():
-        return sys._getframe(0)
+        f = test_nested()
+        assert f.f_lineno == 53
 
-    f = test_nested()
-    assert f.f_lineno == 53
+    # IMPORTANT: DO NOT MOVE!
+    def test_nested_lineno_return_loc():
+        def test_nested():
+            f = sys._getframe(0)
+            if True:
+                return f
+            return None
+
+        f = test_nested()
+        assert f.f_lineno == 63
+
+    # IMPORTANT: DO NOT MOVE!
+    def test_nested_lineno_implicit_return():
+        f = None
+        def test_nested():
+            nonlocal f
+            f = sys._getframe(0)
+            dummy = 42
+
+        test_nested()
+        assert f.f_lineno == 75
+
+    # IMPORTANT: DO NOT MOVE!
+    def test_nested_lineno_finally():
+        def test_nested():
+            try:
+                return sys._getframe(0)
+            finally:
+                dummy = 42
+
+        f = test_nested()
+        assert f.f_lineno == 86, f.f_lineno
+
+    # IMPORTANT: DO NOT MOVE!
+    def test_nested_lineno_multiline_return():
+        def test_nested():
+            f = sys._getframe(0)
+            if f:
+                return (
+                    f)
+            return None
+
+        f = test_nested()
+        assert f.f_lineno == 96
+
+    # IMPORTANT: DO NOT MOVE!
+    def test_nested_lineno_raise():
+        f = None
+        def test_nested():
+            nonlocal f
+            f = sys._getframe(0)
+            raise ValueError("should happen")
+            raise ArgumentError("should not happen")
+        try:
+            test_nested()
+        except ValueError as e:
+            assert "should happen" in str(e)
+            assert f.f_lineno == 109
 
 
 def test_read_and_write_locals():
@@ -125,6 +184,54 @@ def test_code():
     assert code.co_name == test_code.__code__.co_name
 
 
+def test_getframemodulename():
+    assert sys._getframemodulename() == __name__
+    assert sys._getframemodulename(0) == __name__
+    assert sys._getframemodulename(-1) == __name__
+    assert sys._getframemodulename(10**6) is None
+
+    namespace = {"sys": sys, "__name__": "test_getframemodulename_custom"}
+    exec("def get_module_name(depth=0): return sys._getframemodulename(depth)", namespace)
+    assert namespace["get_module_name"]() == "test_getframemodulename_custom"
+    assert namespace["get_module_name"](1) == __name__
+
+
+def test_getframemodulename_uses_function_module():
+    def get_module_name():
+        return sys._getframemodulename()
+
+    old_module = get_module_name.__module__
+    try:
+        get_module_name.__module__ = "test_getframemodulename_function_module"
+        assert get_module_name() == "test_getframemodulename_function_module"
+    finally:
+        get_module_name.__module__ = old_module
+
+
+def test_getframemodulename_missing_name():
+    namespace = {"sys": sys}
+    exec("def get_module_name(): return sys._getframemodulename()", namespace)
+    assert namespace["get_module_name"]() is None
+
+
+def test_getframemodulename_non_string_name():
+    namespace = {"sys": sys, "__name__": 42}
+    exec("def get_module_name(): return sys._getframemodulename()", namespace)
+    assert namespace["get_module_name"]() == 42
+
+
+def test_getframemodulename_audit():
+    seen = []
+
+    def hook(event, args):
+        if event == "sys._getframemodulename":
+            seen.append(args)
+
+    sys.addaudithook(hook)
+    assert sys._getframemodulename() == __name__
+    assert seen[-1] == (0,)
+
+
 def test_builtins():
     assert print == sys._getframe().f_builtins["print"]
 
@@ -137,9 +244,9 @@ def test_locals_sync():
     # Forces caller frame materialization, this used to erroneously cause the locals dict to update
     globals()
     assert l == {'a': 1}
-    # Now this should really cause the locals dict to update
+    # Since Python 3.13, locals() returns an independent snapshot in optimized scopes
     locals()
-    assert l == {'a': 1, 'b': 2, 'l': l}
+    assert l == {'a': 1}
 
 
 def test_locals_cells():
@@ -163,17 +270,272 @@ def test_locals_freevar_in_class():
         assert 'c' in locals()
         assert 'x' not in locals()
 
-# GR-22089
-# def test_backref_from_traceback():
-#     def bar():
-#         raise RuntimeError
-#
-#     def foo():
-#         bar()
-#
-#     try:
-#         foo()
-#     except Exception as e:
-#         assert e.__traceback__.tb_frame.f_back.f_code == sys._getframe(0).f_back.f_code
-#         assert e.__traceback__.tb_next.tb_next.tb_frame.f_back.f_code == foo.__code__
-#         assert e.__traceback__.tb_next.tb_frame.f_back.f_code == test_backref_from_traceback.__code__
+
+def test_backref_from_traceback():
+    def bar():
+        raise RuntimeError
+
+    def foo():
+        bar()
+
+    try:
+        foo()
+    except Exception as e:
+        assert e.__traceback__.tb_frame.f_back.f_code == sys._getframe(0).f_back.f_code
+        assert e.__traceback__.tb_next.tb_next.tb_frame.f_back.f_code == foo.__code__
+        assert e.__traceback__.tb_next.tb_frame.f_back.f_code == test_backref_from_traceback.__code__
+
+
+def test_backref_from_traceback_after_cached_transition():
+    def bar(should_raise):
+        if should_raise:
+            raise RuntimeError
+
+    def foo(should_raise):
+        bar(should_raise)
+
+    for _ in range(64): # we probably do not execute 64-times in uncached
+        foo(False)
+
+    try:
+        foo(True)
+    except Exception as e:
+        assert e.__traceback__.tb_next.tb_next.tb_frame.f_back.f_code == foo.__code__
+        assert e.__traceback__.tb_next.tb_frame.f_back.f_code == test_backref_from_traceback_after_cached_transition.__code__
+
+
+def test_frame_from_another_thread():
+    import sys, threading
+    event1 = threading.Event()
+    event2 = threading.Event()
+    event3 = threading.Event()
+    event4 = threading.Event()
+    frame = None
+    def target():
+        # Mind the line numbers
+        nonlocal frame
+        frame = sys._getframe()
+        a = 1
+        event1.set()
+        event2.wait(timeout=60)
+        b = 2
+        event3.set()
+        event4.wait(timeout=60)
+    thread = threading.Thread(target=target)
+    thread.start()
+    event1.wait(timeout=60)
+    firstlineno = target.__code__.co_firstlineno
+    assert 5 <= frame.f_lineno - firstlineno <= 6
+    assert frame.f_locals['a'] == 1
+    assert 'b' not in frame.f_locals
+    event2.set()
+    event3.wait(timeout=60)
+    assert 8 <= frame.f_lineno - firstlineno <= 9
+    assert frame.f_locals['b'] == 2
+    event4.set()
+    thread.join(timeout=60)
+
+
+def test_f_locals_proxy_escaped():
+
+    def get_proxy(value):
+        local = value
+        return sys._getframe().f_locals
+
+    proxy = get_proxy(1)
+    assert type(proxy).__name__ == 'FrameLocalsProxy'
+    assert proxy['local'] == 1
+    proxy['local'] = 2
+    assert proxy['local'] == 2
+    proxy['extra'] = 3
+    assert proxy['extra'] == 3
+    assert proxy.copy() == {'value': 1, 'local': 2, 'extra': 3}
+    try:
+        del proxy['local']
+    except ValueError as e:
+        assert 'cannot remove local variables' in str(e)
+    else:
+        assert False
+
+
+def test_f_locals_proxy_after_return():
+
+    def get_proxy(value):
+        local = value
+        return sys._getframe()
+
+    proxy = get_proxy(1).f_locals
+    assert type(proxy).__name__ == 'FrameLocalsProxy'
+    assert proxy['local'] == 1
+    proxy['local'] = 2
+    assert proxy['local'] == 2
+    proxy['extra'] = 3
+    assert proxy['extra'] == 3
+    # sys is a freevar
+    assert proxy.copy() == {'value': 1, 'local': 2, 'extra': 3}
+    try:
+        del proxy['local']
+    except ValueError as e:
+        assert 'cannot remove local variables' in str(e)
+    else:
+        assert False
+
+
+def test_f_locals_proxy_updates_executing_frames():
+
+    def current_frame():
+        value = 1
+        sys._getframe().f_locals['value'] = 2
+        return value
+
+    def caller_frame():
+        value = 1
+
+        def update_caller():
+            sys._getframe(1).f_locals['value'] = 2
+
+        update_caller()
+        return value
+
+    assert current_frame() == 2
+    assert caller_frame() == 2
+
+
+def test_locals_includes_f_locals_extras():
+    sys._getframe().f_locals['extra'] = 42
+    snapshot = locals()
+    assert snapshot['extra'] == 42
+
+
+def test_f_locals_proxy_cellvar_and_freevar():
+    def update_cellvar():
+        cellvar = 1
+
+        def read_cellvar():
+            return cellvar
+
+        locals_proxy = sys._getframe().f_locals
+        assert locals_proxy['cellvar'] == 1
+        locals_proxy['cellvar'] = 2
+        return cellvar, read_cellvar()
+
+    def update_freevar():
+        freevar = 1
+
+        def inner():
+            locals_proxy = sys._getframe().f_locals
+            assert locals_proxy['freevar'] == 1
+            locals_proxy['freevar'] = 2
+            return freevar
+
+        return inner(), freevar
+
+    assert update_cellvar() == (2, 2)
+    assert update_freevar() == (2, 2)
+
+
+def test_f_locals_proxy_cell_parameter_after_return():
+    def get_frame(cell_parameter):
+        def read_cell_parameter():
+            return cell_parameter
+
+        return sys._getframe(), read_cell_parameter
+
+    frame, read_cell_parameter = get_frame(1)
+    locals_proxy = frame.f_locals
+    assert locals_proxy['cell_parameter'] == 1
+    locals_proxy['cell_parameter'] = 2
+    assert read_cell_parameter() == 2
+
+
+OTHER_RUNNING_INNER = 'running_inner'
+OTHER_RUNNING_OUTER = 'running_outer'
+OTHER_TERMINATED = 'terminated'
+
+
+def current_frames_includes_other_thread(test_case):
+    import sys, threading
+
+    ready = threading.Event()
+    outer_ready = threading.Event()
+    release_inner = threading.Event()
+    release_outer = threading.Event()
+    worker_ident = None
+
+    def target():
+        nonlocal worker_ident
+        worker_ident = threading.get_ident()
+        def target_inner():
+            my_local_var = 60
+            ready.set()
+            release_inner.wait(timeout=my_local_var)
+        target_local_var = 13
+        target_inner()
+        outer_ready.set()
+        release_outer.wait(60)
+        return target_local_var
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    try:
+        assert ready.wait(timeout=60)
+        frames = sys._current_frames()
+        if test_case == OTHER_TERMINATED:
+            release_inner.set()
+            release_outer.set()
+            thread.join(timeout=60)
+        elif test_case == OTHER_RUNNING_OUTER:
+            release_inner.set()
+            assert outer_ready.wait(timeout=60)
+        assert worker_ident in frames
+
+        frame = frames[worker_ident]
+        if frame is None:
+            return # we hit the timeout
+
+        def format_frame(frame):
+            code = frame.f_code
+            return f"{code.co_name}@{os.path.basename(code.co_filename)}"
+
+        seen_frames = []
+        while frame is not None and frame.f_code.co_name != "target_inner":
+            seen_frames.append(format_frame(frame))
+            frame = frame.f_back
+
+        message = f"test case: {test_case}; traversed frames: {', '.join(seen_frames) or '<none>'}"
+        assert frame is not None, message
+        assert frame.f_code.co_name == "target_inner", f"{frame.f_code.co_name=}; {message}"
+        assert "target_inner" in repr(frame), f"{repr(frame)=}; {message}"
+        assert "my_local_var" in frame.f_locals, f"{frame.f_locals.keys()=}; {message}"
+
+        frame = frame.f_back
+        assert frame is not None
+        assert "target_inner" not in repr(frame)
+        assert "target" in repr(frame)
+        assert frame.f_code.co_name == "target"
+        assert "target_local_var" in frame.f_locals
+    finally:
+        release_inner.set()
+        release_outer.set()
+        thread.join(timeout=60)
+
+
+def test_current_frames_includes_other_thread_terminated():
+    current_frames_includes_other_thread(OTHER_TERMINATED)
+
+def test_current_frames_includes_other_thread_in_inner():
+    current_frames_includes_other_thread(OTHER_RUNNING_INNER)
+
+def test_current_frames_includes_other_thread_in_outer():
+    current_frames_includes_other_thread(OTHER_RUNNING_OUTER)
+
+
+# this must be the last test!
+def test_clearing_globals():
+    global foo, junk
+    foo = 123
+    assert "foo" in globals().keys()
+    assert "junk" not in globals().keys()
+    junk = globals().clear()
+    assert "foo" not in globals().keys()
+    assert "junk" in globals().keys()

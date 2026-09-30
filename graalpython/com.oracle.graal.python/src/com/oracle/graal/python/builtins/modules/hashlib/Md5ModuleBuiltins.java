@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,11 +42,10 @@ package com.oracle.graal.python.builtins.modules.hashlib;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
@@ -65,25 +64,16 @@ public final class Md5ModuleBuiltins extends PythonBuiltins {
         return Md5ModuleBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = "md5", minNumOfPositionalArgs = 0, parameterNames = {"string"}, keywordOnlyNames = {"usedforsecurity"})
+    @Builtin(name = "md5", numOfPositionalOnlyArgs = 0, parameterNames = {"data"}, keywordOnlyNames = {"usedforsecurity", "string"})
     @GenerateNodeFactory
     abstract static class Md5FunctionNode extends PythonBuiltinNode {
         @Specialization
-        static Object newDigest(VirtualFrame frame, Object buffer, @SuppressWarnings("unused") Object usedForSecurity,
-                        @Bind("this") Node inliningTarget,
-                        @Cached HashlibModuleBuiltins.CreateDigestNode createNode) {
-            return createNode.execute(frame, inliningTarget, PythonBuiltinClassType.MD5Type, "md5", "md5", buffer);
-        }
-    }
-
-    @Builtin(name = "md5", takesVarArgs = true, takesVarKeywordArgs = true, constructsClass = PythonBuiltinClassType.MD5Type, isPublic = false)
-    @GenerateNodeFactory
-    abstract static class Md5Node extends PythonBuiltinNode {
-        @Specialization
-        @SuppressWarnings("unused")
-        static Object md5(Object args, Object kwargs,
+        static Object newDigest(VirtualFrame frame, Object data, @SuppressWarnings("unused") Object usedForSecurity, Object string,
+                        @Bind Node inliningTarget,
+                        @Cached HashlibModuleBuiltins.CreateDigestNode createNode,
                         @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.TypeError, ErrorMessages.CANNOT_CREATE_INSTANCES, "_md5.md5");
+            Object buffer = HashlibModuleBuiltins.resolveDataArgument(inliningTarget, data, string, raiseNode);
+            return createNode.execute(frame, inliningTarget, PythonBuiltinClassType.MD5Type, "md5", "md5", buffer);
         }
     }
 }

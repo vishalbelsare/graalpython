@@ -1,8 +1,11 @@
-# Copyright (c) 2019, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+import importlib
+import importlib.util
 import sys
+from pathlib import Path
 
 
 def coding_checker(self, coder):
@@ -27,6 +30,16 @@ def test_import():
     except ImportError:
         imported = False
     assert imported
+
+def test_no_aliases_to_missing_codecs():
+    from encodings.aliases import aliases
+
+    # This is how charset-normalizer discovers all encodings, we need to make sure they are importable
+    for a in set(aliases.values()) - {"rot_13", "tactis", "mbcs"}:
+        try:
+            exec(f"import encodings.{a}")
+        except Exception:
+            raise AssertionError(f"Cannot import encodings.{a}, it should be fixed or removed from encodings.aliases")
 
 
 def test_decode():
@@ -64,6 +77,23 @@ def test_encode():
     assert codecs.encode(obj='\xe4\xf6\xfc', encoding='latin-1') == b'\xe4\xf6\xfc'
     assert codecs.encode('[\xff]', 'ascii', errors='ignore') == b'[]'
     assert codecs.encode('[]', 'ascii') == b'[]'
+
+
+def test_unicode_error_large_positions():
+    large = 18977273910
+    negative = -58
+
+    translate = UnicodeTranslateError('worl', large, negative, 'worldworldworldworldworldworldworldworldworldworldworld')
+    assert translate.args == ('worl', large, negative, 'worldworldworldworldworldworldworldworldworldworldworld')
+    assert str(translate) == "can't translate characters in position 18977273910--59: worldworldworldworldworldworldworldworldworldworldworld"
+
+    encode = UnicodeEncodeError('utf-8', 'worl', large, negative, 'boom')
+    assert encode.args == ('utf-8', 'worl', large, negative, 'boom')
+    assert str(encode) == "'utf-8' codec can't encode characters in position 18977273910--59: boom"
+
+    decode = UnicodeDecodeError('utf-8', b'worl', large, negative, 'boom')
+    assert decode.args == ('utf-8', b'worl', large, negative, 'boom')
+    assert str(decode) == "'utf-8' codec can't decode bytes in position 18977273910--59: boom"
 
 
 import codecs
@@ -493,7 +523,8 @@ class DefaultErrorHandlerTest(unittest.TestCase):
         self.assertEqual((b'\xed\xa0\x80\xed\xbf\xbf', 3), handler(UnicodeEncodeError('utf-8', 'a\uD800\uDFFFd', 1, 3, 'c')))
         self.assertEqual((b'\xed\xa0\x80\xed\xbf\xbf', 3), handler(UnicodeEncodeError('uTf_8', 'a\uD800\uDFFFd', 1, 3, 'c')))
         self.assertEqual((b'\xed\xa0\x80\xed\xbf\xbf', 3), handler(UnicodeEncodeError('UtF8', 'a\uD800\uDFFFd', 1, 3, 'c')))
-        self.assertEqual((b'\xed\xa0\x80\xed\xbf\xbf', 3), handler(UnicodeEncodeError('CP_UTF8', 'a\uD800\uDFFFd', 1, 3, 'c')))
+        self.assertEqual((b'\xed\xa0\x80\xed\xbf\xbf', 3), handler(UnicodeEncodeError('cp65001', 'a\uD800\uDFFFd', 1, 3, 'c')))
+        self.assertRaises(UnicodeEncodeError, handler, UnicodeEncodeError('CP_UTF8', 'a\uD800\uDFFFd', 1, 3, 'c'))
         # non-surrogates are still errors
         self.assertRaises(UnicodeEncodeError, handler, UnicodeEncodeError('utf-8', 'abc', 1, 2, 'c'))
         # start/end clamping
@@ -553,7 +584,8 @@ class DefaultErrorHandlerTest(unittest.TestCase):
         handler = codecs.lookup_error('surrogatepass')
         self.assertEqual(('\ud800', 4), handler(UnicodeDecodeError('utf-8', b'a\xed\xa0\x80\xed\xbf\xbfd', 1, 7, 'c')))
         self.assertEqual(('\ud800', 4), handler(UnicodeDecodeError('UTF_8', b'a\xed\xa0\x80\xed\xbf\xbfd', 1, 7, 'c')))
-        self.assertEqual(('\ud800', 4), handler(UnicodeDecodeError('CP_UTF8', b'a\xed\xa0\x80\xed\xbf\xbfd', 1, 7, 'c')))
+        self.assertEqual(('\ud800', 4), handler(UnicodeDecodeError('cp65001', b'a\xed\xa0\x80\xed\xbf\xbfd', 1, 7, 'c')))
+        self.assertRaises(UnicodeDecodeError, handler, UnicodeDecodeError('CP_UTF8', b'a\xed\xa0\x80\xed\xbf\xbfd', 1, 7, 'c'))
         # non-surrogates are still errors
         self.assertRaises(UnicodeDecodeError, handler, UnicodeDecodeError('utf-8', b'abc', 1, 2, 'c'))
         # start/end clamping
@@ -861,6 +893,52 @@ class CharmapEncodeTest(unittest.TestCase):
 
     def test_encode_dict_err_xmlcharrefreplace(self):
         self.assertEqual((b'\x00\r\x0c\x0b\n\x0e\r\x0c\x0b\x0b\x0e\x01', 4), codecs.charmap_encode('abcd', 'xmlcharrefreplace', codecs.charmap_build('ad0123456789#&;')))
+
+
+class MultibyteCodecTest(unittest.TestCase):
+
+    def test_missing_multibyte_codecs_raise_lookup_error(self):
+        for module_name in ('_codecs_cn', '_codecs_hk', '_codecs_iso2022', '_codecs_jp', '_codecs_kr', '_codecs_tw'):
+            with self.subTest(module_name=module_name):
+                module = importlib.import_module(module_name)
+                self.assertRaises(LookupError, module.getcodec, '__missing_codec__')
+
+    def test_unsupported_multibyte_codec_modules_raise_import_error_on_graalpy(self):
+        encodings_dir = Path(__file__).resolve().parents[3] / 'lib-python' / '3' / 'encodings'
+        for module_name in (
+            'encodings.euc_jis_2004',
+            'encodings.euc_jisx0213',
+            'encodings.iso2022_jp_1',
+            'encodings.iso2022_jp_2004',
+            'encodings.iso2022_jp_3',
+            'encodings.iso2022_jp_ext',
+        ):
+            with self.subTest(module_name=module_name):
+                module_path = encodings_dir / f'{module_name.rsplit(".", 1)[1]}.py'
+                spec = importlib.util.spec_from_file_location(f'test_{module_name.replace(".", "_")}', module_path)
+                module = importlib.util.module_from_spec(spec)
+                if sys.implementation.name == 'graalpy':
+                    self.assertRaises(ImportError, spec.loader.exec_module, module)
+                else:
+                    spec.loader.exec_module(module)
+
+    def test_shift_jis_2004_codec_module_imports(self):
+        import encodings.shift_jis_2004
+
+    # just a smoke test
+    def test_encode(self):
+        import _codecs_tw
+        codec = _codecs_tw.getcodec('big5')
+
+        self.assertEqual((b'', 0), codec.encode(""))
+        self.assertRaises(TypeError, codec.encode)
+        self.assertRaises(UnicodeEncodeError, codec.encode, '\xffff')
+
+
+class UTF32Test(unittest.TestCase):
+    def test_utf32_surrogate_error(self):
+        with self.assertRaisesRegex(UnicodeDecodeError, "codec can't decode bytes in position 4-7"):
+            b'a\x00\x00\x00\x00\xd8\x00\x00z\x00\x00\x00'.decode('utf-32')
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -55,13 +55,16 @@ import com.oracle.graal.python.runtime.PosixSupportLibrary.Inet6SockAddr;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.InvalidAddressException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.InvalidUnixSocketPathException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.OpenPtyResult;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixErrnoException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.PwdResult;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.RecvfromResult;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.RusageResult;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.SelectResult;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.Timeval;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.UniversalSockAddr;
 import com.oracle.graal.python.runtime.PosixSupportLibrary.UnixSockAddr;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.UnsupportedPosixFeatureException;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
@@ -239,6 +242,50 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @ExportMessage
+    final long getOsfHandle(int fd,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("getOsfHandle", "%d", fd);
+        try {
+            return logExit("getOsfHandle", "%d", lib.getOsfHandle(delegate, fd));
+        } catch (PosixException e) {
+            throw logException("getOsfHandle", e);
+        }
+    }
+
+    @ExportMessage
+    final int openOsfHandle(long handle, int flags,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("openOsfHandle", "%d, %d", handle, flags);
+        try {
+            return logExit("openOsfHandle", "%d", lib.openOsfHandle(delegate, handle, flags));
+        } catch (PosixException e) {
+            throw logException("openOsfHandle", e);
+        }
+    }
+
+    @ExportMessage
+    final int setMode(int fd, int mode,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("setMode", "%d, %d", fd, mode);
+        try {
+            return logExit("setMode", "%d", lib.setMode(delegate, fd, mode));
+        } catch (PosixException e) {
+            throw logException("setMode", e);
+        }
+    }
+
+    @ExportMessage
+    final void msvcrtLocking(int fd, int mode, long nbytes,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("msvcrtLocking", "%d, %d, %d", fd, mode, nbytes);
+        try {
+            lib.msvcrtLocking(delegate, fd, mode, nbytes);
+        } catch (PosixException e) {
+            throw logException("msvcrtLocking", e);
+        }
+    }
+
+    @ExportMessage
     final int[] pipe(
                     @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
         logEnter("pipe", "");
@@ -262,6 +309,18 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @ExportMessage
+    public void poll(int[] fds, int[] events, int[] revents, int timeout,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("poll", "%s %s %s", fds, events, timeout);
+        try {
+            lib.poll(delegate, fds, events, revents, timeout);
+            logExit("poll", "%s", revents);
+        } catch (PosixException e) {
+            throw logException("poll", e);
+        }
+    }
+
+    @ExportMessage
     final long lseek(int fd, long offset, int how,
                     @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
         logEnter("lseek", "%d, %d, %d", fd, offset, how);
@@ -280,6 +339,17 @@ public class LoggingPosixSupport extends PosixSupport {
             lib.ftruncate(delegate, fd, length);
         } catch (PosixException e) {
             throw logException("ftruncate", e);
+        }
+    }
+
+    @ExportMessage
+    final void truncate(Object path, long length,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("truncate", "%s, %d", path, length);
+        try {
+            lib.truncate(delegate, path, length);
+        } catch (PosixException e) {
+            throw logException("truncate", e);
         }
     }
 
@@ -346,6 +416,17 @@ public class LoggingPosixSupport extends PosixSupport {
             return logExit("getTerminalSize", "%s", lib.getTerminalSize(delegate, fd));
         } catch (PosixException e) {
             throw logException("getTerminalSize", e);
+        }
+    }
+
+    @ExportMessage
+    final long sysconf(int name,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("sysconf", "%d", name);
+        try {
+            return logExit("sysconf", "%s", lib.sysconf(delegate, name));
+        } catch (PosixException e) {
+            throw logException("sysconf", e);
         }
     }
 
@@ -646,10 +727,25 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @ExportMessage
+    final void replaceat(int oldDirFd, Object oldPath, int newDirFd, Object newPath,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("replaceAt", "%d, %s, %d, %s", oldDirFd, oldPath, newDirFd, newPath);
+        try {
+            lib.replaceat(delegate, oldDirFd, oldPath, newDirFd, newPath);
+        } catch (PosixException e) {
+            throw logException("replaceAt", e);
+        }
+    }
+
+    @ExportMessage
     final boolean faccessat(int dirFd, Object path, int mode, boolean effectiveIds, boolean followSymlinks,
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException {
         logEnter("faccessAt", "%d, %s, 0%o, %b, %b", dirFd, path, mode, effectiveIds, followSymlinks);
-        return logExit("faccessAt", "%b", lib.faccessat(delegate, dirFd, path, mode, effectiveIds, followSymlinks));
+        try {
+            return logExit("faccessAt", "%b", lib.faccessat(delegate, dirFd, path, mode, effectiveIds, followSymlinks));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("faccessAt", e);
+        }
     }
 
     @ExportMessage
@@ -719,6 +815,61 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @ExportMessage
+    final void raise(int signal,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("raise", "%d", signal);
+        try {
+            lib.raise(delegate, signal);
+        } catch (PosixException e) {
+            throw logException("raise", e);
+        }
+    }
+
+    @ExportMessage
+    final int alarm(int seconds,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("alarm", "%d", seconds);
+        try {
+            return logExit("alarm", "%d", lib.alarm(delegate, seconds));
+        } catch (PosixException e) {
+            throw logException("alarm", e);
+        }
+    }
+
+    @ExportMessage
+    final Timeval[] getitimer(int which,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("getitimer", "%d", which);
+        try {
+            return logExit("getitimer", "%s", lib.getitimer(delegate, which));
+        } catch (PosixException e) {
+            throw logException("getitimer", e);
+        }
+    }
+
+    @ExportMessage
+    final Timeval[] setitimer(int which, Timeval delay, Timeval interval,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("setitimer", "%d, %s, %s", which, delay, interval);
+        try {
+            return logExit("setitimer", "%s", lib.setitimer(delegate, which, delay, interval));
+        } catch (PosixException e) {
+            throw logException("setitimer", e);
+        }
+    }
+
+    @ExportMessage
+    final void signalSelf(int signal,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("signalSelf", "%d", signal);
+        try {
+            lib.signalSelf(delegate, signal);
+        } catch (PosixException e) {
+            throw logException("signalSelf", e);
+        }
+    }
+
+    @ExportMessage
     final void killpg(long pgid, int signal,
                     @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
         logEnter("killpg", "%d, %d", pgid, signal);
@@ -730,11 +881,11 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @ExportMessage
-    public Object mmap(long length, int prot, int flags, int fd, long offset,
+    public Object mmap(long length, int prot, int flags, int fd, long offset, Object tagname,
                     @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
-        logEnter("mmap", "%d, %d, %d, %d, %d", length, prot, flags, fd, offset);
+        logEnter("mmap", "%d, %d, %d, %d, %d, %s", length, prot, flags, fd, offset, tagname);
         try {
-            return logExit("mmap", "%s", lib.mmap(delegate, length, prot, flags, fd, offset));
+            return logExit("mmap", "%s", lib.mmap(delegate, length, prot, flags, fd, offset, tagname));
         } catch (PosixException e) {
             throw logException("mmap", e);
         }
@@ -771,12 +922,6 @@ public class LoggingPosixSupport extends PosixSupport {
         } catch (PosixException e) {
             throw logException("mmapWriteByte", e);
         }
-    }
-
-    @ExportMessage
-    final void abort(@CachedLibrary("this.delegate") PosixSupportLibrary lib) {
-        logEnter("abort", "");
-        lib.abort(this.delegate);
     }
 
     @ExportMessage
@@ -844,9 +989,13 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     final long geteuid(
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException {
         logEnter("geteuid", "");
-        return logExit("geteuid", "%d", lib.geteuid(delegate));
+        try {
+            return logExit("geteuid", "%d", lib.geteuid(delegate));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("geteuid", e);
+        }
     }
 
     @ExportMessage
@@ -857,10 +1006,25 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @ExportMessage
+    final long getegid(
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException {
+        logEnter("getegid", "");
+        try {
+            return logExit("getegid", "%d", lib.getegid(delegate));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("getegid", e);
+        }
+    }
+
+    @ExportMessage
     final long getppid(
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException {
         logEnter("getppid", "");
-        return logExit("getppid", "%d", lib.getppid(delegate));
+        try {
+            return logExit("getppid", "%d", lib.getppid(delegate));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("getppid", e);
+        }
     }
 
     @ExportMessage
@@ -887,9 +1051,13 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     final long getpgrp(
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException {
         logEnter("getpgrp", "");
-        return logExit("getpgrp", "%d", lib.getpgrp(delegate));
+        try {
+            return logExit("getpgrp", "%d", lib.getpgrp(delegate));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("getpgrp", e);
+        }
     }
 
     @ExportMessage
@@ -922,6 +1090,17 @@ public class LoggingPosixSupport extends PosixSupport {
             return logExit("getgroups", "%s", lib.getgroups(delegate));
         } catch (PosixException e) {
             throw logException("getgroups", e);
+        }
+    }
+
+    @ExportMessage
+    final RusageResult getrusage(int who,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("getrusage", "%d", who);
+        try {
+            return logExit("getrusage", "%s", lib.getrusage(delegate, who));
+        } catch (PosixException e) {
+            throw logException("getrusage", e);
         }
     }
 
@@ -991,13 +1170,14 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     final int forkExec(Object[] executables, Object[] args, Object cwd, Object[] env, int stdinReadFd, int stdinWriteFd, int stdoutReadFd, int stdoutWriteFd, int stderrReadFd, int stderrWriteFd,
-                    int errPipeReadFd, int errPipeWriteFd, boolean closeFds, boolean restoreSignals, boolean callSetsid, int[] fdsToKeep,
+                    int errPipeReadFd, int errPipeWriteFd, boolean closeFds, boolean restoreSignals, boolean callSetsid, int pgidToSet, int[] fdsToKeep, boolean allowVFork,
                     @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
-        logEnter("forkExec", "%s, %s, %s, %s, %d, %d, %d, %d, %d, %d, %d, %d, %b, %b, %b, %s", executables, args, cwd, env, stdinReadFd, stdinWriteFd, stdoutReadFd, stdoutWriteFd, stderrReadFd,
-                        stderrWriteFd, errPipeReadFd, errPipeWriteFd, closeFds, restoreSignals, callSetsid, fdsToKeep);
+        logEnter("forkExec", "%s, %s, %s, %s, %d, %d, %d, %d, %d, %d, %d, %d, %b, %b, %b, %d, %s, %b", executables, args, cwd, env, stdinReadFd, stdinWriteFd, stdoutReadFd, stdoutWriteFd,
+                        stderrReadFd,
+                        stderrWriteFd, errPipeReadFd, errPipeWriteFd, closeFds, restoreSignals, callSetsid, pgidToSet, fdsToKeep, allowVFork);
         try {
             return logExit("forkExec", "%d", lib.forkExec(delegate, executables, args, cwd, env, stdinReadFd, stdinWriteFd, stdoutReadFd, stdoutWriteFd, stderrReadFd, stderrWriteFd, errPipeReadFd,
-                            errPipeWriteFd, closeFds, restoreSignals, callSetsid, fdsToKeep));
+                            errPipeWriteFd, closeFds, restoreSignals, callSetsid, pgidToSet, fdsToKeep, allowVFork));
         } catch (PosixException e) {
             throw logException("forkExec", e);
         }
@@ -1016,9 +1196,13 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     public long mmapGetPointer(Object mmap,
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException {
         logEnter("mmapGetPointer", "%s", mmap);
-        return lib.mmapGetPointer(delegate, mmap);
+        try {
+            return lib.mmapGetPointer(delegate, mmap);
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("mmapGetPointer", e);
+        }
     }
 
     @ExportMessage
@@ -1079,6 +1263,28 @@ public class LoggingPosixSupport extends PosixSupport {
             return logExit("getpwentries", "%s", lib.getpwentries(delegate));
         } catch (PosixException e) {
             throw logException("getpwentries", e);
+        }
+    }
+
+    @ExportMessage
+    final int ioctlBytes(int fd, long request, byte[] arg,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("ioctl", "%d %d %s", fd, request, arg);
+        try {
+            return logExit("ioctl", "%d", lib.ioctlBytes(delegate, fd, request, arg));
+        } catch (PosixException e) {
+            throw logException("ioctl", e);
+        }
+    }
+
+    @ExportMessage
+    final int ioctlInt(int fd, long request, int arg,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("ioctl", "%d %d %d", fd, request, arg);
+        try {
+            return logExit("ioctl", "%d", lib.ioctlInt(delegate, fd, request, arg));
+        } catch (PosixException e) {
+            throw logException("ioctl", e);
         }
     }
 
@@ -1304,10 +1510,12 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     final Object[] getnameinfo(UniversalSockAddr addr, int flags,
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws GetAddrInfoException {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException, GetAddrInfoException {
         logEnter("getnameinfo", "%s, %d", addr, flags);
         try {
             return logExit("getnameinfo", "%s", lib.getnameinfo(delegate, addr, flags));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("getnameinfo", e);
         } catch (GetAddrInfoException e) {
             throw logException("getnameinfo", e);
         }
@@ -1315,23 +1523,14 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     final AddrInfoCursor getaddrinfo(Object node, Object service, int family, int sockType, int protocol, int flags,
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws GetAddrInfoException {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException, GetAddrInfoException {
         logEnter("getaddrinfo", "%s, %s, %d, %d, %d, %d", node, service, family, sockType, protocol, flags);
         try {
             return logExit("getaddrinfo", "%s", lib.getaddrinfo(delegate, node, service, family, sockType, protocol, flags));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("getaddrinfo", e);
         } catch (GetAddrInfoException e) {
             throw logException("getaddrinfo", e);
-        }
-    }
-
-    @ExportMessage
-    final TruffleString crypt(TruffleString word, TruffleString salt,
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
-        logEnter("crypt", "%s, %s", word, salt);
-        try {
-            return logExit("crypt", "%s", lib.crypt(delegate, word, salt));
-        } catch (PosixException e) {
-            throw logException("crypt", e);
         }
     }
 
@@ -1365,6 +1564,28 @@ public class LoggingPosixSupport extends PosixSupport {
             lib.semUnlink(delegate, name);
         } catch (PosixException e) {
             throw logException("semUnlink", e);
+        }
+    }
+
+    @ExportMessage
+    final int shmOpen(Object name, int openFlags, int mode,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("shmOpen", "%s %d %d", name, openFlags, mode);
+        try {
+            return logExit("shmOpen", "%d", lib.shmOpen(delegate, name, openFlags, mode));
+        } catch (PosixException e) {
+            throw logException("shmOpen", e);
+        }
+    }
+
+    @ExportMessage
+    final void shmUnlink(Object name,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("shmUnlink", "%s", name);
+        try {
+            lib.shmUnlink(delegate, name);
+        } catch (PosixException e) {
+            throw logException("shmUnlink", e);
         }
     }
 
@@ -1439,10 +1660,12 @@ public class LoggingPosixSupport extends PosixSupport {
 
     @ExportMessage
     final UniversalSockAddr createUniversalSockAddrUnix(UnixSockAddr src,
-                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws InvalidUnixSocketPathException {
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws UnsupportedPosixFeatureException, InvalidUnixSocketPathException {
         logEnter("createUniversalSockAddrUnix", "%s", src);
         try {
             return logExit("createUniversalSockAddrUnix", "%s", lib.createUniversalSockAddrUnix(delegate, src));
+        } catch (UnsupportedPosixFeatureException e) {
+            throw logException("createUniversalSockAddrUnix", e);
         } catch (InvalidUnixSocketPathException e) {
             throw logException("createUniversalSockAddrUnix", e);
         }
@@ -1476,6 +1699,36 @@ public class LoggingPosixSupport extends PosixSupport {
         return logExit(Level.FINEST, "getPathAsBytes", "%s", lib.getPathAsBytes(delegate, path));
     }
 
+    @ExportMessage
+    final Object createCStringFromString(TruffleString string,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+        return lib.createCStringFromString(delegate, string);
+    }
+
+    @ExportMessage
+    final Object createCStringFromBytes(byte[] bytes,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+        return lib.createCStringFromBytes(delegate, bytes);
+    }
+
+    @ExportMessage
+    final Object createWideStringFromString(TruffleString string,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+        return lib.createWideStringFromString(delegate, string);
+    }
+
+    @ExportMessage
+    final TruffleString getCStringAsString(Object string,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+        return lib.getCStringAsString(delegate, string);
+    }
+
+    @ExportMessage
+    final Buffer getCStringAsBytes(Object string,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) {
+        return lib.getCStringAsBytes(delegate, string);
+    }
+
     @TruffleBoundary
     private static void logEnter(Level level, String msg, String argFmt, Object... args) {
         if (LOGGER.isLoggable(level)) {
@@ -1503,9 +1756,21 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     @TruffleBoundary
+    private static UnsupportedPosixFeatureException logException(Level level, String msg, UnsupportedPosixFeatureException e) throws UnsupportedPosixFeatureException {
+        if (LOGGER.isLoggable(level)) {
+            LOGGER.log(level, msg + String.format(" -> throw unsupported, msg=%s", fixLogArg(e.getMessage())));
+        }
+        throw e;
+    }
+
+    @TruffleBoundary
     private static PosixException logException(Level level, String msg, PosixException e) throws PosixException {
         if (LOGGER.isLoggable(level)) {
-            LOGGER.log(level, msg + String.format(" -> throw errno=%d, msg=%s", fixLogArgs(e.getErrorCode(), e.getMessage())));
+            if (e instanceof PosixErrnoException errnoException) {
+                LOGGER.log(level, msg + String.format(" -> throw errno=%d, msg=%s", fixLogArgs(errnoException.getErrorCode(), errnoException.getMessage())));
+            } else {
+                LOGGER.log(level, msg + String.format(" -> throw unsupported, msg=%s", fixLogArg(e.getMessage())));
+            }
         }
         throw e;
     }
@@ -1535,6 +1800,10 @@ public class LoggingPosixSupport extends PosixSupport {
     }
 
     private static PosixException logException(String msg, PosixException e) throws PosixException {
+        throw logException(DEFAULT_LEVEL, msg, e);
+    }
+
+    private static UnsupportedPosixFeatureException logException(String msg, UnsupportedPosixFeatureException e) throws UnsupportedPosixFeatureException {
         throw logException(DEFAULT_LEVEL, msg, e);
     }
 

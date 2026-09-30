@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,14 +43,13 @@ package com.oracle.graal.python.nodes.frame;
 import com.oracle.graal.python.builtins.objects.common.HashingCollectionNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
-import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.lib.PyObjectSetItem;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -60,7 +59,7 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 60 -> 42
+@GenerateInline(false)       // footprint reduction 60 -> 42
 public abstract class WriteGlobalNode extends PNodeWithContext {
     public static WriteGlobalNode getUncached() {
         return WriteGlobalNodeGen.getUncached();
@@ -85,7 +84,7 @@ public abstract class WriteGlobalNode extends PNodeWithContext {
 
     @Specialization(guards = {"isSingleContext()", "globals == cachedGlobals", "isBuiltinDict(cachedGlobals)"}, limit = "1")
     void writeDictObjectCached(VirtualFrame frame, @SuppressWarnings("unused") PDict globals, TruffleString attributeId, Object value,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached(value = "globals", weak = true) PDict cachedGlobals,
                     @Shared("setItemDict") @Cached HashingCollectionNodes.SetItemNode storeNode) {
         storeNode.execute(frame, inliningTarget, cachedGlobals, attributeId, value);
@@ -93,28 +92,15 @@ public abstract class WriteGlobalNode extends PNodeWithContext {
 
     @Specialization(replaces = "writeDictObjectCached", guards = "isBuiltinDict(globals)")
     void writeDictObject(VirtualFrame frame, PDict globals, TruffleString attributeId, Object value,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("setItemDict") @Cached HashingCollectionNodes.SetItemNode storeNode) {
         storeNode.execute(frame, inliningTarget, globals, attributeId, value);
     }
 
     @Specialization(replaces = {"writeDictObject", "writeDictObjectCached"})
     void writeGenericDict(VirtualFrame frame, PDict globals, TruffleString attributeId, Object value,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached PyObjectSetItem storeNode) {
         storeNode.execute(frame, inliningTarget, globals, attributeId, value);
-    }
-
-    @Specialization(guards = {"isSingleContext()", "globals == cachedGlobals"}, limit = "1")
-    void writeModuleCached(@SuppressWarnings("unused") PythonModule globals, TruffleString attributeId, Object value,
-                    @Cached(value = "globals", weak = true) PythonModule cachedGlobals,
-                    @Shared("write") @Cached WriteAttributeToObjectNode write) {
-        write.execute(cachedGlobals, attributeId, value);
-    }
-
-    @Specialization(replaces = "writeModuleCached")
-    void writeModule(PythonModule globals, TruffleString attributeId, Object value,
-                    @Shared("write") @Cached WriteAttributeToObjectNode write) {
-        write.execute(globals, attributeId, value);
     }
 }

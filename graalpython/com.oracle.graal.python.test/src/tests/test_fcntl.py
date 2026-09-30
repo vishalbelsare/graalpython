@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -45,13 +45,15 @@ except:
             return 'cpython'
     __graalpython__ = GP()
 
-import fcntl
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
-import sys
+
+if sys.platform != 'win32':
+    import fcntl
 
 PREFIX = 'select_graalpython_test'
 TEMP_DIR = tempfile.gettempdir()
@@ -62,52 +64,77 @@ def log(msg):
     # print(msg)
     pass
 
-def python_flock_blocks_sh_flock(python_flock_type, sh_flock_type):
+def python_flock_interacts_with_sh_flock(python_flock_type, sh_flock_type, should_block):
     os.close(os.open(TEST_FILENAME_FULL_PATH, os.O_WRONLY | os.O_CREAT))
     file = os.open(TEST_FILENAME_FULL_PATH, os.O_WRONLY)
+    p = None
     try:
         fcntl.flock(file, python_flock_type)
         p = subprocess.Popen("flock -%s %s -c 'exit 42'" % (sh_flock_type, TEST_FILENAME_FULL_PATH), shell=True)
-        log("sleeping...")
-        time.sleep(0.25)
-        assert p.poll() is None # the process should be still waiting for the lock
-        log("unlocking the file...")
-        fcntl.flock(file, fcntl.LOCK_UN) # release the lock
+        if should_block:
+            log("sleeping...")
+            time.sleep(0.25)
+            assert p.poll() is None # the process should be still waiting for the lock
+            log("unlocking the file...")
+            fcntl.flock(file, fcntl.LOCK_UN) # release the lock
         log("checking the retcode...")
-        time.sleep(0.25)
-        assert p.poll() == 42
-        log(f"{p.returncode=}")
+        retcode = p.wait(timeout=5)
+        assert retcode == 42
+        log(f"{retcode=}")
     finally:
+        if p is not None and p.poll() is None:
+            p.terminate()
+            p.wait(timeout=2)
         fcntl.flock(file, fcntl.LOCK_UN)
         os.close(file)
 
 class FcntlTests(unittest.TestCase):
     @unittest.skipUnless(__graalpython__.posix_module_backend() != 'java', 'No support in Truffle API (GR-28740)')
     @unittest.skipUnless(sys.platform != 'darwin', 'MacOSX does not have flock utility')
+    @unittest.skipUnless(sys.platform != 'win32', 'Windows does not have flock utility')
     def test_flock_x_and_x(self):
-        python_flock_blocks_sh_flock(fcntl.LOCK_EX, 'x')
+        python_flock_interacts_with_sh_flock(fcntl.LOCK_EX, 'x', should_block=True)
 
     @unittest.skipUnless(__graalpython__.posix_module_backend() != 'java', 'No support in Truffle API (GR-28740)')
     @unittest.skipUnless(sys.platform != 'darwin', 'MacOSX does not have flock utility')
+    @unittest.skipUnless(sys.platform != 'win32', 'Windows does not have flock utility')
     def test_flock_x_and_s(self):
-        python_flock_blocks_sh_flock(fcntl.LOCK_EX, 's')
+        python_flock_interacts_with_sh_flock(fcntl.LOCK_EX, 's', should_block=True)
 
     @unittest.skipUnless(__graalpython__.posix_module_backend() != 'java', 'No support in Truffle API (GR-28740)')
     @unittest.skipUnless(sys.platform != 'darwin', 'MacOSX does not have flock utility')
+    @unittest.skipUnless(sys.platform != 'win32', 'Windows does not have flock utility')
     def test_flock_s_and_x(self):
-        python_flock_blocks_sh_flock(fcntl.LOCK_SH, 'x')
+        python_flock_interacts_with_sh_flock(fcntl.LOCK_SH, 'x', should_block=True)
 
     @unittest.skipUnless(__graalpython__.posix_module_backend() != 'java', 'No support in Truffle API (GR-28740)')
     @unittest.skipUnless(sys.platform != 'darwin', 'MacOSX does not have flock utility')
+    @unittest.skipUnless(sys.platform != 'win32', 'Windows does not have flock utility')
     @unittest.skipUnless("graalpython" in os.environ.get("BITBUCKET_REPO_URL", "graalpython"), "Do not run this in auxillary CI jobs, it can be flaky")
     def test_flock_s_and_s(self):
-        os.close(os.open(TEST_FILENAME_FULL_PATH, os.O_WRONLY | os.O_CREAT))
-        file = os.open(TEST_FILENAME_FULL_PATH, os.O_WRONLY)
+        python_flock_interacts_with_sh_flock(fcntl.LOCK_SH, 's', should_block=False)
+
+
+@unittest.skipUnless(sys.platform == 'linux', "Linux only test")
+@unittest.skipUnless(__graalpython__.posix_module_backend() != 'java', "No ioctl in emulated backend")
+class IoctlTests(unittest.TestCase):
+    # Taken from CPython test_ioctl.py which unfortunately skips the whole file when not in a terminal
+    def test_ioctl_signed_unsigned_code_param(self):
+        import pty, termios, struct
+        mfd, sfd = pty.openpty()
         try:
-            fcntl.flock(file, fcntl.LOCK_SH)
-            p = subprocess.Popen("flock -s %s -c 'exit 42'" % TEST_FILENAME_FULL_PATH, shell=True)
-            time.sleep(0.25)
-            assert p.poll() == 42
+            if termios.TIOCSWINSZ < 0:
+                set_winsz_opcode_maybe_neg = termios.TIOCSWINSZ
+                set_winsz_opcode_pos = termios.TIOCSWINSZ & 0xffffffff
+            else:
+                set_winsz_opcode_pos = termios.TIOCSWINSZ
+                set_winsz_opcode_maybe_neg, = struct.unpack("i",
+                                                            struct.pack("I", termios.TIOCSWINSZ))
+
+            our_winsz = struct.pack("HHHH",80,25,0,0)
+            # test both with a positive and potentially negative ioctl code
+            new_winsz = fcntl.ioctl(mfd, set_winsz_opcode_pos, our_winsz)
+            new_winsz = fcntl.ioctl(mfd, set_winsz_opcode_maybe_neg, our_winsz)
         finally:
-            fcntl.flock(file, fcntl.LOCK_UN)
-            os.close(file)
+            os.close(mfd)
+            os.close(sfd)

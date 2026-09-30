@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,18 +41,21 @@
 package com.oracle.graal.python.builtins.modules.io;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PBufferedRandom;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
@@ -65,19 +68,34 @@ import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = PBufferedRandom)
 public final class BufferedRandomBuiltins extends AbstractBufferedIOBuiltins {
+
+    public static final TpSlots SLOTS = BufferedRandomBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return BufferedRandomBuiltinsFactory.getFactories();
+    }
+
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "BufferedRandom", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class BufferedRandomNode extends PythonBuiltinNode {
+        @Specialization
+        static PBuffered doNew(Object cls, @SuppressWarnings("unused") Object arg,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            // data filled in subsequent __init__ call - see BufferedRandomBuiltins.InitNode
+            return PFactory.createBufferedRandom(cls, getInstanceShape.execute(cls));
+        }
     }
 
     @GenerateCached(false)
     @GenerateInline
     public abstract static class BufferedRandomInit extends Node {
 
-        public abstract void execute(VirtualFrame frame, Node inliningTarget, PBuffered self, Object raw, int bufferSize, PythonObjectFactory factory);
+        public abstract void execute(VirtualFrame frame, Node inliningTarget, PBuffered self, Object raw, int bufferSize);
 
         @Specialization
-        static void doInit(VirtualFrame frame, Node inliningTarget, PBuffered self, Object raw, int bufferSize, PythonObjectFactory factory,
+        static void doInit(VirtualFrame frame, Node inliningTarget, PBuffered self, Object raw, int bufferSize,
                         @Cached IOBaseBuiltins.CheckBoolMethodHelperNode checkSeekableNode,
                         @Cached IOBaseBuiltins.CheckBoolMethodHelperNode checkReadableNode,
                         @Cached IOBaseBuiltins.CheckBoolMethodHelperNode checkWritableNode,
@@ -90,7 +108,7 @@ public final class BufferedRandomBuiltins extends AbstractBufferedIOBuiltins {
             checkReadableNode.checkReadable(frame, inliningTarget, raw);
             checkWritableNode.checkWriteable(frame, inliningTarget, raw);
             self.setRaw(raw, isFileIO(self, raw, PBufferedRandom, inliningTarget, getSelfClass, getRawClass));
-            bufferedInitNode.execute(frame, inliningTarget, self, bufferSize, factory);
+            bufferedInitNode.execute(frame, inliningTarget, self, bufferSize);
             self.resetRead();
             self.resetWrite();
             self.setPos(0);
@@ -100,17 +118,17 @@ public final class BufferedRandomBuiltins extends AbstractBufferedIOBuiltins {
     }
 
     // BufferedRandom(raw[, buffer_size=DEFAULT_BUFFER_SIZE])
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 2, parameterNames = {"self", "raw", "buffer_size"}, raiseErrorName = "BufferedRandom")
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "BufferedRandom", minNumOfPositionalArgs = 2, parameterNames = {"self", "raw", "buffer_size"})
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonBuiltinNode {
         @Specialization
         static Object doIt(VirtualFrame frame, PBuffered self, Object raw, Object bufferSize,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InitBufferSizeNode initBufferSizeNode,
-                        @Cached BufferedRandomInit init,
-                        @Cached PythonObjectFactory factory) {
+                        @Cached BufferedRandomInit init) {
             int size = initBufferSizeNode.execute(frame, inliningTarget, bufferSize);
-            init.execute(frame, inliningTarget, self, raw, size, factory);
+            init.execute(frame, inliningTarget, self, raw, size);
             return PNone.NONE;
         }
     }

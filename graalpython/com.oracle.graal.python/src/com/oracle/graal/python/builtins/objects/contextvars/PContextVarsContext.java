@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,17 +52,17 @@ public class PContextVarsContext extends PythonBuiltinObject {
     Hamt contextVarValues;
     private PContextVarsContext previousContext = null;
 
-    public void enter(Node inliningTarget, PythonContext.PythonThreadState threadState, PRaiseNode.Lazy raise) {
+    public void enter(Node inliningTarget, PythonContext.PythonThreadState threadState, PRaiseNode raise) {
         if (previousContext != null) {
-            throw raise.get(inliningTarget).raise(PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_ENTER_CONTEXT_ALREADY_ENTERED, this);
+            throw raise.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_ENTER_CONTEXT_ALREADY_ENTERED, this);
         }
-        previousContext = threadState.getContextVarsContext();
+        previousContext = threadState.getContextVarsContext(inliningTarget);
         assert previousContext != null : "ThreadState had null Context. This should not happen";
         threadState.setContextVarsContext(this);
     }
 
     public void leave(PythonContext.PythonThreadState threadState) {
-        assert threadState.getContextVarsContext() == this : "leaving a context which is not currently entered";
+        assert threadState.getContextVarsContext(null) == this : "leaving a context which is not currently entered";
         assert previousContext != null : "entered context has no previous context";
         threadState.setContextVarsContext(previousContext);
         previousContext = null;

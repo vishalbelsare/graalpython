@@ -6,6 +6,13 @@ import os
 from test.support import import_helper
 from test.support import os_helper
 
+
+try:
+    from dbm import sqlite3 as dbm_sqlite3
+except ImportError:
+    dbm_sqlite3 = None
+
+
 try:
     from dbm import ndbm
 except ImportError:
@@ -128,6 +135,15 @@ class AnyDBMTestCase:
         assert(f[key] == b"Python:")
         f.close()
 
+    def test_open_with_bytes(self):
+        dbm.open(os.fsencode(_fname), "c").close()
+
+    def test_open_with_pathlib_path(self):
+        dbm.open(os_helper.FakePath(_fname), "c").close()
+
+    def test_open_with_pathlib_path_bytes(self):
+        dbm.open(os_helper.FakePath(os.fsencode(_fname)), "c").close()
+
     def read_helper(self, f):
         keys = self.keys_helper(f)
         for key in self._dict:
@@ -146,6 +162,21 @@ class AnyDBMTestCase:
             self.assertNotIn(b'xxx', d)
             self.assertRaises(KeyError, lambda: d[b'xxx'])
 
+    def test_clear(self):
+        with dbm.open(_fname, 'c') as d:
+            self.assertEqual(d.keys(), [])
+            a = [(b'a', b'b'), (b'12345678910', b'019237410982340912840198242')]
+            for k, v in a:
+                d[k] = v
+            for k, _ in a:
+                self.assertIn(k, d)
+            self.assertEqual(len(d), len(a))
+
+            d.clear()
+            self.assertEqual(len(d), 0)
+            for k, _ in a:
+                self.assertNotIn(k, d)
+
     def setUp(self):
         self.addCleanup(setattr, dbm, '_defaultmod', dbm._defaultmod)
         dbm._defaultmod = self.module
@@ -156,6 +187,9 @@ class AnyDBMTestCase:
 class WhichDBTestCase(unittest.TestCase):
     def test_whichdb(self):
         self.addCleanup(setattr, dbm, '_defaultmod', dbm._defaultmod)
+        _bytes_fname = os.fsencode(_fname)
+        fnames = [_fname, os_helper.FakePath(_fname),
+                  _bytes_fname, os_helper.FakePath(_bytes_fname)]
         for module in dbm_iterator():
             # Check whether whichdb correctly guesses module name
             # for databases opened with "module" module.
@@ -164,7 +198,8 @@ class WhichDBTestCase(unittest.TestCase):
             dbm._defaultmod = module
             # Try with empty files first
             with module.open(_fname, 'c'): pass
-            self.assertEqual(name, self.dbm.whichdb(_fname))
+            for path in fnames:
+                self.assertEqual(name, self.dbm.whichdb(path))
             # Now add a key
             with module.open(_fname, 'w') as f:
                 f[b"1"] = b"1"
@@ -172,13 +207,40 @@ class WhichDBTestCase(unittest.TestCase):
                 self.assertIn(b"1", f)
                 # and read it
                 self.assertEqual(f[b"1"], b"1")
-            self.assertEqual(name, self.dbm.whichdb(_fname))
+            for path in fnames:
+                self.assertEqual(name, self.dbm.whichdb(path))
 
     @unittest.skipUnless(ndbm, reason='Test requires ndbm')
     def test_whichdb_ndbm(self):
         # Issue 17198: check that ndbm which is referenced in whichdb is defined
-        with open(_fname + '.db', 'wb'): pass
-        self.assertIsNone(self.dbm.whichdb(_fname))
+        with open(_fname + '.db', 'wb') as f:
+            f.write(b'spam')
+        _bytes_fname = os.fsencode(_fname)
+        fnames = [_fname, os_helper.FakePath(_fname),
+                  _bytes_fname, os_helper.FakePath(_bytes_fname)]
+        for path in fnames:
+            self.assertIsNone(self.dbm.whichdb(path))
+
+    @unittest.skipUnless(dbm_sqlite3, reason='Test requires dbm.sqlite3')
+    def test_whichdb_sqlite3(self):
+        # Databases created by dbm.sqlite3 are detected correctly.
+        with dbm_sqlite3.open(_fname, "c") as db:
+            db["key"] = "value"
+        self.assertEqual(self.dbm.whichdb(_fname), "dbm.sqlite3")
+
+    @unittest.skipUnless(dbm_sqlite3, reason='Test requires dbm.sqlite3')
+    def test_whichdb_sqlite3_existing_db(self):
+        # Existing sqlite3 databases are detected correctly.
+        sqlite3 = import_helper.import_module("sqlite3")
+        try:
+            # Create an empty database.
+            with sqlite3.connect(_fname) as cx:
+                cx.execute("CREATE TABLE dummy(database)")
+                cx.commit()
+        finally:
+            cx.close()
+        self.assertEqual(self.dbm.whichdb(_fname), "dbm.sqlite3")
+
 
     def setUp(self):
         self.addCleanup(cleaunup_test_dir)

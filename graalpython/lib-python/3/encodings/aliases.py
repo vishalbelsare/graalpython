@@ -71,6 +71,10 @@ aliases = {
 
     # cp1140 codec
     '1140'               : 'cp1140',
+    'cp01140'            : 'cp1140',
+    'csibm01140'         : 'cp1140',
+    'ebcdic_us_37_euro'  : 'cp1140',
+    'ibm01140'           : 'cp1140',
     'ibm1140'            : 'cp1140',
 
     # cp1250 codec
@@ -159,8 +163,12 @@ aliases = {
 
     # cp858 codec
     '858'                : 'cp858',
+    'cp00858'            : 'cp858',
+    'csibm00858'         : 'cp858',
     'csibm858'           : 'cp858',
+    'ibm00858'           : 'cp858',
     'ibm858'             : 'cp858',
+    'pc_multilingual_850_euro' : 'cp858',
 
     # cp860 codec
     '860'                : 'cp860',
@@ -209,6 +217,7 @@ aliases = {
     'ms932'              : 'cp932',
     'mskanji'            : 'cp932',
     'ms_kanji'           : 'cp932',
+    'windows_31j'        : 'cp932',
 
     # cp949 codec
     '949'                : 'cp949',
@@ -220,12 +229,14 @@ aliases = {
     'ms950'              : 'cp950',
 
     # euc_jis_2004 codec
-    'jisx0213'           : 'euc_jis_2004',
-    'eucjis2004'         : 'euc_jis_2004',
-    'euc_jis2004'        : 'euc_jis_2004',
+    # GraalPy change: Java doesn't have this codec
+    # 'jisx0213'           : 'euc_jis_2004',
+    # 'eucjis2004'         : 'euc_jis_2004',
+    # 'euc_jis2004'        : 'euc_jis_2004',
 
     # euc_jisx0213 codec
-    'eucjisx0213'        : 'euc_jisx0213',
+    # GraalPy change: Java doesn't have this codec
+    # 'eucjisx0213'        : 'euc_jisx0213',
 
     # euc_jp codec
     'eucjp'              : 'euc_jp',
@@ -280,24 +291,28 @@ aliases = {
     'iso_2022_jp'        : 'iso2022_jp',
 
     # iso2022_jp_1 codec
-    'iso2022jp_1'        : 'iso2022_jp_1',
-    'iso_2022_jp_1'      : 'iso2022_jp_1',
+    # GraalPy change: Java doesn't have this codec
+    # 'iso2022jp_1'        : 'iso2022_jp_1',
+    # 'iso_2022_jp_1'      : 'iso2022_jp_1',
 
     # iso2022_jp_2 codec
     'iso2022jp_2'        : 'iso2022_jp_2',
     'iso_2022_jp_2'      : 'iso2022_jp_2',
 
     # iso2022_jp_2004 codec
-    'iso_2022_jp_2004'   : 'iso2022_jp_2004',
-    'iso2022jp_2004'     : 'iso2022_jp_2004',
+    # GraalPy change: Java doesn't have this codec
+    # 'iso_2022_jp_2004'   : 'iso2022_jp_2004',
+    # 'iso2022jp_2004'     : 'iso2022_jp_2004',
 
     # iso2022_jp_3 codec
-    'iso2022jp_3'        : 'iso2022_jp_3',
-    'iso_2022_jp_3'      : 'iso2022_jp_3',
+    # GraalPy change: Java doesn't have this codec
+    # 'iso2022jp_3'        : 'iso2022_jp_3',
+    # 'iso_2022_jp_3'      : 'iso2022_jp_3',
 
     # iso2022_jp_ext codec
-    'iso2022jp_ext'      : 'iso2022_jp_ext',
-    'iso_2022_jp_ext'    : 'iso2022_jp_ext',
+    # GraalPy change: Java doesn't have this codec
+    # 'iso2022jp_ext'      : 'iso2022_jp_ext',
+    # 'iso_2022_jp_ext'    : 'iso2022_jp_ext',
 
     # iso2022_kr codec
     'csiso2022kr'        : 'iso2022_kr',

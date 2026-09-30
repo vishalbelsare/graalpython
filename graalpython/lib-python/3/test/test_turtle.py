@@ -1,5 +1,6 @@
 import pickle
 import unittest
+import unittest.mock
 from test import support
 from test.support import import_helper
 from test.support import os_helper
@@ -48,6 +49,34 @@ pencolor = red
 fillcolor: blue
 visible = False
 """
+
+
+def patch_screen():
+    """Patch turtle._Screen for testing without a display.
+
+    We must patch the _Screen class itself instead of the _Screen
+    instance because instantiating it requires a display.
+    """
+    # Create a mock screen that delegates color validation to the real TurtleScreen methods
+    mock_screen = unittest.mock.MagicMock()
+    mock_screen.__class__ = turtle._Screen
+    mock_screen.mode.return_value = "standard"
+    mock_screen._colormode = 1.0
+
+    def mock_iscolorstring(color):
+        valid_colors = {'red', 'green', 'blue', 'black', 'white', 'yellow',
+                        'orange', 'purple', 'pink', 'brown', 'gray', 'grey',
+                        'cyan', 'magenta'}
+
+        return color in valid_colors or (isinstance(color, str) and color.startswith('#'))
+
+    mock_screen._iscolorstring = mock_iscolorstring
+    mock_screen._colorstr = turtle._Screen._colorstr.__get__(mock_screen)
+
+    return unittest.mock.patch(
+        "turtle._Screen.__new__",
+        return_value=mock_screen
+    )
 
 
 class TurtleConfigTest(unittest.TestCase):
@@ -267,6 +296,14 @@ class TestTNavigator(VectorComparisonMixin, unittest.TestCase):
         self.assertAlmostEqual(self.nav.xcor(), 100)
         self.assertAlmostEqual(self.nav.ycor(), -100)
 
+    def test_teleport(self):
+        self.nav.teleport(20, -30, fill_gap=True)
+        self.assertAlmostEqual(self.nav.xcor(), 20)
+        self.assertAlmostEqual(self.nav.ycor(), -30)
+        self.nav.teleport(-20, 30, fill_gap=False)
+        self.assertAlmostEqual(self.nav.xcor(), -20)
+        self.assertAlmostEqual(self.nav.ycor(), 30)
+
     def test_pos(self):
         self.assertEqual(self.nav.pos(), self.nav._position)
         self.nav.goto(100, -100)
@@ -439,6 +476,70 @@ class TestTPen(unittest.TestCase):
         self.assertFalse(tpen.isvisible())
         tpen.showturtle()
         self.assertTrue(tpen.isvisible())
+
+    def test_teleport(self):
+
+        tpen = turtle.TPen()
+
+        for fill_gap_value in [True, False]:
+            tpen.penup()
+            tpen.teleport(100, 100, fill_gap=fill_gap_value)
+            self.assertFalse(tpen.isdown())
+            tpen.pendown()
+            tpen.teleport(-100, -100, fill_gap=fill_gap_value)
+            self.assertTrue(tpen.isdown())
+
+
+class TestTurtle(unittest.TestCase):
+    def setUp(self):
+        with patch_screen():
+            self.turtle = turtle.Turtle()
+
+        # Reset the Screen singleton to avoid reference leaks
+        self.addCleanup(setattr, turtle.Turtle, '_screen', None)
+
+    def test_dot_signature(self):
+        self.turtle.dot()
+        self.turtle.dot(10)
+        self.turtle.dot(size=10)
+        self.turtle.dot((0, 0, 0))
+        self.turtle.dot(size=(0, 0, 0))
+        self.turtle.dot("blue")
+        self.turtle.dot("")
+        self.turtle.dot(size="blue")
+        self.turtle.dot(20, "blue")
+        self.turtle.dot(20, "blue")
+        self.turtle.dot(20, (0, 0, 0))
+        self.turtle.dot(20, 0, 0, 0)
+        with self.assertRaises(TypeError):
+            self.turtle.dot(color="blue")
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, "_not_a_color_")
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, 0, (0, 0, 0, 0))
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, 0, 0, 0, 0, 0)
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, 0, (-1, 0, 0))
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, 0, -1, 0, 0)
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, 0, (0, 257, 0))
+        self.assertRaises(turtle.TurtleGraphicsError, self.turtle.dot, 0, 0, 257, 0)
+
+
+class TestModuleLevel(unittest.TestCase):
+    def test_all_signatures(self):
+        import inspect
+
+        known_signatures = {
+            'teleport':
+                '(x=None, y=None, *, fill_gap: bool = False) -> None',
+            'undo': '()',
+            'goto': '(x, y=None)',
+            'bgcolor': '(*args)',
+            'pen': '(pen=None, **pendict)',
+        }
+
+        for name in known_signatures:
+            with self.subTest(name=name):
+                obj = getattr(turtle, name)
+                sig = inspect.signature(obj)
+                self.assertEqual(str(sig), known_signatures[name])
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -60,12 +60,16 @@ public final class ArrayBuilder<T> {
         this.data = new Object[capacity];
     }
 
+    public boolean isEmpty() {
+        return size == 0;
+    }
+
     public void add(Object item) {
         if (size == data.length) {
             try {
                 data = PythonUtils.arrayCopyOf(data, PythonUtils.multiplyExact(size, 2));
             } catch (OverflowException e) {
-                CompilerDirectives.transferToInterpreter();
+                CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw new OutOfMemoryError();
             }
         }
@@ -79,12 +83,24 @@ public final class ArrayBuilder<T> {
     }
 
     @SuppressWarnings("unchecked")
+    public T pop() {
+        assert size > 0;
+        return (T) data[--size];
+    }
+
+    @SuppressWarnings("unchecked")
+    public T peek() {
+        assert size > 0;
+        return (T) data[size - 1];
+    }
+
+    @SuppressWarnings("unchecked")
     public T[] toArray(T[] newArray) {
         return (T[]) arrayCopyOf(data, size, newArray.getClass());
     }
 
-    @SuppressWarnings("unchecked")
-    public Object[] toObjectArray(Object[] newArray) {
+    public Object[] toObjectArray() {
+        Object[] newArray = new Object[size];
         return arrayCopyOf(data, size, newArray.getClass());
     }
 

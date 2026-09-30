@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,19 +40,17 @@
  */
 package com.oracle.graal.python.nodes;
 
-import static com.oracle.graal.python.util.PythonUtils.tsArray;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
-
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public abstract class SpecialMethodNames {
 
+    private static TruffleString tsLiteral(String s) {
+        return PythonUtils.tsInternedLiteral(s);
+    }
+
     public static final String J___NEW__ = "__new__";
     public static final TruffleString T___NEW__ = tsLiteral(J___NEW__);
-
-    public static final String J___ALLOC__ = "__alloc__";
-    public static final TruffleString T___ALLOC__ = tsLiteral(J___ALLOC__);
 
     public static final String J___INIT__ = "__init__";
     public static final TruffleString T___INIT__ = tsLiteral(J___INIT__);
@@ -65,9 +63,6 @@ public abstract class SpecialMethodNames {
 
     public static final String J___DEEPCOPY__ = "__deepcopy__";
     public static final TruffleString T___DEEPCOPY__ = tsLiteral(J___DEEPCOPY__);
-
-    public static final String J___DEALLOC__ = "__dealloc__";
-    public static final TruffleString T___DEALLOC__ = tsLiteral(J___DEALLOC__);
 
     public static final String J___DEL__ = "__del__";
     public static final TruffleString T___DEL__ = tsLiteral(J___DEL__);
@@ -86,9 +81,6 @@ public abstract class SpecialMethodNames {
 
     public static final String J___FORMAT__ = "__format__";
     public static final TruffleString T___FORMAT__ = tsLiteral(J___FORMAT__);
-
-    public static final String J___FREE__ = "__free__";
-    public static final TruffleString T___FREE__ = tsLiteral(J___FREE__);
 
     public static final String J___LT__ = "__lt__";
     public static final TruffleString T___LT__ = tsLiteral(J___LT__);
@@ -464,25 +456,17 @@ public abstract class SpecialMethodNames {
 
     public static final TruffleString T_UPDATE = tsLiteral("update");
 
-    public static final String J_RICHCMP = "__truffle_richcompare__";
-    public static final TruffleString T_RICHCMP = tsLiteral(J_RICHCMP);
+    public static final String J_TP_RICHCOMPARE = "tp_richcompare";
+    public static final TruffleString T_TP_RICHCOMPARE = tsLiteral(J_TP_RICHCOMPARE);
 
     public static final String J_TRUFFLE_SOURCE = "__truffle_source__";
 
     public static final String J_SHUTDOWN = "_shutdown";
     public static final TruffleString T_SHUTDOWN = tsLiteral(J_SHUTDOWN);
 
-    // (tfel): The order of these matches the one in CPython, and thus is assumed to remain the same
-    // in various places
-    @CompilationFinal(dimensions = 1) private static final TruffleString[] COMPARE_OPSTRINGS = tsArray("<", "<=", "==", "!=", ">", ">=");
-    @CompilationFinal(dimensions = 1) private static final TruffleString[] COMPARE_OPNAMES = new TruffleString[]{T___LT__, T___LE__, T___EQ__, T___NE__, T___GT__, T___GE__};
-    public static final int COMPARE_OP_COUNT = COMPARE_OPNAMES.length;
+    public static final String J___TYPING_SUBST__ = "__typing_subst__";
+    public static final TruffleString T___TYPING_SUBST__ = tsLiteral(J___TYPING_SUBST__);
 
-    public static TruffleString getCompareOpString(int op) {
-        return COMPARE_OPSTRINGS[op];
-    }
-
-    public static TruffleString getCompareName(int op) {
-        return COMPARE_OPNAMES[op];
-    }
+    public static final String J___TYPING_PREPARE_SUBST__ = "__typing_prepare_subst__";
+    public static final TruffleString T___TYPING_PREPARE_SUBST__ = tsLiteral(J___TYPING_PREPARE_SUBST__);
 }

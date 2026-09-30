@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,20 +40,27 @@
  */
 package com.oracle.graal.python.builtins.objects.cext.structs;
 
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.PCallCapiFunction;
-import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readLongArrayElements;
+
+import com.oracle.graal.python.annotations.CApiStructs;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 
+@CApiStructs
 public enum CStructs {
     PyModuleDef,
     PyModuleDef_Slot,
     PyMethodDef,
+    PySlot,
     PyObject,
+    GraalPyObject,
     PyBytesObject,
+    PyByteArrayObject,
     PyListObject,
     PyVarObject,
+    GraalPyVarObject,
     PyMemoryViewObject,
     Py_buffer,
     PyDateTime_CAPI,
@@ -63,10 +70,15 @@ public enum CStructs {
     PyAsyncMethods,
     PyBufferProcs,
     PyTypeObject,
+    PyHeapTypeObject,
     PyTupleObject,
     PyFloatObject,
+    GraalPyFloatObject,
+    GraalPyUnicodeObject,
+    _PyLongValue,
     PyLongObject,
     PyModuleDef_Base,
+    Py_complex,
     PyComplexObject,
     PyDateTime_Date,
     PyDateTime_Time,
@@ -75,14 +87,23 @@ public enum CStructs {
     PyASCIIObject,
     PyCompactUnicodeObject,
     PyBaseExceptionObject,
+    PySyntaxErrorObject,
     PyUnicodeObject,
     Py_UNICODE,
     PyGetSetDef,
     PyMemberDef,
     PyThreadState,
+    GraalPySingletons,
+    GraalPyDeallocState,
     wchar_t,
+    long__,
     long__long,
-    Py_ssize_t;
+    Py_ssize_t,
+    GCState,
+    PyGC_Head,
+    GraalPyGC_CycleNode,
+    GCGeneration,
+    GraalPy_Test_CAPI;
 
     @CompilationFinal(dimensions = 1) public static final CStructs[] VALUES = values();
 
@@ -100,8 +121,8 @@ public enum CStructs {
 
     private static void resolve() {
         CompilerAsserts.neverPartOfCompilation();
-        Object sizesPointer = PCallCapiFunction.callUncached(NativeCAPISymbol.FUN_PYTRUFFLE_STRUCT_SIZES);
-        long[] sizes = CStructAccessFactory.ReadI64NodeGen.getUncached().readLongArray(sizesPointer, VALUES.length);
+        long sizesPointer = CApiContext.getNativeCAPIMetadataPointer(null) + (CConstants.VALUES.length + CFields.VALUES.length + 2L) * Long.BYTES;
+        long[] sizes = readLongArrayElements(sizesPointer, 0L, VALUES.length);
         for (CStructs struct : VALUES) {
             long size = sizes[struct.ordinal()];
             assert size > 0 && size < 1024;

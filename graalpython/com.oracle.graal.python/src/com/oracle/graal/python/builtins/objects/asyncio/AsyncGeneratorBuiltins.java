@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,24 +40,27 @@
  */
 package com.oracle.graal.python.builtins.objects.asyncio;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___AITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ANEXT__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.generator.GeneratorBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -65,10 +68,12 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PAsyncGenerator)
 public final class AsyncGeneratorBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = AsyncGeneratorBuiltinsSlotsGen.SLOTS;
+
     private static void callHooks(VirtualFrame frame, PAsyncGen self, PythonContext.PythonThreadState state, CallUnaryMethodNode invokeFirstIter) {
         Object firstIter = state.getAsyncgenFirstIter();
         if (firstIter == null) {
@@ -90,11 +95,8 @@ public final class AsyncGeneratorBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetCode extends PythonUnaryBuiltinNode {
         @Specialization
-        static Object getCode(PAsyncGen self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile hasCodeProfile,
-                        @Cached PythonObjectFactory.Lazy factory) {
-            return self.getOrCreateCode(inliningTarget, hasCodeProfile, factory);
+        static Object getCode(PAsyncGen self) {
+            return self.getGeneratorFunction().getCode();
         }
     }
 
@@ -131,11 +133,13 @@ public final class AsyncGeneratorBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class ASend extends PythonBinaryBuiltinNode {
         @Specialization
-        Object aSend(VirtualFrame frame, PAsyncGen self, Object sent,
+        static Object aSend(VirtualFrame frame, PAsyncGen self, Object sent,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached CallUnaryMethodNode callFirstIter,
-                        @Cached PythonObjectFactory factory) {
-            callHooks(frame, self, getContext().getThreadState(getLanguage()), callFirstIter);
-            return factory.createAsyncGeneratorASend(self, sent);
+                        @Bind PythonLanguage language) {
+            callHooks(frame, self, context.getThreadState(context.getLanguage(inliningTarget)), callFirstIter);
+            return PFactory.createAsyncGeneratorASend(language, self, sent);
         }
     }
 
@@ -145,15 +149,17 @@ public final class AsyncGeneratorBuiltins extends PythonBuiltins {
         public abstract Object execute(VirtualFrame frame, PAsyncGen self, Object arg1, Object arg2, Object arg3);
 
         @Specialization
-        Object athrow(VirtualFrame frame, PAsyncGen self, Object arg1, Object arg2, Object arg3,
+        static Object athrow(VirtualFrame frame, PAsyncGen self, Object arg1, Object arg2, Object arg3,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached CallUnaryMethodNode callFirstIter,
-                        @Cached PythonObjectFactory factory) {
-            callHooks(frame, self, getContext().getThreadState(getLanguage()), callFirstIter);
-            return factory.createAsyncGeneratorAThrow(self, arg1, arg2, arg3);
+                        @Bind PythonLanguage language) {
+            callHooks(frame, self, context.getThreadState(context.getLanguage(inliningTarget)), callFirstIter);
+            return PFactory.createAsyncGeneratorAThrow(language, self, arg1, arg2, arg3);
         }
     }
 
-    @Builtin(name = J___AITER__, declaresExplicitSelf = true, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.am_aiter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class AIter extends PythonUnaryBuiltinNode {
         @Specialization
@@ -162,15 +168,17 @@ public final class AsyncGeneratorBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___ANEXT__, declaresExplicitSelf = true, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.am_anext, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ANext extends PythonUnaryBuiltinNode {
         @Specialization
-        Object aNext(VirtualFrame frame, PAsyncGen self,
+        static Object aNext(VirtualFrame frame, PAsyncGen self,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached CallUnaryMethodNode callFirstIter,
-                        @Cached PythonObjectFactory factory) {
-            callHooks(frame, self, getContext().getThreadState(getLanguage()), callFirstIter);
-            return factory.createAsyncGeneratorASend(self, PNone.NONE);
+                        @Bind PythonLanguage language) {
+            callHooks(frame, self, context.getThreadState(context.getLanguage(inliningTarget)), callFirstIter);
+            return PFactory.createAsyncGeneratorASend(language, self, PNone.NONE);
         }
     }
 
@@ -179,10 +187,22 @@ public final class AsyncGeneratorBuiltins extends PythonBuiltins {
     public abstract static class AClose extends PythonUnaryBuiltinNode {
         @Specialization
         Object aClose(VirtualFrame frame, PAsyncGen self,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached CallUnaryMethodNode callFirstIter,
-                        @Cached PythonObjectFactory factory) {
-            callHooks(frame, self, getContext().getThreadState(getLanguage()), callFirstIter);
-            return factory.createAsyncGeneratorAThrow(self, null, PNone.NO_VALUE, PNone.NO_VALUE);
+                        @Bind PythonLanguage language) {
+            callHooks(frame, self, context.getThreadState(context.getLanguage(inliningTarget)), callFirstIter);
+            return PFactory.createAsyncGeneratorAThrow(language, self, null, PNone.NO_VALUE, PNone.NO_VALUE);
+        }
+    }
+
+    @Builtin(name = J___CLASS_GETITEM__, minNumOfPositionalArgs = 2, isClassmethod = true)
+    @GenerateNodeFactory
+    public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
+        @Specialization
+        static Object classGetItem(Object cls, Object key,
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

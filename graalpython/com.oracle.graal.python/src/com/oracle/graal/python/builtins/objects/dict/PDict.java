@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -28,6 +28,7 @@ package com.oracle.graal.python.builtins.objects.dict;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_ITEMS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_KEYS;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_VALUES;
+import static com.oracle.graal.python.util.PythonUtils.builtinClassToType;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage;
@@ -41,7 +42,6 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.KeywordsStorage;
 import com.oracle.graal.python.builtins.objects.common.PHashingCollection;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
-import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectHashNode;
@@ -67,14 +67,7 @@ import com.oracle.truffle.api.object.Shape;
 public class PDict extends PHashingCollection {
 
     public PDict(Object cls, Shape instanceShape, HashingStorage dictStorage) {
-        super(ensurePBCT(cls), instanceShape, dictStorage);
-    }
-
-    private static Object ensurePBCT(Object cls) {
-        if (cls instanceof PythonBuiltinClass && ((PythonBuiltinClass) cls).getType() == PythonBuiltinClassType.PDict) {
-            return PythonBuiltinClassType.PDict;
-        }
-        return cls;
+        super(builtinClassToType(cls), instanceShape, dictStorage);
     }
 
     public PDict(Object cls, Shape instanceShape) {
@@ -108,7 +101,7 @@ public class PDict extends PHashingCollection {
     }
 
     public void update(PDict other) {
-        HashingStorageAddAllToOther.executeUncached(other.getDictStorage(), this);
+        setDictStorage(HashingStorageAddAllToOther.executeUncached(other.getDictStorage(), storage));
     }
 
     @Override
@@ -124,7 +117,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static long getHashSize(PDict self,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Cached HashingStorageLen lenNode) {
         boolean mustRelease = gil.acquire();
@@ -139,7 +132,7 @@ public class PDict extends PHashingCollection {
     @ExportMessage(name = "isHashEntryModifiable")
     @ExportMessage(name = "isHashEntryRemovable")
     static boolean isHashEntryReadable(PDict self, Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Exclusive @Cached PForeignToPTypeNode convertNode) {
@@ -153,7 +146,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static Object readHashValue(PDict self, Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Exclusive @Cached HashingStorageGetItem getItem,
                     @Exclusive @Cached PForeignToPTypeNode convertNode) throws UnknownKeyException {
@@ -173,7 +166,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static boolean isHashEntryInsertable(PDict self, Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Cached PyObjectHashNode hashNode,
                     @Exclusive @Cached HashingStorageGetItem getItem,
@@ -199,7 +192,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static void writeHashEntry(PDict self, Object key, Object value,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Cached IsBuiltinObjectProfile errorProfile,
                     @Cached HashingStorageSetItem setItem,
@@ -220,15 +213,15 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static void removeHashEntry(PDict self, Object key,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Cached HashingStorageDelItem delItem,
                     @Exclusive @Cached PForeignToPTypeNode convertNode) throws UnknownKeyException {
         boolean mustRelease = gil.acquire();
         try {
             Object pKey = convertNode.executeConvert(key);
-            Object found = delItem.executePop(null, inliningTarget, self.getDictStorage(), pKey, self);
-            if (found == null) {
+            boolean found = delItem.execute(null, inliningTarget, self.getDictStorage(), pKey, self);
+            if (!found) {
                 throw UnknownKeyException.create(key);
             }
         } finally {
@@ -238,7 +231,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static Object getHashEntriesIterator(PDict self,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Shared("getIter") @Cached PyObjectGetIter getIter,
                     @Shared("callMethod") @Cached PyObjectCallMethodObjArgs callMethod) {
@@ -253,7 +246,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static Object getHashKeysIterator(PDict self,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Shared("getIter") @Cached PyObjectGetIter getIter,
                     @Shared("callMethod") @Cached PyObjectCallMethodObjArgs callMethod) {
@@ -268,7 +261,7 @@ public class PDict extends PHashingCollection {
 
     @ExportMessage
     static Object getHashValuesIterator(PDict self,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached GilNode gil,
                     @Shared("getIter") @Cached PyObjectGetIter getIter,
                     @Shared("callMethod") @Cached PyObjectCallMethodObjArgs callMethod) {

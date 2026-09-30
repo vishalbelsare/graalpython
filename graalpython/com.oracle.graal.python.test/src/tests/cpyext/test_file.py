@@ -1,4 +1,4 @@
-# Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,11 +37,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+import tempfile
 
-import tempfile            
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare
 
 tmp_write_file = None
 
@@ -62,10 +60,6 @@ class TestPyFile(CPyExtTestCase):
         if tmp_write_file:
             tmp_write_file.close()
         
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyFile, self).compile_module(name)
-
     test_PyFile_WriteObject = CPyExtFunction(
         _reference_write_object,
         lambda: (

@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -165,6 +165,10 @@ def test_join1():
 def test_strip():
     assert ' test  '.strip() == 'test'
     assert u' test  '.strip() == u'test'
+
+
+def test_splitlines_keepends_type_error():
+    assert "foo\n".splitlines("bla") == ["foo\n"]
 
 
 def assertEqual(value, expected):
@@ -1094,6 +1098,12 @@ def test_splitlines():
     assert len(str.splitlines("a\nb")) == 2
 
 
+def test_split_negative_maxsplit_matches_unlimited():
+    s = "0x1.e800000000000p+5"
+    assert s.split(s, maxsplit=-84) == ["", ""]
+    assert s.split(s, maxsplit=-1) == ["", ""]
+
+
 def test_literals():
     s = "hello\[world\]"
     assert len(s) == 14
@@ -1191,3 +1201,44 @@ def test_str_add_result_type():
     assert ('' + 'a').__class__ == str
     assert ('a' + '').__class__ == str
     assert ('a' + 'a').__class__ == str
+
+def test_literal_with_nonbmp_and_escapes():
+    # Check that escape processing didn't accidentally break the emoji into surrogates
+    assert len("\\🤗\\") == 3
+
+
+def test_str_from_mmap():
+    import mmap
+    size = len("GraalPy")
+    with mmap.mmap(-1, size) as mm:
+        mm.write(b"GraalPy")
+        mm.seek(0)
+        assert str(mm, encoding='utf-8') == 'GraalPy'
+
+
+def test_raw_unicode_escape_does_not_alter_encoded_string():
+    original = "[\\xA0]"
+    decoded = bytes(original, encoding="raw-unicode-escape").decode("raw-unicode-escape")
+    assert original == decoded
+
+
+class FunkyFormat:
+    def __init__(self, f):
+        self.f = f
+    def __format__(self, _):
+        return self.f
+
+class FunkyStr(str):
+    def __str__(self):
+        return self
+
+
+def test_fstring_preserves_type_of_single_str():
+    assert type(f"{FunkyStr('abc')}") == FunkyStr
+
+
+def test_fstring():
+    assert type(f"hello {FunkyFormat('world')}!") == str
+    assert f"hello {FunkyFormat('world')}!" == "hello world!"
+    assert f"hello {FunkyStr('world')}!" == "hello world!"
+    assertRaises(TypeError, lambda: f"hello {FunkyFormat(33)}!")

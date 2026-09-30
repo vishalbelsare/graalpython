@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,18 +42,20 @@ package com.oracle.graal.python.builtins.modules.functools;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PythonObject;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_FUNCTOOLS;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_FUNCTOOLS;
 import static com.oracle.graal.python.nodes.ErrorMessages.REDUCE_EMPTY_SEQ;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_ARG_N_MUST_SUPPORT_ITERATION;
-import static com.oracle.truffle.api.nodes.LoopNode.reportLoopCount;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.lib.GetNextNode;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
@@ -64,7 +66,7 @@ import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -72,8 +74,8 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(defineModule = J_FUNCTOOLS)
@@ -82,8 +84,6 @@ public final class FunctoolsModuleBuiltins extends PythonBuiltins {
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return FunctoolsModuleBuiltinsFactory.getFactories();
     }
-
-    protected static final HiddenKey KWD_MARK = new HiddenKey("kwd_mark");
 
     @Override
     public void initialize(Python3Core core) {
@@ -102,7 +102,7 @@ public final class FunctoolsModuleBuiltins extends PythonBuiltins {
                                         "\n" + //
                                         "cache_info_type:    namedtuple class with the fields:\n" + //
                                         "                        hits misses currsize maxsize\n");
-        addBuiltinConstant(KWD_MARK, core.factory().createPythonObject(PythonObject));
+        core.lookupBuiltinModule(T_FUNCTOOLS).setModuleState(PFactory.createPythonObject(PythonObject, PythonObject.getInstanceShape(core.getLanguage())));
     }
 
     // functools.reduce(function, iterable[, initializer])
@@ -118,50 +118,48 @@ public final class FunctoolsModuleBuiltins extends PythonBuiltins {
     public abstract static class ReduceNode extends PythonTernaryBuiltinNode {
         @Specialization
         Object doReduce(VirtualFrame frame, Object function, Object sequence, Object initialIn,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetIter getIter,
-                        @Cached GetNextNode nextNode,
+                        @Cached PyIterNextNode nextNode,
                         @Cached CallNode callNode,
                         @Cached InlinedConditionProfile initialNoValueProfile,
-                        @Cached IsBuiltinObjectProfile stopIterProfile,
                         @Cached IsBuiltinObjectProfile typeError,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Object initial = initialNoValueProfile.profile(inliningTarget, PGuards.isNoValue(initialIn)) ? null : initialIn;
             Object seqIterator, result = initial;
             try {
                 seqIterator = getIter.execute(frame, inliningTarget, sequence);
             } catch (PException pe) {
                 pe.expectTypeError(inliningTarget, typeError);
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, S_ARG_N_MUST_SUPPORT_ITERATION, "reduce()", 2);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, S_ARG_N_MUST_SUPPORT_ITERATION, "reduce()", 2);
             }
 
             Object[] args = new Object[2];
 
-            int count = 0;
+            int loopCount = 0;
             while (true) {
                 Object op2;
                 try {
-                    op2 = nextNode.execute(frame, seqIterator);
-                    if (result == null) {
-                        result = op2;
-                    } else {
-                        // Update the args tuple in-place
-                        args[0] = result;
-                        args[1] = op2;
-                        result = callNode.execute(frame, function, args);
-                    }
-                    if (CompilerDirectives.hasNextTier()) {
-                        count++;
-                    }
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, stopIterProfile);
+                    op2 = nextNode.execute(frame, inliningTarget, seqIterator);
+                } catch (IteratorExhausted e) {
                     break;
                 }
+                if (result == null) {
+                    result = op2;
+                } else {
+                    // Update the args tuple in-place
+                    args[0] = result;
+                    args[1] = op2;
+                    result = callNode.execute(frame, function, args);
+                }
+                if (CompilerDirectives.hasNextTier() && loopCount < Integer.MAX_VALUE) {
+                    loopCount++;
+                }
             }
-            reportLoopCount(this, count >= 0 ? count : Integer.MAX_VALUE);
+            LoopNode.reportLoopCount(this, loopCount);
 
             if (result == null) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, REDUCE_EMPTY_SEQ);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, REDUCE_EMPTY_SEQ);
             }
 
             return result;
@@ -174,8 +172,8 @@ public final class FunctoolsModuleBuiltins extends PythonBuiltins {
     public abstract static class CmpToKeyNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object doConvert(Object myCmp,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createKeyWrapper(myCmp);
+                        @Bind PythonLanguage language) {
+            return PFactory.createKeyWrapper(language, myCmp);
         }
     }
 

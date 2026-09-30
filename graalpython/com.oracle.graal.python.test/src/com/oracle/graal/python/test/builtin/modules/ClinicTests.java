@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -57,19 +57,20 @@ import com.oracle.graal.python.annotations.ClinicConverterFactory.ArgumentName;
 import com.oracle.graal.python.annotations.ClinicConverterFactory.BuiltinName;
 import com.oracle.graal.python.annotations.ClinicConverterFactory.DefaultValue;
 import com.oracle.graal.python.annotations.ClinicConverterFactory.UseDefaultForNone;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.nodes.argument.ReadArgumentNode;
+import com.oracle.graal.python.nodes.argument.ReadIndexedArgumentNode;
+import com.oracle.graal.python.nodes.argument.ReadVarArgsNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentCastNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.test.PythonTests;
-import com.oracle.graal.python.test.builtin.modules.ClinicTestsClinicProviders.MyBuiltinWithCustomConvertorClinicProviderGen;
-import com.oracle.graal.python.test.builtin.modules.ClinicTestsClinicProviders.MyBuiltinWithDefaultValuesClinicProviderGen;
-import com.oracle.graal.python.test.builtin.modules.ClinicTestsFactory.MyBuiltinWithCustomConvertorNodeGen;
-import com.oracle.graal.python.test.builtin.modules.ClinicTestsFactory.MyBuiltinWithDefaultValuesNodeGen;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -101,7 +102,7 @@ public class ClinicTests {
     public abstract static class MyBuiltinWithDefaultValues extends PythonBinaryClinicBuiltinNode {
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
-            return MyBuiltinWithDefaultValuesClinicProviderGen.INSTANCE;
+            return ClinicTestsClinicProviders.MyBuiltinWithDefaultValuesClinicProviderGen.INSTANCE;
         }
 
         @Specialization
@@ -114,7 +115,7 @@ public class ClinicTests {
 
     @Test
     public void testDefaultValues() {
-        CallTarget callTarget = createCallTarget(MyBuiltinWithDefaultValuesNodeGen.create());
+        CallTarget callTarget = createCallTarget(ClinicTestsFactory.MyBuiltinWithDefaultValuesNodeGen.create());
         assertEquals(T_DO_DEFAULTS, callTarget.call(PNone.NO_VALUE, PNone.NO_VALUE));
         assertEquals(T_DO_DEFAULTS, callTarget.call(PNone.NONE, PNone.NO_VALUE));
         assertEquals(T_TYPE_ERROR, callTarget.call(PNone.NONE, PNone.NONE, EXPECT_TYPE_ERROR));
@@ -167,7 +168,7 @@ public class ClinicTests {
 
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
-            return MyBuiltinWithCustomConvertorClinicProviderGen.INSTANCE;
+            return ClinicTestsClinicProviders.MyBuiltinWithCustomConvertorClinicProviderGen.INSTANCE;
         }
 
         @Specialization
@@ -180,8 +181,44 @@ public class ClinicTests {
 
     @Test
     public void testCustomConvertor() {
-        CallTarget callTarget = createCallTarget(MyBuiltinWithCustomConvertorNodeGen.create());
+        CallTarget callTarget = createCallTarget(ClinicTestsFactory.MyBuiltinWithCustomConvertorNodeGen.create());
         assertEquals(T_DONE, callTarget.call(T_A_INPUT, T_B_INPUT));
+    }
+
+    @Builtin(name = "my_vararg_builtin", parameterNames = {"x", "a"}, takesVarArgs = true, keywordOnlyNames = {"b"})
+    @ArgumentClinic(name = "a", conversion = ClinicConversion.Int)
+    @ArgumentClinic(name = "b", conversion = ClinicConversion.Int, defaultValue = "7")
+    public abstract static class MyVarArgBuiltinWithDefaultValues extends PythonClinicBuiltinNode {
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return ClinicTestsClinicProviders.MyVarArgBuiltinWithDefaultValuesClinicProviderGen.INSTANCE;
+        }
+
+        @Specialization
+        Object doDefaults(Object x, int a, Object[] varArgs, int b) {
+            assertEquals("abc", x);
+            assertEquals(42, a);
+            assertEquals(1, varArgs.length);
+            assertEquals(7, b);
+            return varArgs[0];
+        }
+    }
+
+    @Test
+    public void testVarArgDefaultValues() {
+        CallTarget callTarget = createCallTarget(ClinicTestsFactory.MyVarArgBuiltinWithDefaultValuesNodeGen.create(
+                        new ReadArgumentNode[]{
+                                        ReadIndexedArgumentNode.create(0),
+                                        ReadIndexedArgumentNode.create(1),
+                                        ReadVarArgsNode.create(3),
+                                        ReadIndexedArgumentNode.create(2)
+                        }));
+        Object[] pArguments = PArguments.create(4);
+        PArguments.setArgument(pArguments, 0, "abc");
+        PArguments.setArgument(pArguments, 1, 42);
+        PArguments.setArgument(pArguments, 2, PNone.NO_VALUE);
+        PArguments.setArgument(pArguments, 3, new Object[]{666});
+        assertEquals(666, callTarget.call(pArguments));
     }
 
     private static CallTarget createCallTarget(PythonBinaryClinicBuiltinNode node) {
@@ -211,4 +248,23 @@ public class ClinicTests {
             }
         }
     }
+
+    private static CallTarget createCallTarget(PythonClinicBuiltinNode node) {
+        return new BuiltinRoot(node).getCallTarget();
+    }
+
+    private static final class BuiltinRoot extends RootNode {
+        @Child PythonClinicBuiltinNode node;
+
+        BuiltinRoot(PythonClinicBuiltinNode node) {
+            super(null);
+            this.node = node;
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            return node.execute(frame);
+        }
+    }
+
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2022, Oracle and/or its affiliates.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -104,7 +104,7 @@ class CombinationsTests(unittest.TestCase):
 
     def test_generators(self):
         # test that generators are accepted like input values
-        
+
         def g(seqn):
             for i in seqn:
                 yield i
@@ -112,7 +112,7 @@ class CombinationsTests(unittest.TestCase):
         def g2(seqn):
             for i in seqn:
                 yield (i, i)
-        
+
         self.assertEqual(list(accumulate(g([1,2]))), [1, 3])
         self.assertEqual(list(chain(g([1,2]), g([3,4]))), [1, 2, 3, 4])
         self.assertEqual(list(combinations(g([1,2]), 2)), [(1, 2)])
@@ -129,6 +129,53 @@ class CombinationsTests(unittest.TestCase):
         self.assertEqual(list(takewhile(lambda a:a, g([1,2]))), [1, 2])
         self.assertEqual(list(tee(g([1, 2]))[0]), [1, 2])
         self.assertEqual(list(zip_longest(g2([2,3]))), [((2, 2),), ((3, 3),)])
+
+    def _test_combinatorics_bytes(self, func, *args):
+        for sequence_type in (bytes, bytearray):
+            for values in ([], list(range(256))):
+                with self.subTest(sequence_type=sequence_type, size=len(values), func=func):
+                    result = list(func(sequence_type(values), *args))
+                    self.assertEqual(result, [(value,) for value in values])
+                    for value, in result:
+                        self.assertIs(type(value), int)
+
+    def test_combinatorics_bytes(self):
+        self._test_combinatorics_bytes(product)
+        self._test_combinatorics_bytes(permutations, 1)
+        self._test_combinatorics_bytes(combinations, 1)
+        self._test_combinatorics_bytes(combinations_with_replacement, 1)
+
+    def _test_combinatorics_bytes_pairs(self, func, *args, **kwargs):
+        values = [0, 127, 128, 129, 255]
+        for sequence_type in (bytes, bytearray):
+            with self.subTest(sequence_type=sequence_type, func=func):
+                self.assertEqual(list(func(sequence_type(values), *args, **kwargs)),
+                                 list(func(values, *args, **kwargs)))
+
+    def test_combinatorics_bytes_pairs(self):
+        self._test_combinatorics_bytes_pairs(product, repeat=2)
+        self._test_combinatorics_bytes_pairs(permutations, 2)
+        self._test_combinatorics_bytes_pairs(combinations, 2)
+        self._test_combinatorics_bytes_pairs(combinations_with_replacement, 2)
+
+    def test_product_repeat_index(self):
+        class Index:
+            def __init__(self, value):
+                self.value = value
+
+            def __index__(self):
+                return self.value
+
+        self.assertEqual(list(product([1, 2], repeat=Index(2))), [(1, 1), (1, 2), (2, 1), (2, 2)])
+        self.assertEqual(list(product([1, 2], repeat=Index(0))), [()])
+        self.assertRaises(ValueError, product, [1, 2], repeat=Index(-1))
+        self.assertRaises(ValueError, product, [1, 2], repeat=-1)
+        self.assertRaises(TypeError, product, [1, 2], repeat=None)
+        self.assertRaises(TypeError, product, [1, 2], repeat=object())
+
+    def test_islice_negative_stop(self):
+        self.assertRaises(ValueError, islice, count(), -1)
+        self.assertRaises(ValueError, islice, count(), 0, -1)
 
     @unittest.skipIf(sys.implementation.name == 'cpython' and sys.version_info[0:2] < (3, 10), "skipping for cPython versions < 3.10")
     def test_pairwise_drained(self):

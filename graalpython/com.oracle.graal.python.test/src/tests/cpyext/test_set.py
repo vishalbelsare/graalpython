@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,9 +37,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare
 
 
 def _reference_contains(args):
@@ -73,18 +71,18 @@ def _reference_pop(args):
     except AttributeError:
         raise SystemError
 
-    
+
 def _reference_discard(args):
     s = args[0]
     if not (isinstance(s, set)):
         raise SystemError
-    
+
     if args[1] in s:
         s.discard(args[1])
         return 1
     return 0
 
-    
+
 class FrozenSetSubclass(frozenset):
     pass
 
@@ -112,10 +110,6 @@ default_typecheck_args = lambda: (
 
 
 class TestPySet(CPyExtTestCase):
-
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPySet, self).compile_module(name)
 
     test_PySet_New = CPyExtFunction(
         lambda args: set(args[0]),
@@ -251,44 +245,6 @@ class TestPySet(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
-    test_PySet_NextEntry = CPyExtFunctionOutVars(
-        _reference_next,
-        lambda: ((set(),1),
-            (set([1, 2, 3]),1),
-            (set({'a', 'b'}),1),
-            (frozenset([1, 2, 3]),1),
-            (frozenset({'a', 'b'}),1),
-            (frozenset([None]),1),
-            (FrozenSetSubclass(),1),
-            (SetSubclass([None]),1),),
-        code='''int wrap_PySet_NextEntry(PyObject* set, Py_ssize_t* ppos, PyObject **key, Py_hash_t* hash) {
-            int res = 0;
-            Py_ssize_t iterations = *ppos;
-            Py_ssize_t i;
-            *ppos = 0;
-            for(i=0; i < iterations; i++) {
-                _PySet_NextEntry(set, ppos, key, hash);
-            }
-            res = _PySet_NextEntry(set, ppos, key, hash);
-            if (!res) {
-                // avoid problems when building the result value
-                *key = set;
-                *hash = 0;     
-                Py_INCREF(set);
-            }
-            return res;
-        }
-        ''',
-        resultspec="iOn",
-        argspec='On',
-        arguments=("PyObject* set", "Py_ssize_t ppos"),
-        resulttype="int",
-        argumentnames=("set, &ppos"),
-        resultvars=("PyObject* key", "Py_hash_t hash"),
-        callfunction="wrap_PySet_NextEntry",
-        cmpfunc=lambda x, y: type(x) == tuple and type(y) == tuple and len(x) == 3 and len(y) == 3 and (x[0] == 0 and y[0] == 0 or x == y)
-    )
-
     # PySet_Pop
     test_PySet_Pop = CPyExtFunction(
         _reference_pop,
@@ -302,7 +258,7 @@ class TestPySet(CPyExtTestCase):
         argspec='O',
         cmpfunc=unhandled_error_compare
     )
-    
+
     # PySet_Discard
     test_PySet_Discard = CPyExtFunction(
         _reference_discard,
@@ -318,4 +274,30 @@ class TestPySet(CPyExtTestCase):
         arguments=("PyObject* set", "PyObject* key"),
         argumentnames=("set, key"),
         cmpfunc=unhandled_error_compare
+    )
+
+    # Note: frozensets are allowed to be mutated if refcnt == 1
+    test_PySet_Add = CPyExtFunction(
+        lambda args: frozenset({*args[1], args[2]}) if args[0] else {*args[1], args[2]},
+        lambda: (
+            (False, [1], 2),
+            (True, [1], 2),
+        ),
+        resultspec="O",
+        argspec='iOO',
+        arguments=("int frozen", "PyObject* iterable", "PyObject* object"),
+        code='''
+        PyObject* wrap_PySet_Add(int frozen, PyObject* iterable, PyObject* object) {
+            PyObject* set = frozen? PyFrozenSet_New(iterable) : PySet_New(iterable);
+            if (!set)
+                return NULL;
+            if (PySet_Add(set, object) < 0) {
+                Py_DECREF(set);
+                return NULL;
+            }
+            return set;
+        }
+        ''',
+        callfunction="wrap_PySet_Add",
+        cmpfunc=unhandled_error_compare,
     )

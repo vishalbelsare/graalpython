@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.graal.python.builtins.objects.common;
 
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
 import java.util.LinkedHashMap;
 import java.util.Map.Entry;
@@ -49,6 +50,7 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Speci
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.DictKey;
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.MapCursor;
 import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.PutNode;
+import com.oracle.graal.python.builtins.objects.common.ObjectHashMap.RemoveNode;
 import com.oracle.graal.python.lib.PyObjectHashNode;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -64,50 +66,47 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleString.HashCodeNode;
 
-public class EconomicMapStorage extends HashingStorage {
-
+public class EconomicMapStorage extends ObjectHashMap {
     public static EconomicMapStorage create() {
         return new EconomicMapStorage();
     }
 
     public static EconomicMapStorage createWithSideEffects() {
-        return new EconomicMapStorage(4, true);
+        return new EconomicMapStorage(4);
     }
 
     public static EconomicMapStorage create(int initialCapacity) {
-        return new EconomicMapStorage(initialCapacity, false);
+        return new EconomicMapStorage(initialCapacity);
     }
 
-    final ObjectHashMap map;
-
-    private EconomicMapStorage(int initialCapacity, boolean hasSideEffects) {
-        this.map = new ObjectHashMap(initialCapacity, hasSideEffects);
+    private EconomicMapStorage(int initialCapacity) {
+        super(initialCapacity);
     }
 
     private EconomicMapStorage() {
-        this(4, false);
+        this(4);
     }
 
-    public EconomicMapStorage(ObjectHashMap original, boolean copy) {
-        this.map = copy ? original.copy() : original;
+    private EconomicMapStorage(EconomicMapStorage original) {
+        super(original);
     }
 
     @TruffleBoundary
     public static EconomicMapStorage create(LinkedHashMap<String, Object> map) {
-        EconomicMapStorage result = new EconomicMapStorage(map.size(), false);
+        EconomicMapStorage result = new EconomicMapStorage(map.size());
         putAllUncached(map, result);
         return result;
     }
 
     public static EconomicMapStorage createGeneric(LinkedHashMap<Object, Object> map) {
         CompilerAsserts.neverPartOfCompilation();
-        EconomicMapStorage result = new EconomicMapStorage(map.size(), false);
+        EconomicMapStorage result = new EconomicMapStorage(map.size());
         putAllUncachedGeneric(map, result);
         return result;
     }
 
     public int length() {
-        return map.size();
+        return size();
     }
 
     static boolean advance(MapCursor cursor) {
@@ -126,31 +125,49 @@ public class EconomicMapStorage extends HashingStorage {
         return cursor.getValue();
     }
 
-    void clear() {
-        map.clear();
-    }
-
     public HashingStorage copy() {
-        return new EconomicMapStorage(this.map, true);
+        return new EconomicMapStorage(this);
     }
 
-    protected void setValueForAllKeys(VirtualFrame frame, Node inliningTarget, Object value, PutNode putNode, InlinedLoopConditionProfile loopProfile) {
-        MapCursor cursor = map.getEntries();
-        final int size = map.size();
+    protected void setValueForAllKeys(VirtualFrame frame, Node inliningTarget, Object value, ObjectHashMap.PutNode putNode, InlinedLoopConditionProfile loopProfile) {
+        MapCursor cursor = getEntries();
+        final int size = size();
         loopProfile.profileCounted(inliningTarget, size);
         LoopNode.reportLoopCount(putNode, size);
         while (loopProfile.inject(inliningTarget, advance(cursor))) {
-            putNode.put(frame, inliningTarget, map, getDictKey(cursor), value);
+            putNode.put(frame, inliningTarget, this, getDictKey(cursor), value);
         }
     }
 
     @TruffleBoundary
-    public void putUncached(TruffleString key, Object value) {
-        ObjectHashMap.PutNode.putUncached(this.map, key, PyObjectHashNode.hash(key, HashCodeNode.getUncached()), value);
+    public Object removeUncached(Object key, long hash) {
+        return RemoveNode.removeUncached(this, key, hash);
     }
 
-    private void putUncached(Object key, Object value) {
-        ObjectHashMap.PutNode.putUncached(this.map, key, PyObjectHashNode.executeUncached(key), value);
+    @TruffleBoundary
+    public void putUncached(TruffleString key, Object value) {
+        PutNode.putUncached(this, key, PyObjectHashNode.hash(key, HashCodeNode.getUncached()), value);
+    }
+
+    @TruffleBoundary
+    public void putUncached(Object key, Object value) {
+        PutNode.putUncached(this, key, PyObjectHashNode.executeUncached(key), value);
+    }
+
+    @TruffleBoundary
+    public void putUncached(Object key, long hash, Object value) {
+        PutNode.putUncached(this, key, hash, value);
+    }
+
+    @TruffleBoundary
+    public void putUncached(int key, Object value) {
+        PutNode.putUncached(this, key, PyObjectHashNode.hash(key), value);
+    }
+
+    @TruffleBoundary
+    public void putUncached(String key, Object value) {
+        TruffleString ts = toTruffleStringUncached(key);
+        putUncached(ts, value);
     }
 
     private static void putAllUncached(LinkedHashMap<String, Object> map, EconomicMapStorage result) {
@@ -173,7 +190,7 @@ public class EconomicMapStorage extends HashingStorage {
         StringBuilder builder = new StringBuilder();
         builder.append("map(size=").append(length()).append(", {");
         String sep = "";
-        MapCursor cursor = map.getEntries();
+        MapCursor cursor = getEntries();
         int i = 0;
         while (advance(cursor)) {
             i++;
@@ -196,8 +213,8 @@ public class EconomicMapStorage extends HashingStorage {
         @Specialization
         static void doIt(Node inliningTarget, HashingStorage self, TruffleString key, Object value,
                         @Cached PyObjectHashNode hashNode,
-                        @Cached PutNode putNode) {
-            putNode.put(null, inliningTarget, ((EconomicMapStorage) self).map, key, hashNode.execute(null, inliningTarget, key), value);
+                        @Cached ObjectHashMap.PutNode putNode) {
+            putNode.put(null, inliningTarget, (EconomicMapStorage) self, key, hashNode.execute(null, inliningTarget, key), value);
         }
     }
 }

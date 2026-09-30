@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,10 +36,10 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import operator
+import unittest
 
-import sys
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
-__dir__ = __file__.rpartition("/")[0]
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare, CPyExtType, is_native_object
 
 
 def _float_compare(x, y):
@@ -58,11 +58,31 @@ def _reference_realasdouble(args):
     n = args[0]
     if isinstance(n, complex):
         return n.real
-    try:
-        return n.__float__()
-    except:
+    complex_method = getattr(type(n), "__complex__", None)
+    if complex_method is not None:
+        result = complex_method(n)
+        if not isinstance(result, complex):
+            raise TypeError
+        return result.real
+    float_method = getattr(type(n), "__float__", None)
+    if float_method is None:
         raise TypeError
-        
+    return float_method(n)
+
+
+def _reference_imagasdouble(args):
+    n = args[0]
+    if isinstance(n, complex):
+        return n.imag
+    complex_method = getattr(type(n), "__complex__", None)
+    if complex_method is None:
+        _reference_realasdouble(args)
+        return 0.0
+    result = complex_method(n)
+    if not isinstance(result, complex):
+        raise TypeError
+    return result.imag
+
 def _reference_fromdoubles(args):
     if isinstance(args[0], float) and isinstance(args[1], float):
         return complex(args[0], args[1])
@@ -80,21 +100,56 @@ class DummyComplexable():
         return complex(self.r, self.i)
 
 
+class DummyBadComplexable():
+    def __complex__(self):
+        return 42
+
+
+class DummyComplexError():
+    def __complex__(self):
+        raise RuntimeError
+
+
+class DummyFloatable():
+    def __float__(self):
+        return 4.25
+
+
+class DummyFloatError():
+    def __float__(self):
+        raise RuntimeError
+
+
 class DummyComplexSubclass(complex):
     pass
 
 
-class TestPyComplex(CPyExtTestCase):
+NativeComplexSubclass = CPyExtType(
+    "NativeComplexSubclass",
+    '',
+    struct_base='PyComplexObject base;',
+    tp_base='&PyComplex_Type',
+    tp_new='0',
+    tp_alloc='0',
+    tp_free='0',
+)
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyComplex, self).compile_module(name)
+
+class ManagedNativeComplexSubclass(NativeComplexSubclass):
+    pass
+
+
+class TestPyComplex(CPyExtTestCase):
 
     test_PyComplex_AsCComplex = CPyExtFunction(
         lambda args: True,
         lambda: (
             (complex(1.0, 2.0), 1.0, 2.0),
             (DummyComplexSubclass(2.0, 3.0), 2.0, 3.0),
+            (NativeComplexSubclass(1.0, 2.0), 1.0, 2.0),
+            (ManagedNativeComplexSubclass(1.0, 2.0), 1.0, 2.0),
+            (DummyComplexable(4.0, 2.5), 4.0, 2.5),
+            (DummyFloatable(), 4.25, 0.0),
         ),
         code='''int isNaN(double d) {
             return d != d;
@@ -126,6 +181,8 @@ class TestPyComplex(CPyExtTestCase):
         lambda: (
             (complex(1.0, 2.0), ),
             (DummyComplexSubclass(2.0, 3.0), ),
+            (NativeComplexSubclass(1.0, 2.0),),
+            (ManagedNativeComplexSubclass(1.0, 2.0),),
         ),
         code='''
         PyObject* wrap_PyComplex_cval(PyObject* obj) {
@@ -147,6 +204,13 @@ class TestPyComplex(CPyExtTestCase):
             (complex(0.0, 2.0), ),
             (complex(1.0, 2.0), ),
             (DummyComplexSubclass(2.0, 3.0), ),
+            (NativeComplexSubclass(1.0, 2.0),),
+            (ManagedNativeComplexSubclass(1.0, 2.0),),
+            (DummyComplexable(4.0, 2.5),),
+            (DummyBadComplexable(),),
+            (DummyComplexError(),),
+            (DummyFloatable(),),
+            (DummyFloatError(),),
             ("10.0", ),
         ),
         resultspec="f",
@@ -156,11 +220,18 @@ class TestPyComplex(CPyExtTestCase):
     )
 
     test_PyComplex_ImagAsDouble = CPyExtFunction(
-        lambda args: args[0].imag if isinstance(args[0], complex) else 0.0,
+        _reference_imagasdouble,
         lambda: (
             (complex(0.0, 2.0), ),
             (complex(1.0, 2.0), ),
             (DummyComplexSubclass(2.0, 3.0), ),
+            (NativeComplexSubclass(1.0, 2.0),),
+            (ManagedNativeComplexSubclass(1.0, 2.0),),
+            (DummyComplexable(4.0, 2.5),),
+            (DummyBadComplexable(),),
+            (DummyComplexError(),),
+            (DummyFloatable(),),
+            (DummyFloatError(),),
             ("10.0", ),
         ),
         resultspec="f",
@@ -168,7 +239,7 @@ class TestPyComplex(CPyExtTestCase):
         arguments=["PyObject* obj"],
         cmpfunc=unhandled_error_compare
     )
-    
+
     test_PyComplex_FromDoubles = CPyExtFunction(
         _reference_fromdoubles,
         lambda: (
@@ -180,3 +251,35 @@ class TestPyComplex(CPyExtTestCase):
         arguments=["double r", "double i"],
         cmpfunc=unhandled_error_compare
     )
+
+
+class TestNativeComplex(unittest.TestCase):
+    def test_builtins_on_subclass(self):
+        for t in [NativeComplexSubclass, ManagedNativeComplexSubclass]:
+            c = t(2, 3)
+            assert is_native_object(c)
+            assert type(c) is t
+            assert c.real == 2
+            assert c.imag == 3
+            assert type(complex(c)) is complex
+            assert complex(c) == 2 + 3j
+            assert c == 2 + 3j
+            assert t(2) == 2
+            assert t(2.4) == 2.4
+
+            def assert_op_same(f):
+                assert f(t(2, 3)) == f(2 + 3j)
+
+            assert_op_same(abs)
+            assert_op_same(repr)
+            assert_op_same(format)
+            assert_op_same(bool)
+            assert_op_same(hash)
+            assert_op_same(operator.pos)
+            assert_op_same(operator.neg)
+            assert_op_same(lambda x: x + (1 + 2j))
+            assert_op_same(lambda x: x - (1 + 2j))
+            assert_op_same(lambda x: x * (1 + 2j))
+            assert_op_same(lambda x: x / (1 + 2j))
+            assert_op_same(lambda x: x ** (1 + 2j))
+            assert_op_same(lambda x: x.conjugate())

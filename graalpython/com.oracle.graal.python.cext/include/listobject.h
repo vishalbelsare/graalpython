@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2017 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -28,12 +28,15 @@ PyAPI_DATA(PyTypeObject) PyListRevIter_Type;
 
 #define PyList_Check(op) \
     PyType_FastSubclass(Py_TYPE(op), Py_TPFLAGS_LIST_SUBCLASS)
-#define PyList_CheckExact(op) Py_IS_TYPE(op, &PyList_Type)
+#define PyList_CheckExact(op) Py_IS_TYPE((op), &PyList_Type)
 
 PyAPI_FUNC(PyObject *) PyList_New(Py_ssize_t size);
 PyAPI_FUNC(Py_ssize_t) PyList_Size(PyObject *);
 
 PyAPI_FUNC(PyObject *) PyList_GetItem(PyObject *, Py_ssize_t);
+#if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x030d0000
+PyAPI_FUNC(PyObject *) PyList_GetItemRef(PyObject *, Py_ssize_t);
+#endif
 PyAPI_FUNC(int) PyList_SetItem(PyObject *, Py_ssize_t, PyObject *);
 PyAPI_FUNC(int) PyList_Insert(PyObject *, Py_ssize_t, PyObject *);
 PyAPI_FUNC(int) PyList_Append(PyObject *, PyObject *);
@@ -46,17 +49,28 @@ PyAPI_FUNC(int) PyList_Reverse(PyObject *);
 PyAPI_FUNC(PyObject *) PyList_AsTuple(PyObject *);
 
 /*
- * GraalPy-specific, used to implement cython's array.resize_smart
+ * GraalPy public API, used to implement cython's array.resize_smart
  */
-PyAPI_FUNC(int) _PyArray_Resize(PyObject* array, Py_ssize_t new_size);
+PyAPI_FUNC(int) GraalPyArray_Resize(PyObject* array, Py_ssize_t new_size);
 /*
- * GraalPy-specific, used to implement cython's array.data
+ * GraalPy public API, used to implement cython's array.data
  */
-PyAPI_FUNC(char*) _PyArray_Data(PyObject* array);
+PyAPI_FUNC(char*) GraalPyArray_Data(PyObject* array);
+
+typedef struct GraalPyArray_Descriptor {
+    char typecode;
+    int itemsize;
+} GraalPyArray_Descriptor;
+
+/*
+ * GraalPy public API used by Cython's array module. Available since GraalPy 25.3.4.
+ */
+PyAPI_FUNC(GraalPyArray_Descriptor*) GraalPyArray_GetDescriptor(PyObject* array);
+PyAPI_FUNC(PyObject*) GraalPyArray_New(PyObject* type, Py_ssize_t size, GraalPyArray_Descriptor* descriptor);
 
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_LISTOBJECT_H
-#  include  "cpython/listobject.h"
+#  include "cpython/listobject.h"
 #  undef Py_CPYTHON_LISTOBJECT_H
 #endif
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,22 +45,28 @@ import static com.oracle.graal.python.nodes.ErrorMessages.SSL_CANNOT_WRITE_AFTER
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.runtime.IndirectCallData;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -73,18 +79,22 @@ import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PMemoryBIO)
 public final class MemoryBIOBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = MemoryBIOBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return MemoryBIOBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = "MemoryBIO", constructsClass = PythonBuiltinClassType.PMemoryBIO, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "MemoryBIO", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     abstract static class MemoryBIONode extends PythonUnaryBuiltinNode {
         @Specialization
         static PMemoryBIO create(Object type,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createMemoryBIO(type);
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createMemoryBIO(type, getInstanceShape.execute(type));
         }
     }
 
@@ -112,9 +122,9 @@ public final class MemoryBIOBuiltins extends PythonBuiltins {
     abstract static class ReadNode extends PythonBinaryClinicBuiltinNode {
         @Specialization
         static PBytes read(PMemoryBIO self, int size,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             int len = size >= 0 ? size : Integer.MAX_VALUE;
-            return factory.createBytes(self.read(len));
+            return PFactory.createBytes(language, self.read(len));
         }
 
         @Override
@@ -129,11 +139,11 @@ public final class MemoryBIOBuiltins extends PythonBuiltins {
     abstract static class WriteNode extends PythonBinaryClinicBuiltinNode {
         @Specialization(limit = "3")
         static int write(VirtualFrame frame, PMemoryBIO self, Object buffer,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
                         @CachedLibrary("buffer") PythonBufferAccessLibrary bufferLib,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             try {
                 if (self.didWriteEOF()) {
                     throw constructAndRaiseNode.get(inliningTarget).raiseSSLError(frame, SSL_CANNOT_WRITE_AFTER_EOF);
@@ -144,10 +154,10 @@ public final class MemoryBIOBuiltins extends PythonBuiltins {
                     self.write(bytes, len);
                     return len;
                 } catch (OverflowException | OutOfMemoryError e) {
-                    throw raiseNode.get(inliningTarget).raise(MemoryError);
+                    throw raiseNode.raise(inliningTarget, MemoryError);
                 }
             } finally {
-                bufferLib.release(buffer, frame, indirectCallData);
+                bufferLib.release(buffer, frame, callData);
             }
         }
 

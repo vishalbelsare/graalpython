@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,25 +40,38 @@
  */
 package com.oracle.graal.python.builtins.objects.method;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.AttributeError;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___SIGNATURE__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
+import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___SIGNATURE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.function.BuiltinFunctionBuiltins;
 import com.oracle.graal.python.builtins.objects.function.PFunction;
+import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetNameNode;
-import com.oracle.graal.python.nodes.attributes.GetAttributeNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.attributes.GetFixedAttributeNode;
+import com.oracle.graal.python.nodes.builtins.FunctionNodes.GetSignatureNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -73,12 +86,14 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PBuiltinFunctionOrMethod)
 public final class BuiltinFunctionOrMethodBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = BuiltinFunctionOrMethodBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return BuiltinFunctionOrMethodBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         static boolean isBuiltinFunction(PBuiltinMethod self) {
@@ -91,46 +106,71 @@ public final class BuiltinFunctionOrMethodBuiltins extends PythonBuiltins {
 
         @Specialization(guards = "isBuiltinFunction(self)")
         static TruffleString reprBuiltinFunction(VirtualFrame frame, PMethod self,
-                        @Shared @Cached("createGetAttributeNode()") GetAttributeNode getNameNode,
+                        @Shared @Cached("createGetAttributeNode()") GetFixedAttributeNode getNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             // (tfel): this only happens for builtin modules ... I think
-            return simpleTruffleStringFormatNode.format("<built-in function %s>", getNameNode.executeObject(frame, self.getFunction()));
+            return simpleTruffleStringFormatNode.format("<built-in function %s>", getNameNode.execute(frame, self.getFunction()));
         }
 
         @Specialization(guards = "isBuiltinFunction(self)")
         static TruffleString reprBuiltinFunction(VirtualFrame frame, PBuiltinMethod self,
-                        @Shared @Cached("createGetAttributeNode()") GetAttributeNode getNameNode,
+                        @Shared @Cached("createGetAttributeNode()") GetFixedAttributeNode getNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
-            return simpleTruffleStringFormatNode.format("<built-in function %s>", getNameNode.executeObject(frame, self.getFunction()));
+            return simpleTruffleStringFormatNode.format("<built-in function %s>", getNameNode.execute(frame, self.getFunction()));
         }
 
         @Specialization(guards = "!isBuiltinFunction(self)")
         static TruffleString reprBuiltinMethod(VirtualFrame frame, PBuiltinMethod self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached GetClassNode getClassNode,
-                        @Shared @Cached("createGetAttributeNode()") GetAttributeNode getNameNode,
+                        @Shared @Cached("createGetAttributeNode()") GetFixedAttributeNode getNameNode,
                         @Shared @Cached GetNameNode getTypeNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             TruffleString typeName = getTypeNameNode.execute(inliningTarget, getClassNode.execute(inliningTarget, self.getSelf()));
-            return simpleTruffleStringFormatNode.format("<built-in method %s of %s object at 0x%s>", getNameNode.executeObject(frame, self.getFunction()), typeName,
+            return simpleTruffleStringFormatNode.format("<built-in method %s of %s object at 0x%s>", getNameNode.execute(frame, self.getFunction()), typeName,
                             PythonAbstractObject.systemHashCodeAsHexString(self.getSelf()));
         }
 
         @Specialization(guards = "!isBuiltinFunction(self)")
         static TruffleString reprBuiltinMethod(VirtualFrame frame, PMethod self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached GetClassNode getClassNode,
-                        @Shared @Cached("createGetAttributeNode()") GetAttributeNode getNameNode,
+                        @Shared @Cached("createGetAttributeNode()") GetFixedAttributeNode getNameNode,
                         @Shared @Cached GetNameNode getTypeNameNode,
                         @Shared("formatter") @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             TruffleString typeName = getTypeNameNode.execute(inliningTarget, getClassNode.execute(inliningTarget, self.getSelf()));
-            return simpleTruffleStringFormatNode.format("<built-in method %s of %s object at 0x%s>", getNameNode.executeObject(frame, self.getFunction()), typeName,
+            return simpleTruffleStringFormatNode.format("<built-in method %s of %s object at 0x%s>", getNameNode.execute(frame, self.getFunction()), typeName,
                             PythonAbstractObject.systemHashCodeAsHexString(self.getSelf()));
         }
 
         @NeverDefault
-        protected static GetAttributeNode createGetAttributeNode() {
-            return GetAttributeNode.create(T___NAME__);
+        protected static GetFixedAttributeNode createGetAttributeNode() {
+            return GetFixedAttributeNode.create(T___NAME__);
+        }
+    }
+
+    @Builtin(name = J___SIGNATURE__, minNumOfPositionalArgs = 1, isGetter = true)
+    @GenerateNodeFactory
+    abstract static class SignatureNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        public Object doIt(VirtualFrame frame, Object fun,
+                        @Bind Node inliningTarget,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+            Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                return impl(inliningTarget, fun);
+            } finally {
+                BoundaryCallContext.exit(frame, boundaryCallData, saved);
+            }
+        }
+
+        @TruffleBoundary
+        private static Object impl(Node inliningTarget, Object fun) {
+            Signature signature = GetSignatureNode.executeUncached(fun);
+            if (signature.isHidden()) {
+                throw PRaiseNode.raiseStatic(inliningTarget, AttributeError, ErrorMessages.HAS_NO_ATTR, fun, T___SIGNATURE__);
+            }
+            return BuiltinFunctionBuiltins.SignatureNode.createInspectSignature(signature, true);
         }
     }
 }

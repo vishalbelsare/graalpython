@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -38,6 +38,7 @@ import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
+import com.oracle.truffle.api.nodes.Node;
 
 public abstract class PSlice extends PythonBuiltinObject {
 
@@ -109,8 +110,8 @@ public abstract class PSlice extends PythonBuiltinObject {
 
     protected static void checkNegative(int length) {
         if (length < 0) {
-            CompilerDirectives.transferToInterpreter();
-            throw PRaiseNode.raiseUncached(null, ValueError, ErrorMessages.LENGTH_SHOULD_NOT_BE_NEG);
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            throw PRaiseNode.raiseStatic(null, ValueError, ErrorMessages.LENGTH_SHOULD_NOT_BE_NEG);
         }
     }
 
@@ -129,7 +130,7 @@ public abstract class PSlice extends PythonBuiltinObject {
         return n == 0 ? 0 : n < 0 ? -1 : 1;
     }
 
-    public static SliceInfo computeIndices(Object startIn, Object stopIn, Object stepIn, int length) {
+    public static SliceInfo computeIndices(Node nodeForRaise, Object startIn, Object stopIn, Object stepIn, int length) {
         assert length >= 0;
         boolean stepIsNegative;
         int lower, upper;
@@ -141,8 +142,8 @@ public abstract class PSlice extends PythonBuiltinObject {
             step = (int) stepIn;
             stepIsNegative = pySign(step) < 0;
             if (pySign(step) == 0) {
-                CompilerDirectives.transferToInterpreter();
-                throw PRaiseNode.raiseUncached(null, ValueError, ErrorMessages.SLICE_STEP_CANNOT_BE_ZERO);
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw PRaiseNode.raiseStatic(nodeForRaise, ValueError, ErrorMessages.SLICE_STEP_CANNOT_BE_ZERO);
             }
         }
 

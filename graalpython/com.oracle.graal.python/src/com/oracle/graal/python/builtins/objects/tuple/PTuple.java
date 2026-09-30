@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,88 +25,39 @@
  */
 package com.oracle.graal.python.builtins.objects.tuple;
 
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.sequence.PSequence;
+import static com.oracle.graal.python.util.PythonUtils.builtinClassToType;
+
+import com.oracle.graal.python.runtime.sequence.PTupleListBase;
 import com.oracle.graal.python.runtime.sequence.storage.ObjectSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.truffle.api.CompilerAsserts;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.InvalidArrayIndexException;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.object.Shape;
 
 @SuppressWarnings("truffle-abstract-export")
 @ExportLibrary(InteropLibrary.class)
-public final class PTuple extends PSequence {
+public final class PTuple extends PTupleListBase {
 
-    private SequenceStorage store;
     private long hash = -1;
 
     public PTuple(Object cls, Shape instanceShape, Object[] elements) {
-        super(cls, instanceShape);
+        super(builtinClassToType(cls), instanceShape);
         this.store = new ObjectSequenceStorage(elements);
     }
 
     public PTuple(Object cls, Shape instanceShape, SequenceStorage store) {
-        super(cls, instanceShape);
+        super(builtinClassToType(cls), instanceShape);
         this.store = store;
     }
 
     @Override
     public String toString() {
         CompilerAsserts.neverPartOfCompilation();
-        if (store instanceof ObjectSequenceStorage) {
-            StringBuilder buf = new StringBuilder("(");
-            Object[] array = store.getInternalArray();
-            for (int i = 0; i < array.length - 1; i++) {
-                buf.append(array[i]);
-                buf.append(", ");
-            }
-
-            if (array.length > 0) {
-                buf.append(array[array.length - 1]);
-            }
-
-            if (array.length == 1) {
-                buf.append(",");
-            }
-
-            buf.append(")");
-            return buf.toString();
-        } else {
-            return String.format("tuple(%s)", store);
-        }
-    }
-
-    @Override
-    public SequenceStorage getSequenceStorage() {
-        return store;
-    }
-
-    @Override
-    public void setSequenceStorage(SequenceStorage store) {
-        this.store = store;
-    }
-
-    @Override
-    @ExportMessage.Ignore
-    public boolean equals(Object other) {
-        CompilerAsserts.neverPartOfCompilation();
-        if (!(other instanceof PTuple)) {
-            return false;
-        }
-
-        PTuple otherTuple = (PTuple) other;
-        return store.equals(otherTuple.store);
-    }
-
-    @Override
-    public int hashCode() {
-        CompilerAsserts.neverPartOfCompilation();
-        return super.hashCode();
+        return String.format("tuple(%s)", store);
     }
 
     public long getHash() {
@@ -115,12 +66,6 @@ public final class PTuple extends PSequence {
 
     public void setHash(long hash) {
         this.hash = hash;
-    }
-
-    @SuppressWarnings({"static-method", "unused"})
-    public static void setItem(int idx, Object value) {
-        CompilerDirectives.transferToInterpreterAndInvalidate();
-        throw PRaiseNode.raiseUncached(null, PythonBuiltinClassType.PTuple, ErrorMessages.OBJ_DOES_NOT_SUPPORT_ITEM_ASSIGMENT);
     }
 
     @ExportMessage
@@ -139,5 +84,17 @@ public final class PTuple extends PSequence {
     @SuppressWarnings("unused")
     public static boolean isArrayElementRemovable(PTuple self, long index) {
         return false;
+    }
+
+    @ExportMessage
+    @SuppressWarnings("unused")
+    public static void writeArrayElement(PTuple self, long key, Object value) throws UnsupportedMessageException, InvalidArrayIndexException {
+        throw UnsupportedMessageException.create();
+    }
+
+    @ExportMessage
+    @SuppressWarnings("unused")
+    public static void removeArrayElement(PTuple self, long key) throws UnsupportedMessageException, InvalidArrayIndexException {
+        throw UnsupportedMessageException.create();
     }
 }

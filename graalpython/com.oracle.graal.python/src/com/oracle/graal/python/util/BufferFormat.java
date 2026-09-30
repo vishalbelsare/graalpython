@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,14 +44,16 @@ import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.PythonOS;
 import com.oracle.truffle.api.strings.TruffleString;
 
 /**
  * This enum represents formats used by {@code array} and {@code memoryview}. The correspondence
  * between the type specifier string and {@link BufferFormat} is not 1 to 1. Multiple specifiers may
- * represent the same format (e.g. both {@code L} and {@code Q} on 64 bit platforms both map to
- * {@link BufferFormat#UINT_64}) format. Therefore it is necessary to keep the original specifier
- * string around for error messages.
+ * represent the same format (e.g. both {@code L} and {@code Q} on 64 bit non-Windows platforms both
+ * map to {@link BufferFormat#UINT_64}) format. Therefore it is necessary to keep the original
+ * specifier string around for error messages.
  */
 public enum BufferFormat {
     UINT_8(1, 0, "B"),
@@ -62,10 +64,12 @@ public enum BufferFormat {
     INT_32(4, 2, "i"),
     UINT_64(8, 3, "L"),
     INT_64(8, 3, "l"),
+    HALF_FLOAT(2, 1, "e"),
     FLOAT(4, 2, "f"),
     DOUBLE(8, 3, "d"),
-    // Unicode is array-only and deprecated
-    UNICODE(4, 2, "u"),
+    // Unicode formats are array-only. The 'u' typecode is deprecated, but 'w' is not.
+    UNICODE_U(4, 2, "u"),
+    UNICODE_W(4, 2, "w"),
     // The following are memoryview-only
     CHAR(1, 0, "c"),
     BOOLEAN(1, 0, "?"),
@@ -86,13 +90,13 @@ public enum BufferFormat {
         this.baseTypeCode = toTruffleStringUncached(baseTypeCode);
     }
 
-    public static BufferFormat forMemoryView(TruffleString formatString, TruffleString.CodePointLengthNode lengthNode, TruffleString.CodePointAtIndexNode atIndexNode) {
+    public static BufferFormat forMemoryView(TruffleString formatString, TruffleString.CodePointLengthNode lengthNode, TruffleString.CodePointAtIndexUTF32Node atIndexNode) {
         char fmtchar;
         int length = lengthNode.execute(formatString, TS_ENCODING);
         if (length == 1) {
-            fmtchar = (char) atIndexNode.execute(formatString, 0, TS_ENCODING);
-        } else if (length == 2 && atIndexNode.execute(formatString, 0, TS_ENCODING) == '@') {
-            fmtchar = (char) atIndexNode.execute(formatString, 1, TS_ENCODING);
+            fmtchar = (char) atIndexNode.execute(formatString, 0);
+        } else if (length == 2 && atIndexNode.execute(formatString, 0) == '@') {
+            fmtchar = (char) atIndexNode.execute(formatString, 1);
         } else {
             return OTHER;
         }
@@ -111,12 +115,15 @@ public enum BufferFormat {
         return format != null ? format : OTHER;
     }
 
-    public static BufferFormat forArray(TruffleString formatString, TruffleString.CodePointLengthNode lengthNode, TruffleString.CodePointAtIndexNode atIndexNode) {
+    public static BufferFormat forArray(TruffleString formatString, TruffleString.CodePointLengthNode lengthNode, TruffleString.CodePointAtIndexUTF32Node atIndexNode) {
         int length = lengthNode.execute(formatString, TS_ENCODING);
         if (length == 1) {
-            char fmtchar = (char) atIndexNode.execute(formatString, 0, TS_ENCODING);
+            char fmtchar = (char) atIndexNode.execute(formatString, 0);
             if (fmtchar == 'u') {
-                return UNICODE;
+                return UNICODE_U;
+            }
+            if (fmtchar == 'w') {
+                return UNICODE_W;
             }
             return fromCharCommon(fmtchar);
         }
@@ -139,11 +146,15 @@ public enum BufferFormat {
             case 'i':
                 return INT_32;
             case 'L':
+                return PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32 ? UINT_32 : UINT_64;
             case 'Q':
                 return UINT_64;
             case 'l':
+                return PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32 ? INT_32 : INT_64;
             case 'q':
                 return INT_64;
+            case 'e':
+                return HALF_FLOAT;
             case 'f':
                 return FLOAT;
             case 'd':
@@ -153,7 +164,11 @@ public enum BufferFormat {
     }
 
     public static boolean isFloatingPoint(BufferFormat format) {
-        return format == FLOAT || format == DOUBLE;
+        return format == HALF_FLOAT || format == FLOAT || format == DOUBLE;
+    }
+
+    public static boolean isUnicode(BufferFormat format) {
+        return format == UNICODE_U || format == UNICODE_W;
     }
 
 }

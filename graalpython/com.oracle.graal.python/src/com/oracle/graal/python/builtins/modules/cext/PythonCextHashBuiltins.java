@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,10 +45,10 @@ import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.C
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.CONST_VOID_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.INT8_T_PTR;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_hash_t;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Void;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING_BINARY;
 
 import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
@@ -56,34 +56,30 @@ import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuil
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.lib.PyObjectHashNode;
+import com.oracle.graal.python.runtime.nativeaccess.NativeMemory;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleString.Encoding;
-import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString.HashCodeNode;
 
 public final class PythonCextHashBuiltins {
 
     @CApiBuiltin(ret = Void, args = {INT8_T_PTR}, call = Ignored)
-    abstract static class PyTruffleHash_InitSecret extends CApiUnaryBuiltinNode {
+    abstract static class GraalPyPrivate_Hash_InitSecret extends CApiUnaryBuiltinNode {
         @Specialization
         @TruffleBoundary
-        Object get(Object secretPtr,
-                        @Cached CStructAccess.WriteByteNode writeNode) {
-            writeNode.writeByteArray(secretPtr, getContext().getHashSecret());
+        Object get(long secretPtr) {
+            byte[] hashSecret = getContext().getHashSecret();
+            NativeMemory.writeByteArrayElements(secretPtr, 0L, hashSecret, 0, hashSecret.length);
             return PNone.NO_VALUE;
         }
     }
 
     @CApiBuiltin(ret = ArgDescriptor.Long, args = {Int}, call = Ignored)
-    abstract static class PyTruffle_HashConstant extends CApiUnaryBuiltinNode {
+    abstract static class GraalPyPrivate_HashConstant extends CApiUnaryBuiltinNode {
 
         @Specialization
         @TruffleBoundary
@@ -92,7 +88,7 @@ public final class PythonCextHashBuiltins {
                 case 0:
                     return PyObjectHashNode.hash(Double.POSITIVE_INFINITY);
                 case 1:
-                    return PyObjectHashNode.hash(Double.NaN);
+                    return SysModuleBuiltins.HASH_MODULUS;
                 case 2:
                     return SysModuleBuiltins.HASH_IMAG;
                 default:
@@ -102,20 +98,13 @@ public final class PythonCextHashBuiltins {
         }
     }
 
-    @CApiBuiltin(ret = Py_hash_t, args = {PyObject, ArgDescriptor.Double}, call = Direct)
-    @ImportStatic(Double.class)
-    abstract static class _Py_HashDouble extends CApiBinaryBuiltinNode {
+    @CApiBuiltin(ret = Py_hash_t, args = {ArgDescriptor.Double}, call = Ignored)
+    abstract static class GraalPyPrivate_HashDouble extends CApiUnaryBuiltinNode {
 
-        @Specialization(guards = "isFinite(value)")
-        long doFinite(@SuppressWarnings("unused") Object inst, double value) {
+        @Specialization
+        long doFinite(double value) {
+            assert !Double.isNaN(value);
             return PyObjectHashNode.hash(value);
-        }
-
-        @Specialization(guards = "!isFinite(value)")
-        long doNonFinite(Object inst, @SuppressWarnings("unused") double value,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectHashNode hashNode) {
-            return hashNode.execute(null, inliningTarget, inst);
         }
     }
 
@@ -124,12 +113,11 @@ public final class PythonCextHashBuiltins {
 
         @Specialization
         @TruffleBoundary
-        static long doI(Object value, long size,
-                        @Cached CStructAccess.ReadByteNode readNode,
+        static long doI(long value, long size,
                         @Cached TruffleString.FromByteArrayNode toString,
                         @Cached HashCodeNode hashNode) {
-            byte[] array = readNode.readByteArray(value, (int) size);
-            TruffleString string = toString.execute(array, Encoding.US_ASCII, false);
+            byte[] array = NativeMemory.readByteArrayElements(value, 0, (int) size);
+            TruffleString string = toString.execute(array, TS_ENCODING_BINARY, false);
             return PyObjectHashNode.hash(string, hashNode);
         }
     }

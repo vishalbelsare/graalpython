@@ -26,14 +26,15 @@ import time
 import marshal
 import re
 
-from enum import Enum
+from enum import StrEnum, _simple_enum
 from functools import cmp_to_key
 from dataclasses import dataclass
 from typing import Dict
 
 __all__ = ["Stats", "SortKey", "FunctionProfile", "StatsProfile"]
 
-class SortKey(str, Enum):
+@_simple_enum(StrEnum)
+class SortKey:
     CALLS = 'calls', 'ncalls'
     CUMULATIVE = 'cumulative', 'cumtime'
     FILENAME = 'filename', 'module'
@@ -82,7 +83,7 @@ class Stats:
     method now take arbitrarily many file names as arguments.
 
     All the print methods now take an argument that indicates how many lines
-    to print.  If the arg is a floating point number between 0 and 1.0, then
+    to print.  If the arg is a floating-point number between 0 and 1.0, then
     it is taken as a decimal percentage of the available lines to be printed
     (e.g., .1 means print 10% of all available lines).  If it is an integer,
     it is taken to mean the number of lines of data that you wish to have
@@ -149,7 +150,11 @@ class Stats:
         elif hasattr(arg, 'create_stats'):
             arg.create_stats()
             self.stats = arg.stats
+            # GraalPy change: our sampling-based cProfile can produce an empty
+            # stats dict for very short profiled code; that is still a valid
+            # profile object and should print as 0 function calls.
             arg.stats = {}
+            return
         if not self.stats:
             raise TypeError("Cannot create or construct a %r object from %r"
                             % (self.__class__, arg))
@@ -222,8 +227,6 @@ class Stats:
             for word, tup in self.sort_arg_dict_default.items():
                 fragment = word
                 while fragment:
-                    if not fragment:
-                        break
                     if fragment in dict:
                         bad_list[fragment] = 0
                         break
@@ -330,7 +333,7 @@ class Stats:
         if isinstance(sel, str):
             try:
                 rex = re.compile(sel)
-            except re.error:
+            except re.PatternError:
                 msg += "   <Invalid regular expression %r>\n" % sel
                 return new_list, msg
             new_list = []
@@ -521,7 +524,7 @@ class Stats:
 class TupleComp:
     """This class provides a generic function for comparing any two tuples.
     Each instance records a list of tuple-indices (from most significant
-    to least significant), and sort direction (ascending or decending) for
+    to least significant), and sort direction (ascending or descending) for
     each tuple-index.  The compare functions can then be used as the function
     argument to the system sort() function when a list of tuples need to be
     sorted in the instances order."""

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,54 +41,78 @@
 package com.oracle.graal.python.nodes.object;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
-import static com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol.FUN_PY_OBJECT_GENERIC_GET_DICT;
+import static com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol.FUN_PY_OBJECT_GET_DICT_PTR;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTypeObject__tp_dict;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 
+import java.lang.ref.Reference;
+
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonNode;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.ReadObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.WriteObjectNewRefNode;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes.IsTypeNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.HiddenAttr;
+import com.oracle.graal.python.nodes.HiddenAttr.ReadNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.nativeaccess.NativeFunctionPointer;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Idempotent;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 17
+@GenerateInline(false)       // footprint reduction 36 -> 17
 public abstract class GetDictIfExistsNode extends PNodeWithContext {
+    @NeverDefault
+    public static GetDictIfExistsNode create() {
+        return GetDictIfExistsNodeGen.create();
+    }
+
     public abstract PDict execute(Object object);
+
+    public abstract PDict execute(PythonAbstractNativeObject object);
 
     public abstract PDict execute(PythonObject object);
 
     @Specialization(guards = {"object.getShape() == cachedShape", "hasNoDict(cachedShape)"}, limit = "1")
     static PDict getNoDictCachedShape(@SuppressWarnings("unused") PythonObject object,
                     @SuppressWarnings("unused") @Cached("object.getShape()") Shape cachedShape) {
-        assert doPythonObject(object, DynamicObjectLibrary.getUncached()) == null;
+        assert getDictUncached(object) == null;
         return null;
     }
 
     @Specialization(guards = "hasNoDict(object.getShape())", replaces = "getNoDictCachedShape")
     static PDict getNoDict(@SuppressWarnings("unused") PythonObject object) {
-        assert doPythonObject(object, DynamicObjectLibrary.getUncached()) == null;
+        assert getDictUncached(object) == null;
         return null;
     }
 
     @Idempotent
     protected static boolean hasNoDict(Shape shape) {
-        return (shape.getFlags() & PythonObject.HAS_MATERIALIZED_DICT) == 0;
+        return (shape.getFlags() & PythonObject.HAS_DICT) == 0;
     }
 
     @Specialization(guards = {"isSingleContext()", "object == cached", "dictIsConstant(cached)", "dict != null"}, limit = "1")
@@ -98,35 +122,68 @@ public abstract class GetDictIfExistsNode extends PNodeWithContext {
         return dict;
     }
 
-    protected boolean dictIsConstant(PythonObject object) {
+    @Idempotent
+    protected static boolean dictIsConstant(PythonObject object) {
         return object instanceof PythonModule || object instanceof PythonManagedClass;
     }
 
-    protected PDict getDictUncached(PythonObject object) {
-        return (PDict) DynamicObjectLibrary.getUncached().getOrDefault(object, PythonObject.DICT, null);
+    public static PDict getDictUncached(PythonObject object) {
+        return (PDict) ReadNode.executeUncached(object, HiddenAttr.DICT, null);
     }
 
     @Specialization(replaces = "getConstant")
     @InliningCutoff
     static PDict doPythonObject(PythonObject object,
-                    @CachedLibrary(limit = "4") DynamicObjectLibrary dylib) {
-        return (PDict) dylib.getOrDefault(object, PythonObject.DICT, null);
+                    @Bind Node inliningTarget,
+                    @Cached ReadNode readHiddenAttrNode) {
+        return (PDict) readHiddenAttrNode.execute(inliningTarget, object, HiddenAttr.DICT, null);
     }
 
     @Specialization
     @InliningCutoff
-    PDict doNativeObject(PythonAbstractNativeObject object,
-                    @Cached PythonToNativeNode toSulong,
-                    @Cached NativeToPythonNode toJava,
-                    @Cached CExtNodes.PCallCapiFunction callGetDictNode) {
-        Object javaDict = toJava.execute(callGetDictNode.call(FUN_PY_OBJECT_GENERIC_GET_DICT, toSulong.execute(object)));
-        if (javaDict instanceof PDict) {
-            return (PDict) javaDict;
-        } else if (javaDict == PNone.NO_VALUE) {
-            return null;
-        } else {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw PRaiseNode.raiseUncached(this, SystemError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, javaDict);
+    static PDict doNativeObject(PythonAbstractNativeObject object,
+                    @Bind Node inliningTarget,
+                    @Cached IsTypeNode isTypeNode,
+                    @Cached ReadObjectNode getNativeDict,
+                    @Cached ReadObjectNode readObjectNode,
+                    @Cached WriteObjectNewRefNode writeObjectNode,
+                    @Cached InlinedBranchProfile createDict,
+                    @Cached PythonToNativeInternalNode pythonToNativeNode,
+                    @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+        if (isTypeNode.execute(inliningTarget, object)) {
+            // Optimization for native types: read at the known offset instead of calling
+            // _PyObject_GetDictPtr()
+            Object dict = getNativeDict.readFromObj(object, PyTypeObject__tp_dict);
+            if (dict instanceof PDict pdict) {
+                return pdict;
+            } else {
+                return null;
+            }
+        }
+
+        assert EnsurePythonObjectNode.doesNotNeedPromotion(object);
+        NativeFunctionPointer callable = CApiContext.getNativeSymbol(inliningTarget, FUN_PY_OBJECT_GET_DICT_PTR);
+        try {
+            long dictPtr = ExternalFunctionInvoker.invokeGETDICTPTRFUN(callable.getAddress(), pythonToNativeNode.execute(inliningTarget, object));
+            Reference.reachabilityFence(object);
+            if (dictPtr == NULLPTR) {
+                return null;
+            } else {
+                Object dictObject = readObjectNode.read(dictPtr, 0);
+                if (dictObject == PNone.NO_VALUE) {
+                    createDict.enter(inliningTarget);
+                    PDict dict = PFactory.createDict(PythonLanguage.get(inliningTarget));
+                    writeObjectNode.write(dictPtr, dict);
+                    return dict;
+                } else if (dictObject instanceof PDict dict) {
+                    return dict;
+                } else {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    throw PRaiseNode.raiseStatic(inliningTarget, SystemError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, dictObject);
+                }
+            }
+        } catch (Throwable t) {
+            throw CompilerDirectives.shouldNotReachHere(t);
         }
     }
 

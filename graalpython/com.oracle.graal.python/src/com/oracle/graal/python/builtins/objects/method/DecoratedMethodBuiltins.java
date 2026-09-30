@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,13 +49,12 @@ import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DOC__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___MODULE__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___QUALNAME__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ISABSTRACTMETHOD__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___ISABSTRACTMETHOD__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -86,42 +85,24 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PStaticmethod, PythonBuiltinClassType.PClassmethod})
 public final class DecoratedMethodBuiltins extends PythonBuiltins {
 
+    static void wraps(VirtualFrame frame, PDecoratedMethod self, Object callable, Node inliningTarget, PyObjectLookupAttr lookup, PyObjectSetAttr setAttr) {
+        copyAttr(frame, inliningTarget, callable, self, T___MODULE__, lookup, setAttr);
+        copyAttr(frame, inliningTarget, callable, self, T___NAME__, lookup, setAttr);
+        copyAttr(frame, inliningTarget, callable, self, T___QUALNAME__, lookup, setAttr);
+        copyAttr(frame, inliningTarget, callable, self, T___DOC__, lookup, setAttr);
+        copyAttr(frame, inliningTarget, callable, self, T___ANNOTATIONS__, lookup, setAttr);
+    }
+
+    private static void copyAttr(VirtualFrame frame, Node inliningTarget, Object wrapped, Object wrapper, TruffleString name, PyObjectLookupAttr lookup, PyObjectSetAttr set) {
+        Object attr = lookup.execute(frame, inliningTarget, wrapped, name);
+        if (attr != PNone.NO_VALUE) {
+            set.execute(frame, inliningTarget, wrapper, name, attr);
+        }
+    }
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return DecoratedMethodBuiltinsFactory.getFactories();
-    }
-
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 2)
-    @GenerateNodeFactory
-    abstract static class InitNode extends PythonBinaryBuiltinNode {
-        @Specialization
-        protected PNone init(VirtualFrame frame, PDecoratedMethod self, Object callable,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectLookupAttr lookupModule,
-                        @Cached PyObjectSetAttr setModule,
-                        @Cached PyObjectLookupAttr lookupName,
-                        @Cached PyObjectSetAttr setName,
-                        @Cached PyObjectLookupAttr lookupQualname,
-                        @Cached PyObjectSetAttr setQualname,
-                        @Cached PyObjectLookupAttr lookupDoc,
-                        @Cached PyObjectSetAttr setDoc,
-                        @Cached PyObjectLookupAttr lookupAnnotations,
-                        @Cached PyObjectSetAttr setAnnotations) {
-            self.setCallable(callable);
-            copyAttr(frame, inliningTarget, callable, self, T___MODULE__, lookupModule, setModule);
-            copyAttr(frame, inliningTarget, callable, self, T___NAME__, lookupName, setName);
-            copyAttr(frame, inliningTarget, callable, self, T___QUALNAME__, lookupQualname, setQualname);
-            copyAttr(frame, inliningTarget, callable, self, T___DOC__, lookupDoc, setDoc);
-            copyAttr(frame, inliningTarget, callable, self, T___ANNOTATIONS__, lookupAnnotations, setAnnotations);
-            return PNone.NONE;
-        }
-
-        private static void copyAttr(VirtualFrame frame, Node inliningTarget, Object wrapped, Object wrapper, TruffleString name, PyObjectLookupAttr lookup, PyObjectSetAttr set) {
-            Object attr = lookup.execute(frame, inliningTarget, wrapped, name);
-            if (attr != PNone.NO_VALUE) {
-                set.execute(frame, inliningTarget, wrapper, name, attr);
-            }
-        }
     }
 
     @Builtin(name = J___FUNC__, minNumOfPositionalArgs = 1, isGetter = true)
@@ -140,14 +121,14 @@ public final class DecoratedMethodBuiltins extends PythonBuiltins {
     public abstract static class DictNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object getDict(PDecoratedMethod self, @SuppressWarnings("unused") PNone mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetOrCreateDictNode getDict) {
             return getDict.execute(inliningTarget, self);
         }
 
         @Specialization
         static Object setDict(PDecoratedMethod self, PDict mapping,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached SetDictNode setDict) {
             setDict.execute(inliningTarget, self, mapping);
             return PNone.NONE;
@@ -155,8 +136,8 @@ public final class DecoratedMethodBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"!isNoValue(mapping)", "!isDict(mapping)"})
         static Object setDict(@SuppressWarnings("unused") PDecoratedMethod self, Object mapping,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.DICT_MUST_BE_SET_TO_DICT, mapping);
         }
     }
 
@@ -165,13 +146,13 @@ public final class DecoratedMethodBuiltins extends PythonBuiltins {
     abstract static class IsAbstractMethodNode extends PythonUnaryBuiltinNode {
         @Specialization
         static boolean isAbstract(VirtualFrame frame, PDecoratedMethod self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectLookupAttr lookup,
                         @Cached PyObjectIsTrueNode isTrue,
                         @Cached InlinedConditionProfile hasAttrProfile) {
             Object result = lookup.execute(frame, inliningTarget, self.getCallable(), T___ISABSTRACTMETHOD__);
             if (hasAttrProfile.profile(inliningTarget, result != PNone.NO_VALUE)) {
-                return isTrue.execute(frame, inliningTarget, result);
+                return isTrue.execute(frame, result);
             }
             return false;
         }

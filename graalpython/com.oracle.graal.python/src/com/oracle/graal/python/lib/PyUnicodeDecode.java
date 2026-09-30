@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -70,13 +70,13 @@ import com.oracle.truffle.api.nodes.Node;
 public abstract class PyUnicodeDecode extends PNodeWithContext {
     public abstract Object execute(Frame frame, Node inliningTarget, Object object, Object encoding, Object errors);
 
-    @Specialization(guards = "frame != null")
+    @Specialization(guards = "frame != null", excludeForUncached = true)
     static Object doFast(VirtualFrame frame, Node inliningTarget, Object object, Object encoding, Object errors,
                     @Cached(inline = false) CodecsModuleBuiltins.DecodeNode decodeNode,
-                    @Cached PRaiseNode.Lazy raiseNode) {
+                    @Cached PRaiseNode raiseNode) {
         final Object unicode = decodeNode.execute(frame, object, encoding, errors);
         if (!PGuards.isString(unicode)) {
-            throw raiseNode.get(inliningTarget).raise(TypeError, DECODER_S_RETURNED_P_INSTEAD_OF_STR, encoding, unicode);
+            throw raiseNode.raise(inliningTarget, TypeError, DECODER_S_RETURNED_P_INSTEAD_OF_STR, encoding, unicode);
         }
         return unicode;
     }

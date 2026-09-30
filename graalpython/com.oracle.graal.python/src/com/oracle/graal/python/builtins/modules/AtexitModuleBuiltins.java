@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,7 +45,7 @@ import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -65,9 +65,7 @@ import com.oracle.graal.python.runtime.PythonContext.GetThreadStateNode;
 import com.oracle.graal.python.runtime.PythonContextFactory.GetThreadStateNodeGen;
 import com.oracle.graal.python.runtime.exception.ExceptionUtils;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
@@ -97,7 +95,7 @@ public final class AtexitModuleBuiltins extends PythonBuiltins {
             public Object execute(VirtualFrame frame) {
                 PythonContext context = PythonContext.get(this);
                 getThreadStateNode.setTopFrameInfoCached(context, PFrame.Reference.EMPTY);
-                getThreadStateNode.setCaughtExceptionCached(context, PException.NO_EXCEPTION);
+                getThreadStateNode.executeCached(context).setCaughtException(PException.NO_EXCEPTION);
 
                 Object callable = frame.getArguments()[0];
                 Object[] arguments = (Object[]) frame.getArguments()[1];
@@ -112,10 +110,11 @@ public final class AtexitModuleBuiltins extends PythonBuiltins {
                     throw e;
                 } finally {
                     getThreadStateNode.clearTopFrameInfoCached(context);
-                    getThreadStateNode.setCaughtExceptionCached(context, null);
+                    getThreadStateNode.executeCached(context).setCaughtException(null);
                 }
             }
 
+            // No BoundaryCallContext: calls only internal well-behaved Python code
             @TruffleBoundary
             private static void handleException(PythonContext context, PException e) {
                 Object pythonException = e.getEscapedException();
@@ -131,11 +130,12 @@ public final class AtexitModuleBuiltins extends PythonBuiltins {
             }
         }
 
+        @TruffleBoundary
         @Specialization
-        Object register(Object callable, Object[] arguments, PKeyword[] keywords) {
-            CompilerDirectives.transferToInterpreter();
-            RootCallTarget callTarget = getLanguage().createCachedCallTarget(AtExitRootNode::new, AtExitRootNode.class);
-            getContext().registerAtexitHook(callable, arguments, keywords, callTarget);
+        static Object register(Object callable, Object[] arguments, PKeyword[] keywords) {
+            PythonContext context = PythonContext.get(null);
+            RootNode rootNode = context.getLanguage().createCachedRootNode(AtExitRootNode::new, AtExitRootNode.class);
+            context.registerAtexitHook(callable, arguments, keywords, rootNode);
             return callable;
         }
     }

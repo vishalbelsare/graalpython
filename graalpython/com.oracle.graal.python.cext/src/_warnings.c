@@ -1,141 +1,1243 @@
-/*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+/* Copyright (c) 2024, 2026, Oracle and/or its affiliates.
+ * Copyright (C) 1996-2024 Python Software Foundation
  *
- * The Universal Permissive License (UPL), Version 1.0
- *
- * Subject to the condition set forth below, permission is hereby granted to any
- * person obtaining a copy of this software, associated documentation and/or
- * data (collectively the "Software"), free of charge and under any and all
- * copyright rights in the Software, and any and all patent rights owned or
- * freely licensable by each licensor hereunder covering either (i) the
- * unmodified Software as contributed to or provided by such licensor, or (ii)
- * the Larger Works (as defined below), to deal in both
- *
- * (a) the Software, and
- *
- * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
- * one is included with the Software each a "Larger Work" to which the Software
- * is contributed by such licensors),
- *
- * without restriction, including without limitation the rights to copy, create
- * derivative works of, display, perform, and distribute the Software and make,
- * use, sell, offer for sale, import, export, have made, and have sold the
- * Software and the Larger Work(s), and to sublicense the foregoing rights on
- * either these or other terms.
- *
- * This license is subject to the following condition:
- *
- * The above copyright notice and either this complete permission notice or at a
- * minimum a reference to the UPL must be included in all copies or substantial
- * portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
  */
-#include "capi.h"
+#include "capi.h" // GraalPy change
+#include "Python.h"
+#include "pycore_initconfig.h"
+#include "pycore_critical_section.h"  // Py_BEGIN_CRITICAL_SECTION_MUT()
+#include "pycore_interp.h"        // PyInterpreterState.warnings
+#include "pycore_long.h"          // _PyLong_GetZero()
+#include "pycore_pyerrors.h"      // _PyErr_Occurred()
+#include "pycore_pylifecycle.h"   // _Py_IsInterpreterFinalizing()
+#include "pycore_pystate.h"       // _PyThreadState_GET()
+#if 0 // GraalPy change
+#include "pycore_frame.h"
+#include "pycore_sysmodule.h"     // _PySys_GetOptionalAttr()
+#include "pycore_traceback.h"     // _Py_DisplaySourceLine()
 
-// partially taken from CPython "Python/_warnings.c"
-MUST_INLINE static int warn_unicode(PyObject *category, PyObject *message, Py_ssize_t stack_level, PyObject *source) {
-    if (category == NULL) {
-        category = PyExc_RuntimeWarning;
+#include <stdbool.h>
+
+#include "clinic/_warnings.c.h"
+
+#define MODULE_NAME "_warnings"
+
+PyDoc_STRVAR(warnings__doc__,
+MODULE_NAME " provides basic warning filtering support.\n"
+"It is a helper module to speed up interpreter start-up.");
+
+
+/*************************************************************************/
+
+typedef struct _warnings_runtime_state WarningsState;
+
+static inline int
+check_interp(PyInterpreterState *interp)
+{
+    if (interp == NULL) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "warnings_get_state: could not identify "
+                        "current interpreter");
+        return 0;
+    }
+    return 1;
+}
+
+static inline PyInterpreterState *
+get_current_interp(void)
+{
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    return check_interp(interp) ? interp : NULL;
+}
+#endif // GraalPy change
+
+static inline PyThreadState *
+get_current_tstate(void)
+{
+    PyThreadState *tstate = _PyThreadState_GET();
+    // GraalPy change: skip interpreter checks
+    return tstate;
+}
+
+#if 0 // GraalPy change
+/* Given a module object, get its per-module state. */
+static WarningsState *
+warnings_get_state(PyInterpreterState *interp)
+{
+    return &interp->warnings;
+}
+
+/* Clear the given warnings module state. */
+static void
+warnings_clear_state(WarningsState *st)
+{
+    Py_CLEAR(st->filters);
+    Py_CLEAR(st->once_registry);
+    Py_CLEAR(st->default_action);
+}
+
+#ifndef Py_DEBUG
+static PyObject *
+create_filter(PyObject *category, PyObject *action_str, const char *modname)
+{
+    PyObject *modname_obj = NULL;
+
+    /* Default to "no module name" for initial filter set */
+    if (modname != NULL) {
+        modname_obj = PyUnicode_InternFromString(modname);
+        if (modname_obj == NULL) {
+            return NULL;
+        }
+    } else {
+        modname_obj = Py_NewRef(Py_None);
     }
 
-    PyObject* result = Graal_PyTruffleErr_Warn(message, category, stack_level, source);
-    if(result == NULL) {
-    	return -1;
+    /* This assumes the line number is zero for now. */
+    PyObject *filter = PyTuple_Pack(5, action_str, Py_None,
+                                    category, modname_obj, _PyLong_GetZero());
+    Py_DECREF(modname_obj);
+    return filter;
+}
+#endif
+
+static PyObject *
+init_filters(PyInterpreterState *interp)
+{
+#ifdef Py_DEBUG
+    /* Py_DEBUG builds show all warnings by default */
+    return PyList_New(0);
+#else
+    /* Other builds ignore a number of warning categories by default */
+    PyObject *filters = PyList_New(5);
+    if (filters == NULL) {
+        return NULL;
     }
-    Py_DECREF(result);
+
+    size_t pos = 0;  /* Post-incremented in each use. */
+#define ADD(TYPE, ACTION, MODNAME) \
+    PyList_SET_ITEM(filters, pos++, \
+                    create_filter(TYPE, &_Py_ID(ACTION), MODNAME));
+    ADD(PyExc_DeprecationWarning, default, "__main__");
+    ADD(PyExc_DeprecationWarning, ignore, NULL);
+    ADD(PyExc_PendingDeprecationWarning, ignore, NULL);
+    ADD(PyExc_ImportWarning, ignore, NULL);
+    ADD(PyExc_ResourceWarning, ignore, NULL);
+#undef ADD
+
+    for (size_t x = 0; x < pos; x++) {
+        if (PyList_GET_ITEM(filters, x) == NULL) {
+            Py_DECREF(filters);
+            return NULL;
+        }
+    }
+    return filters;
+#endif
+}
+
+/* Initialize the given warnings module state. */
+int
+_PyWarnings_InitState(PyInterpreterState *interp)
+{
+    WarningsState *st = &interp->warnings;
+
+    if (st->filters == NULL) {
+        st->filters = init_filters(interp);
+        if (st->filters == NULL) {
+            return -1;
+        }
+    }
+
+    if (st->once_registry == NULL) {
+        st->once_registry = PyDict_New();
+        if (st->once_registry == NULL) {
+            return -1;
+        }
+    }
+
+    if (st->default_action == NULL) {
+        st->default_action = PyUnicode_FromString("default");
+        if (st->default_action == NULL) {
+            return -1;
+        }
+    }
+
+    st->filters_version = 0;
     return 0;
 }
 
-MUST_INLINE static PyObject* warn_explicit(PyObject *category, PyObject *message,
-              PyObject *filename, int lineno,
-              PyObject *module, PyObject *registry) {
-    return GraalPyTruffleErr_WarnExplicit(category, message, filename, lineno, module, registry);
+
+/*************************************************************************/
+
+static int
+check_matched(PyInterpreterState *interp, PyObject *obj, PyObject *arg)
+{
+    PyObject *result;
+    int rc;
+
+    /* A 'None' filter always matches */
+    if (obj == Py_None)
+        return 1;
+
+    /* An internal plain text default filter must match exactly */
+    if (PyUnicode_CheckExact(obj)) {
+        int cmp_result = PyUnicode_Compare(obj, arg);
+        if (cmp_result == -1 && PyErr_Occurred()) {
+            return -1;
+        }
+        return !cmp_result;
+    }
+
+    /* Otherwise assume a regex filter and call its match() method */
+    result = PyObject_CallMethodOneArg(obj, &_Py_ID(match), arg);
+    if (result == NULL)
+        return -1;
+
+    rc = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return rc;
 }
 
-// taken from CPython "Python/_warnings.c"
-int PyErr_WarnEx(PyObject *category, const char *text, Py_ssize_t stack_level) {
+#define GET_WARNINGS_ATTR(interp, ATTR, try_import) \
+    get_warnings_attr(interp, &_Py_ID(ATTR), try_import)
+
+/*
+   Returns a new reference.
+   A NULL return value can mean false or an error.
+*/
+static PyObject *
+get_warnings_attr(PyInterpreterState *interp, PyObject *attr, int try_import)
+{
+    PyObject *warnings_module, *obj;
+
+    /* don't try to import after the start of the Python finallization */
+    if (try_import && !_Py_IsInterpreterFinalizing(interp)) {
+        warnings_module = PyImport_Import(&_Py_ID(warnings));
+        if (warnings_module == NULL) {
+            /* Fallback to the C implementation if we cannot get
+               the Python implementation */
+            if (PyErr_ExceptionMatches(PyExc_ImportError)) {
+                PyErr_Clear();
+            }
+            return NULL;
+        }
+    }
+    else {
+        /* if we're so late into Python finalization that the module dict is
+           gone, then we can't even use PyImport_GetModule without triggering
+           an interpreter abort.
+        */
+        if (!_PyImport_GetModules(interp)) {
+            return NULL;
+        }
+        warnings_module = PyImport_GetModule(&_Py_ID(warnings));
+        if (warnings_module == NULL)
+            return NULL;
+    }
+
+    (void)PyObject_GetOptionalAttr(warnings_module, attr, &obj);
+    Py_DECREF(warnings_module);
+    return obj;
+}
+
+
+static PyObject *
+get_once_registry(PyInterpreterState *interp)
+{
+    WarningsState *st = warnings_get_state(interp);
+    assert(st != NULL);
+
+    _Py_CRITICAL_SECTION_ASSERT_MUTEX_LOCKED(&st->mutex);
+
+    PyObject *registry = GET_WARNINGS_ATTR(interp, onceregistry, 0);
+    if (registry == NULL) {
+        if (PyErr_Occurred())
+            return NULL;
+        assert(st->once_registry);
+        return st->once_registry;
+    }
+    if (!PyDict_Check(registry)) {
+        PyErr_Format(PyExc_TypeError,
+                     MODULE_NAME ".onceregistry must be a dict, "
+                     "not '%.200s'",
+                     Py_TYPE(registry)->tp_name);
+        Py_DECREF(registry);
+        return NULL;
+    }
+    Py_SETREF(st->once_registry, registry);
+    return registry;
+}
+
+
+static PyObject *
+get_default_action(PyInterpreterState *interp)
+{
+    WarningsState *st = warnings_get_state(interp);
+    assert(st != NULL);
+
+    _Py_CRITICAL_SECTION_ASSERT_MUTEX_LOCKED(&st->mutex);
+
+    PyObject *default_action = GET_WARNINGS_ATTR(interp, defaultaction, 0);
+    if (default_action == NULL) {
+        if (PyErr_Occurred()) {
+            return NULL;
+        }
+        assert(st->default_action);
+        return st->default_action;
+    }
+    if (!PyUnicode_Check(default_action)) {
+        PyErr_Format(PyExc_TypeError,
+                     MODULE_NAME ".defaultaction must be a string, "
+                     "not '%.200s'",
+                     Py_TYPE(default_action)->tp_name);
+        Py_DECREF(default_action);
+        return NULL;
+    }
+    Py_SETREF(st->default_action, default_action);
+    return default_action;
+}
+
+
+/* The item is a new reference. */
+static PyObject*
+get_filter(PyInterpreterState *interp, PyObject *category,
+           PyObject *text, Py_ssize_t lineno,
+           PyObject *module, PyObject **item)
+{
+    WarningsState *st = warnings_get_state(interp);
+    assert(st != NULL);
+
+    _Py_CRITICAL_SECTION_ASSERT_MUTEX_LOCKED(&st->mutex);
+
+    PyObject *warnings_filters = GET_WARNINGS_ATTR(interp, filters, 0);
+    if (warnings_filters == NULL) {
+        if (PyErr_Occurred())
+            return NULL;
+    }
+    else {
+        Py_SETREF(st->filters, warnings_filters);
+    }
+
+    PyObject *filters = st->filters;
+    if (filters == NULL || !PyList_Check(filters)) {
+        PyErr_SetString(PyExc_ValueError,
+                        MODULE_NAME ".filters must be a list");
+        return NULL;
+    }
+
+    /* WarningsState.filters could change while we are iterating over it. */
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(filters); i++) {
+        PyObject *tmp_item, *action, *msg, *cat, *mod, *ln_obj;
+        Py_ssize_t ln;
+        int is_subclass, good_msg, good_mod;
+
+        tmp_item = PyList_GET_ITEM(filters, i);
+        if (!PyTuple_Check(tmp_item) || PyTuple_GET_SIZE(tmp_item) != 5) {
+            PyErr_Format(PyExc_ValueError,
+                         MODULE_NAME ".filters item %zd isn't a 5-tuple", i);
+            return NULL;
+        }
+
+        /* Python code: action, msg, cat, mod, ln = item */
+        Py_INCREF(tmp_item);
+        action = PyTuple_GET_ITEM(tmp_item, 0);
+        msg = PyTuple_GET_ITEM(tmp_item, 1);
+        cat = PyTuple_GET_ITEM(tmp_item, 2);
+        mod = PyTuple_GET_ITEM(tmp_item, 3);
+        ln_obj = PyTuple_GET_ITEM(tmp_item, 4);
+
+        if (!PyUnicode_Check(action)) {
+            PyErr_Format(PyExc_TypeError,
+                         "action must be a string, not '%.200s'",
+                         Py_TYPE(action)->tp_name);
+            Py_DECREF(tmp_item);
+            return NULL;
+        }
+
+        good_msg = check_matched(interp, msg, text);
+        if (good_msg == -1) {
+            Py_DECREF(tmp_item);
+            return NULL;
+        }
+
+        good_mod = check_matched(interp, mod, module);
+        if (good_mod == -1) {
+            Py_DECREF(tmp_item);
+            return NULL;
+        }
+
+        is_subclass = PyObject_IsSubclass(category, cat);
+        if (is_subclass == -1) {
+            Py_DECREF(tmp_item);
+            return NULL;
+        }
+
+        ln = PyLong_AsSsize_t(ln_obj);
+        if (ln == -1 && PyErr_Occurred()) {
+            Py_DECREF(tmp_item);
+            return NULL;
+        }
+
+        if (good_msg && is_subclass && good_mod && (ln == 0 || lineno == ln)) {
+            *item = tmp_item;
+            return action;
+        }
+
+        Py_DECREF(tmp_item);
+    }
+
+    PyObject *action = get_default_action(interp);
+    if (action != NULL) {
+        *item = Py_NewRef(Py_None);
+        return action;
+    }
+
+    return NULL;
+}
+
+
+static int
+already_warned(PyInterpreterState *interp, PyObject *registry, PyObject *key,
+               int should_set)
+{
+    PyObject *already_warned;
+
+    if (key == NULL)
+        return -1;
+
+    WarningsState *st = warnings_get_state(interp);
+    assert(st != NULL);
+    _Py_CRITICAL_SECTION_ASSERT_MUTEX_LOCKED(&st->mutex);
+
+    PyObject *version_obj;
+    if (PyDict_GetItemRef(registry, &_Py_ID(version), &version_obj) < 0) {
+        return -1;
+    }
+    bool should_update_version = (
+        version_obj == NULL
+        || !PyLong_CheckExact(version_obj)
+        || PyLong_AsLong(version_obj) != st->filters_version
+    );
+    Py_XDECREF(version_obj);
+    if (should_update_version) {
+        PyDict_Clear(registry);
+        version_obj = PyLong_FromLong(st->filters_version);
+        if (version_obj == NULL)
+            return -1;
+        if (PyDict_SetItem(registry, &_Py_ID(version), version_obj) < 0) {
+            Py_DECREF(version_obj);
+            return -1;
+        }
+        Py_DECREF(version_obj);
+    }
+    else {
+        if (PyDict_GetItemRef(registry, key, &already_warned) < 0) {
+            return -1;
+        }
+        if (already_warned != NULL) {
+            int rc = PyObject_IsTrue(already_warned);
+            Py_DECREF(already_warned);
+            if (rc != 0)
+                return rc;
+        }
+    }
+
+    /* This warning wasn't found in the registry, set it. */
+    if (should_set)
+        return PyDict_SetItem(registry, key, Py_True);
+    return 0;
+}
+
+/* New reference. */
+static PyObject *
+normalize_module(PyObject *filename)
+{
+    PyObject *module;
+    int kind;
+    const void *data;
+    Py_ssize_t len;
+
+    len = PyUnicode_GetLength(filename);
+    if (len < 0)
+        return NULL;
+
+    if (len == 0)
+        return PyUnicode_FromString("<unknown>");
+
+    kind = PyUnicode_KIND(filename);
+    data = PyUnicode_DATA(filename);
+
+    /* if filename.endswith(".py"): */
+    if (len >= 3 &&
+        PyUnicode_READ(kind, data, len-3) == '.' &&
+        PyUnicode_READ(kind, data, len-2) == 'p' &&
+        PyUnicode_READ(kind, data, len-1) == 'y')
+    {
+        module = PyUnicode_Substring(filename, 0, len-3);
+    }
+    else {
+        module = Py_NewRef(filename);
+    }
+    return module;
+}
+
+static int
+update_registry(PyInterpreterState *interp, PyObject *registry, PyObject *text,
+                PyObject *category, int add_zero)
+{
+    PyObject *altkey;
+    int rc;
+
+    if (add_zero)
+        altkey = PyTuple_Pack(3, text, category, _PyLong_GetZero());
+    else
+        altkey = PyTuple_Pack(2, text, category);
+
+    rc = already_warned(interp, registry, altkey, 1);
+    Py_XDECREF(altkey);
+    return rc;
+}
+
+static void
+show_warning(PyThreadState *tstate, PyObject *filename, int lineno,
+             PyObject *text, PyObject *category, PyObject *sourceline)
+{
+    PyObject *f_stderr = NULL;
+    PyObject *name;
+    char lineno_str[128];
+
+    PyOS_snprintf(lineno_str, sizeof(lineno_str), ":%d: ", lineno);
+
+    name = PyObject_GetAttr(category, &_Py_ID(__name__));
+    if (name == NULL) {
+        goto error;
+    }
+
+    if (_PySys_GetOptionalAttr(&_Py_ID(stderr), &f_stderr) <= 0) {
+        fprintf(stderr, "lost sys.stderr\n");
+        goto error;
+    }
+
+    /* Print "filename:lineno: category: text\n" */
+    if (PyFile_WriteObject(filename, f_stderr, Py_PRINT_RAW) < 0)
+        goto error;
+    if (PyFile_WriteString(lineno_str, f_stderr) < 0)
+        goto error;
+    if (PyFile_WriteObject(name, f_stderr, Py_PRINT_RAW) < 0)
+        goto error;
+    if (PyFile_WriteString(": ", f_stderr) < 0)
+        goto error;
+    if (PyFile_WriteObject(text, f_stderr, Py_PRINT_RAW) < 0)
+        goto error;
+    if (PyFile_WriteString("\n", f_stderr) < 0)
+        goto error;
+    Py_CLEAR(name);
+
+    /* Print "  source_line\n" */
+    if (sourceline) {
+        int kind;
+        const void *data;
+        Py_ssize_t i, len;
+        Py_UCS4 ch;
+        PyObject *truncated;
+
+        kind = PyUnicode_KIND(sourceline);
+        data = PyUnicode_DATA(sourceline);
+        len = PyUnicode_GET_LENGTH(sourceline);
+        for (i=0; i<len; i++) {
+            ch = PyUnicode_READ(kind, data, i);
+            if (ch != ' ' && ch != '\t' && ch != '\014')
+                break;
+        }
+
+        truncated = PyUnicode_Substring(sourceline, i, len);
+        if (truncated == NULL)
+            goto error;
+
+        PyFile_WriteObject(sourceline, f_stderr, Py_PRINT_RAW);
+        Py_DECREF(truncated);
+        PyFile_WriteString("\n", f_stderr);
+    }
+    else {
+        _Py_DisplaySourceLine(f_stderr, filename, lineno, 2, NULL, NULL);
+    }
+
+error:
+    Py_XDECREF(f_stderr);
+    Py_XDECREF(name);
+    PyErr_Clear();
+}
+
+static int
+call_show_warning(PyThreadState *tstate, PyObject *category,
+                  PyObject *text, PyObject *message,
+                  PyObject *filename, int lineno, PyObject *lineno_obj,
+                  PyObject *sourceline, PyObject *source)
+{
+    PyObject *show_fn, *msg, *res, *warnmsg_cls = NULL;
+    PyInterpreterState *interp = tstate->interp;
+
+    /* The Python implementation is able to log the traceback where the source
+       was allocated, whereas the C implementation doesn't. */
+    show_fn = GET_WARNINGS_ATTR(interp, _showwarnmsg, 1);
+    if (show_fn == NULL) {
+        if (PyErr_Occurred())
+            return -1;
+        show_warning(tstate, filename, lineno, text, category, sourceline);
+        return 0;
+    }
+
+    if (!PyCallable_Check(show_fn)) {
+        PyErr_SetString(PyExc_TypeError,
+                "warnings._showwarnmsg() must be set to a callable");
+        goto error;
+    }
+
+    warnmsg_cls = GET_WARNINGS_ATTR(interp, WarningMessage, 0);
+    if (warnmsg_cls == NULL) {
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_RuntimeError,
+                    "unable to get warnings.WarningMessage");
+        }
+        goto error;
+    }
+
+    msg = PyObject_CallFunctionObjArgs(warnmsg_cls, message, category,
+            filename, lineno_obj, Py_None, Py_None, source,
+            NULL);
+    Py_DECREF(warnmsg_cls);
+    if (msg == NULL)
+        goto error;
+
+    res = PyObject_CallOneArg(show_fn, msg);
+    Py_DECREF(show_fn);
+    Py_DECREF(msg);
+
+    if (res == NULL)
+        return -1;
+
+    Py_DECREF(res);
+    return 0;
+
+error:
+    Py_XDECREF(show_fn);
+    return -1;
+}
+#endif // GraalPy change
+
+static PyObject *
+warn_explicit(PyThreadState *tstate, PyObject *category, PyObject *message,
+              PyObject *filename, int lineno,
+              PyObject *module, PyObject *registry, PyObject *sourceline,
+              PyObject *source)
+{
+    // GraalPy change: different implementation
+    return GraalPyPrivate_Err_WarnExplicit(category, message, filename, lineno, module, registry);
+}
+
+#if 0 // GraalPy change
+static PyObject *
+get_frame_filename(PyFrameObject *frame)
+{
+    PyCodeObject *code = PyFrame_GetCode(frame);
+    PyObject *filename = code->co_filename;
+    Py_DECREF(code);
+    return filename;
+}
+
+static bool
+is_internal_filename(PyObject *filename)
+{
+    if (!PyUnicode_Check(filename)) {
+        return false;
+    }
+
+    int contains = PyUnicode_Contains(filename, &_Py_ID(importlib));
+    if (contains < 0) {
+        return false;
+    }
+    else if (contains > 0) {
+        contains = PyUnicode_Contains(filename, &_Py_ID(_bootstrap));
+        if (contains < 0) {
+            return false;
+        }
+        else if (contains > 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool
+is_filename_to_skip(PyObject *filename, PyTupleObject *skip_file_prefixes)
+{
+    if (skip_file_prefixes) {
+        if (!PyUnicode_Check(filename)) {
+            return false;
+        }
+
+        Py_ssize_t prefixes = PyTuple_GET_SIZE(skip_file_prefixes);
+        for (Py_ssize_t idx = 0; idx < prefixes; ++idx)
+        {
+            PyObject *prefix = PyTuple_GET_ITEM(skip_file_prefixes, idx);
+            Py_ssize_t found = PyUnicode_Tailmatch(filename, prefix, 0, -1, -1);
+            if (found == 1) {
+                return true;
+            }
+            if (found < 0) {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+static bool
+is_internal_frame(PyFrameObject *frame)
+{
+    if (frame == NULL) {
+        return false;
+    }
+
+    PyObject *filename = get_frame_filename(frame);
+    if (filename == NULL) {
+        return false;
+    }
+
+    return is_internal_filename(filename);
+}
+
+static PyFrameObject *
+next_external_frame(PyFrameObject *frame, PyTupleObject *skip_file_prefixes)
+{
+    PyObject *frame_filename;
+    do {
+        PyFrameObject *back = PyFrame_GetBack(frame);
+        Py_SETREF(frame, back);
+    } while (frame != NULL && (frame_filename = get_frame_filename(frame)) &&
+             (is_internal_filename(frame_filename) ||
+              is_filename_to_skip(frame_filename, skip_file_prefixes)));
+
+    return frame;
+}
+
+/* filename, module, and registry are new refs, globals is borrowed */
+/* skip_file_prefixes is either NULL or a tuple of strs. */
+/* Returns 0 on error (no new refs), 1 on success */
+static int
+setup_context(Py_ssize_t stack_level,
+              PyTupleObject *skip_file_prefixes,
+              PyObject **filename, int *lineno,
+              PyObject **module, PyObject **registry)
+{
+    PyObject *globals;
+
+    /* Setup globals, filename and lineno. */
+    PyThreadState *tstate = get_current_tstate();
+    if (tstate == NULL) {
+        return 0;
+    }
+    if (skip_file_prefixes) {
+        /* Type check our data structure up front. Later code that uses it
+         * isn't structured to report errors. */
+        Py_ssize_t prefixes = PyTuple_GET_SIZE(skip_file_prefixes);
+        for (Py_ssize_t idx = 0; idx < prefixes; ++idx)
+        {
+            PyObject *prefix = PyTuple_GET_ITEM(skip_file_prefixes, idx);
+            if (!PyUnicode_Check(prefix)) {
+                PyErr_Format(PyExc_TypeError,
+                             "Found non-str '%s' in skip_file_prefixes.",
+                             Py_TYPE(prefix)->tp_name);
+                return 0;
+            }
+        }
+    }
+    PyInterpreterState *interp = tstate->interp;
+    PyFrameObject *f = PyThreadState_GetFrame(tstate);
+    // Stack level comparisons to Python code is off by one as there is no
+    // warnings-related stack level to avoid.
+    if (stack_level <= 0 || is_internal_frame(f)) {
+        while (--stack_level > 0 && f != NULL) {
+            PyFrameObject *back = PyFrame_GetBack(f);
+            Py_SETREF(f, back);
+        }
+    }
+    else {
+        while (--stack_level > 0 && f != NULL) {
+            f = next_external_frame(f, skip_file_prefixes);
+        }
+    }
+
+    if (f == NULL) {
+        globals = interp->sysdict;
+        *filename = PyUnicode_FromString("<sys>");
+        *lineno = 0;
+    }
+    else {
+        globals = f->f_frame->f_globals;
+        // GraalPy change: use public frame API
+        PyCodeObject *code = PyFrame_GetCode(f);
+        *filename = Py_NewRef(code->co_filename);
+        Py_DECREF(code);
+        *lineno = PyFrame_GetLineNumber(f);
+        Py_DECREF(f);
+    }
+
+    *module = NULL;
+
+    /* Setup registry. */
+    assert(globals != NULL);
+    assert(PyDict_Check(globals));
+    int rc = PyDict_GetItemRef(globals, &_Py_ID(__warningregistry__),
+                               registry);
+    if (rc < 0) {
+        goto handle_error;
+    }
+    if (*registry == NULL) {
+        *registry = PyDict_New();
+        if (*registry == NULL)
+            goto handle_error;
+
+         rc = PyDict_SetItem(globals, &_Py_ID(__warningregistry__), *registry);
+         if (rc < 0)
+            goto handle_error;
+    }
+
+    /* Setup module. */
+    rc = PyDict_GetItemRef(globals, &_Py_ID(__name__), module);
+    if (rc < 0) {
+        goto handle_error;
+    }
+    if (rc > 0) {
+        if (Py_IsNone(*module) || PyUnicode_Check(*module)) {
+            return 1;
+        }
+        Py_DECREF(*module);
+    }
+    *module = PyUnicode_FromString("<string>");
+    if (*module == NULL) {
+        goto handle_error;
+    }
+
+    return 1;
+
+ handle_error:
+    Py_XDECREF(*registry);
+    Py_XDECREF(*module);
+    Py_DECREF(*filename);
+    return 0;
+}
+
+static PyObject *
+get_category(PyObject *message, PyObject *category)
+{
+    int rc;
+
+    /* Get category. */
+    rc = PyObject_IsInstance(message, PyExc_Warning);
+    if (rc == -1)
+        return NULL;
+
+    if (rc == 1)
+        category = (PyObject*)Py_TYPE(message);
+    else if (category == NULL || category == Py_None)
+        category = PyExc_UserWarning;
+
+    /* Validate category. */
+    rc = PyObject_IsSubclass(category, PyExc_Warning);
+    /* category is not a subclass of PyExc_Warning or
+       PyObject_IsSubclass raised an error */
+    if (rc == -1 || rc == 0) {
+        PyErr_Format(PyExc_TypeError,
+                     "category must be a Warning subclass, not '%s'",
+                     Py_TYPE(category)->tp_name);
+        return NULL;
+    }
+
+    return category;
+}
+
+static PyObject *
+do_warn(PyObject *message, PyObject *category, Py_ssize_t stack_level,
+        PyObject *source, PyTupleObject *skip_file_prefixes)
+{
+    PyObject *filename, *module, *registry, *res;
+    int lineno;
+
+    PyThreadState *tstate = get_current_tstate();
+    if (tstate == NULL) {
+        return NULL;
+    }
+
+    if (!setup_context(stack_level, skip_file_prefixes,
+                       &filename, &lineno, &module, &registry))
+        return NULL;
+
+#ifdef Py_GIL_DISABLED
+    WarningsState *st = warnings_get_state(tstate->interp);
+    assert(st != NULL);
+#endif
+
+    Py_BEGIN_CRITICAL_SECTION_MUT(&st->mutex);
+    res = warn_explicit(tstate, category, message, filename, lineno, module, registry,
+                        NULL, source);
+    Py_END_CRITICAL_SECTION();
+    Py_DECREF(filename);
+    Py_DECREF(registry);
+    Py_DECREF(module);
+    return res;
+}
+
+/*[clinic input]
+warn as warnings_warn
+
+    message: object
+      Text of the warning message.
+    category: object = None
+      The Warning category subclass. Defaults to UserWarning.
+    stacklevel: Py_ssize_t = 1
+      How far up the call stack to make this warning appear. A value of 2 for
+      example attributes the warning to the caller of the code calling warn().
+    source: object = None
+      If supplied, the destroyed object which emitted a ResourceWarning
+    *
+    skip_file_prefixes: object(type='PyTupleObject *', subclass_of='&PyTuple_Type') = NULL
+      An optional tuple of module filename prefixes indicating frames to skip
+      during stacklevel computations for stack frame attribution.
+
+Issue a warning, or maybe ignore it or raise an exception.
+[clinic start generated code]*/
+
+static PyObject *
+warnings_warn_impl(PyObject *module, PyObject *message, PyObject *category,
+                   Py_ssize_t stacklevel, PyObject *source,
+                   PyTupleObject *skip_file_prefixes)
+/*[clinic end generated code: output=a68e0f6906c65f80 input=eb37c6a18bec4ea1]*/
+{
+    category = get_category(message, category);
+    if (category == NULL)
+        return NULL;
+    if (skip_file_prefixes) {
+        if (PyTuple_GET_SIZE(skip_file_prefixes) > 0) {
+            if (stacklevel < 2) {
+                stacklevel = 2;
+            }
+        } else {
+            Py_DECREF((PyObject *)skip_file_prefixes);
+            skip_file_prefixes = NULL;
+        }
+    }
+    return do_warn(message, category, stacklevel, source, skip_file_prefixes);
+}
+
+static PyObject *
+get_source_line(PyInterpreterState *interp, PyObject *module_globals, int lineno)
+{
+    PyObject *loader;
+    PyObject *module_name;
+    PyObject *get_source;
+    PyObject *source;
+    PyObject *source_list;
+    PyObject *source_line;
+
+    /* stolen from import.c */
+    loader = _PyImport_BlessMyLoader(interp, module_globals);
+    if (loader == NULL) {
+        return NULL;
+    }
+
+    int rc = PyDict_GetItemRef(module_globals, &_Py_ID(__name__),
+                               &module_name);
+    if (rc < 0 || rc == 0) {
+        Py_DECREF(loader);
+        return NULL;
+    }
+
+    /* Make sure the loader implements the optional get_source() method. */
+    (void)PyObject_GetOptionalAttr(loader, &_Py_ID(get_source), &get_source);
+    Py_DECREF(loader);
+    if (!get_source) {
+        Py_DECREF(module_name);
+        return NULL;
+    }
+    /* Call get_source() to get the source code. */
+    source = PyObject_CallOneArg(get_source, module_name);
+    Py_DECREF(get_source);
+    Py_DECREF(module_name);
+    if (!source) {
+        return NULL;
+    }
+    if (source == Py_None) {
+        Py_DECREF(source);
+        return NULL;
+    }
+
+    /* Split the source into lines. */
+    source_list = PyUnicode_Splitlines(source, 0);
+    Py_DECREF(source);
+    if (!source_list) {
+        return NULL;
+    }
+
+    /* Get the source line. */
+    source_line = PyList_GetItem(source_list, lineno-1);
+    Py_XINCREF(source_line);
+    Py_DECREF(source_list);
+    return source_line;
+}
+
+/*[clinic input]
+warn_explicit as warnings_warn_explicit
+
+    message: object
+    category: object
+    filename: unicode
+    lineno: int
+    module as mod: object = NULL
+    registry: object = None
+    module_globals: object = None
+    source as sourceobj: object = None
+
+Issue a warning, or maybe ignore it or raise an exception.
+[clinic start generated code]*/
+
+static PyObject *
+warnings_warn_explicit_impl(PyObject *module, PyObject *message,
+                            PyObject *category, PyObject *filename,
+                            int lineno, PyObject *mod, PyObject *registry,
+                            PyObject *module_globals, PyObject *sourceobj)
+/*[clinic end generated code: output=c49c62b15a49a186 input=df6eeb8b45e712f1]*/
+{
+    PyObject *source_line = NULL;
+    PyObject *returned;
+
+    PyThreadState *tstate = get_current_tstate();
+    if (tstate == NULL) {
+        return NULL;
+    }
+
+    if (module_globals && module_globals != Py_None) {
+        if (!PyDict_Check(module_globals)) {
+            PyErr_Format(PyExc_TypeError,
+                         "module_globals must be a dict, not '%.200s'",
+                         Py_TYPE(module_globals)->tp_name);
+            return NULL;
+        }
+
+        source_line = get_source_line(tstate->interp, module_globals, lineno);
+        if (source_line == NULL && PyErr_Occurred()) {
+            return NULL;
+        }
+    }
+
+#ifdef Py_GIL_DISABLED
+    WarningsState *st = warnings_get_state(tstate->interp);
+    assert(st != NULL);
+#endif
+
+    Py_BEGIN_CRITICAL_SECTION_MUT(&st->mutex);
+    returned = warn_explicit(tstate, category, message, filename, lineno,
+                             mod, registry, source_line, sourceobj);
+    Py_END_CRITICAL_SECTION();
+    Py_XDECREF(source_line);
+    return returned;
+}
+
+/*[clinic input]
+_filters_mutated as warnings_filters_mutated
+
+[clinic start generated code]*/
+
+static PyObject *
+warnings_filters_mutated_impl(PyObject *module)
+/*[clinic end generated code: output=8ce517abd12b88f4 input=35ecbf08ee2491b2]*/
+{
+    PyInterpreterState *interp = get_current_interp();
+    if (interp == NULL) {
+        return NULL;
+    }
+
+    WarningsState *st = warnings_get_state(interp);
+    assert(st != NULL);
+
+    Py_BEGIN_CRITICAL_SECTION_MUT(&st->mutex);
+    st->filters_version++;
+    Py_END_CRITICAL_SECTION();
+
+    Py_RETURN_NONE;
+}
+#endif // GraalPy change
+
+
+/* Function to issue a warning message; may raise an exception. */
+
+static int
+warn_unicode(PyObject *category, PyObject *message,
+             Py_ssize_t stack_level, PyObject *source)
+{
+    PyObject *res;
+
+    if (category == NULL)
+        category = PyExc_RuntimeWarning;
+
+    // GraalPy change
+    res = GraalPyPrivate_Err_Warn(message, category, stack_level, source);
+    if (res == NULL)
+        return -1;
+    Py_DECREF(res);
+
+    return 0;
+}
+
+static int
+_PyErr_WarnFormatV(PyObject *source,
+                   PyObject *category, Py_ssize_t stack_level,
+                   const char *format, va_list vargs)
+{
+    PyObject *message;
+    int res;
+
+    message = PyUnicode_FromFormatV(format, vargs);
+    if (message == NULL)
+        return -1;
+
+    res = warn_unicode(category, message, stack_level, source);
+    Py_DECREF(message);
+    return res;
+}
+
+int
+PyErr_WarnFormat(PyObject *category, Py_ssize_t stack_level,
+                 const char *format, ...)
+{
+    int res;
+    va_list vargs;
+
+    va_start(vargs, format);
+    res = _PyErr_WarnFormatV(NULL, category, stack_level, format, vargs);
+    va_end(vargs);
+    return res;
+}
+
+#if 0 // GraalPy change
+static int
+_PyErr_WarnFormat(PyObject *source, PyObject *category, Py_ssize_t stack_level,
+                  const char *format, ...)
+{
+    int res;
+    va_list vargs;
+
+    va_start(vargs, format);
+    res = _PyErr_WarnFormatV(source, category, stack_level, format, vargs);
+    va_end(vargs);
+    return res;
+}
+#endif // GraalPy change
+
+int
+PyErr_ResourceWarning(PyObject *source, Py_ssize_t stack_level,
+                      const char *format, ...)
+{
+    int res;
+    va_list vargs;
+
+    va_start(vargs, format);
+    res = _PyErr_WarnFormatV(source, PyExc_ResourceWarning,
+                             stack_level, format, vargs);
+    va_end(vargs);
+    return res;
+}
+
+
+int
+PyErr_WarnEx(PyObject *category, const char *text, Py_ssize_t stack_level)
+{
+    int ret;
     PyObject *message = PyUnicode_FromString(text);
     if (message == NULL)
         return -1;
-    int ret = warn_unicode(category, message, stack_level, NULL);
+    ret = warn_unicode(category, message, stack_level, NULL);
     Py_DECREF(message);
     return ret;
 }
 
-NO_INLINE int PyErr_WarnFormat(PyObject *category, Py_ssize_t stack_level, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    PyObject* message = PyUnicode_FromFormatV(format, args);
-    va_end(args);
-    int ret = warn_unicode(category, message, stack_level, Py_None);
-    Py_DECREF(message);
-    return ret;
-}
+#if 0 // GraalPy change
+/* PyErr_Warn is only for backwards compatibility and will be removed.
+   Use PyErr_WarnEx instead. */
 
-int PyErr_ResourceWarning(PyObject *source, Py_ssize_t stack_level, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    PyObject* message = PyUnicode_FromFormatV(format, args);
-    va_end(args);
-    int ret = warn_unicode(PyExc_ResourceWarning, message, stack_level, source);
-    Py_DECREF(message);
-    return ret;
-}
+#undef PyErr_Warn
 
-// Adapted from CPython
-int PyErr_WarnExplicitObject(PyObject *category, PyObject *message,
+int
+PyErr_Warn(PyObject *category, const char *text)
+{
+    return PyErr_WarnEx(category, text, 1);
+}
+#endif // GraalPy change
+
+/* Warning with explicit origin */
+int
+PyErr_WarnExplicitObject(PyObject *category, PyObject *message,
                          PyObject *filename, int lineno,
                          PyObject *module, PyObject *registry)
 {
     PyObject *res;
     if (category == NULL)
         category = PyExc_RuntimeWarning;
-    res = warn_explicit(category, message, filename, lineno,
-                        module, registry);
+    PyThreadState *tstate = get_current_tstate();
+    if (tstate == NULL) {
+        return -1;
+    }
+
+#ifdef Py_GIL_DISABLED
+    WarningsState *st = warnings_get_state(tstate->interp);
+    assert(st != NULL);
+#endif
+
+    Py_BEGIN_CRITICAL_SECTION_MUT(&st->mutex);
+    res = warn_explicit(tstate, category, message, filename, lineno,
+                        module, registry, NULL, NULL);
+    Py_END_CRITICAL_SECTION();
     if (res == NULL)
         return -1;
     Py_DECREF(res);
     return 0;
 }
 
-// Adapted from CPython
-int PyErr_WarnExplicit(PyObject *category, const char *text,
+int
+PyErr_WarnExplicit(PyObject *category, const char *text,
                    const char *filename_str, int lineno,
                    const char *module_str, PyObject *registry)
 {
     PyObject *message = PyUnicode_FromString(text);
+    if (message == NULL) {
+        return -1;
+    }
     PyObject *filename = PyUnicode_DecodeFSDefault(filename_str);
+    if (filename == NULL) {
+        Py_DECREF(message);
+        return -1;
+    }
     PyObject *module = NULL;
-    int ret = -1;
-
-    if (message == NULL || filename == NULL)
-        goto exit;
     if (module_str != NULL) {
         module = PyUnicode_FromString(module_str);
-        if (module == NULL)
-            goto exit;
+        if (module == NULL) {
+            Py_DECREF(filename);
+            Py_DECREF(message);
+            return -1;
+        }
     }
 
-    ret = PyErr_WarnExplicitObject(category, message, filename, lineno,
-                                   module, registry);
-
- exit:
-    Py_XDECREF(message);
+    int ret = PyErr_WarnExplicitObject(category, message, filename, lineno,
+                                       module, registry);
     Py_XDECREF(module);
-    Py_XDECREF(filename);
+    Py_DECREF(filename);
+    Py_DECREF(message);
     return ret;
 }
 
-// Adapted from CPython
-int PyErr_WarnExplicitFormat(PyObject *category,
+int
+PyErr_WarnExplicitFormat(PyObject *category,
                          const char *filename_str, int lineno,
                          const char *module_str, PyObject *registry,
                          const char *format, ...)
@@ -154,19 +1256,26 @@ int PyErr_WarnExplicitFormat(PyObject *category,
             goto exit;
     }
 
-#ifdef HAVE_STDARG_PROTOTYPES
     va_start(vargs, format);
-#else
-    va_start(vargs);
-#endif
     message = PyUnicode_FromFormatV(format, vargs);
     if (message != NULL) {
-        PyObject *res = warn_explicit(category, message, filename, lineno,
-                            module, registry);
-        Py_DECREF(message);
-        if (res != NULL) {
-            Py_DECREF(res);
-            ret = 0;
+        PyObject *res;
+        PyThreadState *tstate = get_current_tstate();
+        if (tstate != NULL) {
+#ifdef Py_GIL_DISABLED
+            WarningsState *st = warnings_get_state(tstate->interp);
+            assert(st != NULL);
+#endif
+
+            Py_BEGIN_CRITICAL_SECTION_MUT(&st->mutex);
+            res = warn_explicit(tstate, category, message, filename, lineno,
+                                module, registry, NULL, NULL);
+            Py_END_CRITICAL_SECTION();
+            Py_DECREF(message);
+            if (res != NULL) {
+                Py_DECREF(res);
+                ret = 0;
+            }
         }
     }
     va_end(vargs);
@@ -176,13 +1285,130 @@ exit:
     return ret;
 }
 
-PyObject* _PyErr_FormatFromCause(PyObject *exception, const char *format, ...) {
-	// dummy implementation that ignores the cause
-    va_list args;
-    va_start(args, format);
-    PyObject* formatted_msg = PyUnicode_FromFormatV(format, args);
-    va_end(args);
-    Graal_PyTruffleErr_CreateAndSetException(exception, formatted_msg);
-    return NULL;
+#if 0 // GraalPy change
+void
+_PyErr_WarnUnawaitedAgenMethod(PyAsyncGenObject *agen, PyObject *method)
+{
+    PyObject *exc = PyErr_GetRaisedException();
+    if (_PyErr_WarnFormat((PyObject *)agen, PyExc_RuntimeWarning, 1,
+                          "coroutine method %R of %R was never awaited",
+                          method, agen->ag_qualname) < 0)
+    {
+        PyErr_WriteUnraisable((PyObject *)agen);
+    }
+    PyErr_SetRaisedException(exc);
 }
 
+
+void
+_PyErr_WarnUnawaitedCoroutine(PyObject *coro)
+{
+    /* First, we attempt to funnel the warning through
+       warnings._warn_unawaited_coroutine.
+
+       This could raise an exception, due to:
+       - a bug
+       - some kind of shutdown-related brokenness
+       - succeeding, but with an "error" warning filter installed, so the
+         warning is converted into a RuntimeWarning exception
+
+       In the first two cases, we want to print the error (so we know what it
+       is!), and then print a warning directly as a fallback. In the last
+       case, we want to print the error (since it's the warning!), but *not*
+       do a fallback. And after we print the error we can't check for what
+       type of error it was (because PyErr_WriteUnraisable clears it), so we
+       need a flag to keep track.
+
+       Since this is called from __del__ context, it's careful to never raise
+       an exception.
+    */
+    int warned = 0;
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    assert(interp != NULL);
+    PyObject *fn = GET_WARNINGS_ATTR(interp, _warn_unawaited_coroutine, 1);
+    if (fn) {
+        PyObject *res = PyObject_CallOneArg(fn, coro);
+        Py_DECREF(fn);
+        if (res || PyErr_ExceptionMatches(PyExc_RuntimeWarning)) {
+            warned = 1;
+        }
+        Py_XDECREF(res);
+    }
+
+    if (PyErr_Occurred()) {
+        PyErr_WriteUnraisable(coro);
+    }
+    if (!warned) {
+        if (_PyErr_WarnFormat(coro, PyExc_RuntimeWarning, 1,
+                              "coroutine '%S' was never awaited",
+                              ((PyCoroObject *)coro)->cr_qualname) < 0)
+        {
+            PyErr_WriteUnraisable(coro);
+        }
+    }
+}
+
+static PyMethodDef warnings_functions[] = {
+    WARNINGS_WARN_METHODDEF
+    WARNINGS_WARN_EXPLICIT_METHODDEF
+    WARNINGS_FILTERS_MUTATED_METHODDEF
+    /* XXX(brett.cannon): add showwarning? */
+    /* XXX(brett.cannon): Reasonable to add formatwarning? */
+    {NULL, NULL}                /* sentinel */
+};
+
+
+static int
+warnings_module_exec(PyObject *module)
+{
+    PyInterpreterState *interp = get_current_interp();
+    if (interp == NULL) {
+        return -1;
+    }
+    WarningsState *st = warnings_get_state(interp);
+    if (st == NULL) {
+        return -1;
+    }
+    if (PyModule_AddObjectRef(module, "filters", st->filters) < 0) {
+        return -1;
+    }
+    if (PyModule_AddObjectRef(module, "_onceregistry", st->once_registry) < 0) {
+        return -1;
+    }
+    if (PyModule_AddObjectRef(module, "_defaultaction", st->default_action) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+
+static PyModuleDef_Slot warnings_slots[] = {
+    {Py_mod_exec, warnings_module_exec},
+    {Py_mod_multiple_interpreters, Py_MOD_PER_INTERPRETER_GIL_SUPPORTED},
+    {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+    {0, NULL}
+};
+
+static struct PyModuleDef warnings_module = {
+    PyModuleDef_HEAD_INIT,
+    .m_name = MODULE_NAME,
+    .m_doc = warnings__doc__,
+    .m_size = 0,
+    .m_methods = warnings_functions,
+    .m_slots = warnings_slots,
+};
+
+
+PyMODINIT_FUNC
+_PyWarnings_Init(void)
+{
+    return PyModuleDef_Init(&warnings_module);
+}
+
+// We need this to ensure that warnings still work until late in finalization.
+void
+_PyWarnings_Fini(PyInterpreterState *interp)
+{
+    warnings_clear_state(&interp->warnings);
+}
+#endif // GraalPy change

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package com.oracle.graal.python.builtins.modules.json;
 
 import java.util.IdentityHashMap;
 
+import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -59,7 +60,7 @@ public final class PJSONEncoder extends PythonBuiltinObject {
     final Object markers;
     final Object defaultFn;
     final Object encoder;
-    final Object indent;
+    final TruffleString indent;
     final TruffleString keySeparator;
     final TruffleString itemSeparator;
     final boolean sortKeys;
@@ -70,8 +71,8 @@ public final class PJSONEncoder extends PythonBuiltinObject {
     private final IdentityHashMap<Object, Object> circular = new IdentityHashMap<>();
     private static final Object dummy = new Object();
 
-    public PJSONEncoder(Object cls, Shape instanceShape, Object markers, Object defaultFn, Object encoder, Object indent, TruffleString keySeparator, TruffleString itemSeparator, boolean sortKeys,
-                    boolean skipKeys, boolean allowNan, FastEncode fastEncode) {
+    public PJSONEncoder(Object cls, Shape instanceShape, Object markers, Object defaultFn, Object encoder, TruffleString indent, TruffleString keySeparator, TruffleString itemSeparator,
+                    boolean sortKeys, boolean skipKeys, boolean allowNan, FastEncode fastEncode) {
         super(cls, instanceShape);
         CompilerAsserts.neverPartOfCompilation();
         this.markers = markers;
@@ -84,6 +85,13 @@ public final class PJSONEncoder extends PythonBuiltinObject {
         this.skipKeys = skipKeys;
         this.allowNan = allowNan;
         this.fastEncode = fastEncode;
+    }
+
+    public boolean isDefault() {
+        // skipkeys=False, ensure_ascii=True, check_circular=True, allow_nan=True, sort_keys=False,
+        // indent=None, separators=None, default=None
+        return !skipKeys && fastEncode == FastEncode.FastEncodeAscii && markers != null && allowNan && !sortKeys && indent == null && defaultFn == PNone.NONE;
+
     }
 
     @TruffleBoundary

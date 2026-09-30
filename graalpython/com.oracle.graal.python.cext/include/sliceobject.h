@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -13,8 +13,12 @@ extern "C" {
 
 PyAPI_DATA(PyObject*) _Py_EllipsisObjectReference; /* Don't use this directly */
 
-#define _Py_EllipsisObject (*_Py_EllipsisObjectReference)
-#define Py_Ellipsis (_Py_EllipsisObjectReference)
+#if defined(Py_LIMITED_API) && Py_LIMITED_API+0 >= 0x030D0000
+#  define Py_Ellipsis Py_GetConstantBorrowed(Py_CONSTANT_ELLIPSIS)
+#else
+#  define _Py_EllipsisObject (*_Py_EllipsisObjectReference)
+#  define Py_Ellipsis (_Py_EllipsisObjectReference)
+#endif
 
 /* Slice object interface */
 
@@ -31,6 +35,11 @@ typedef struct {
 } PySliceObject;
 
 // functions introduced by GraalPy as replacements for direct access to the slice struct fields
+PyAPI_FUNC(PyObject*) GraalPySlice_Start(PyObject *slice);
+PyAPI_FUNC(PyObject*) GraalPySlice_Stop(PyObject *slice);
+PyAPI_FUNC(PyObject*) GraalPySlice_Step(PyObject *slice);
+
+// Old versions of the above that return a borrowed reference. To be removed when we no longer have patches using them
 PyAPI_FUNC(PyObject*) PySlice_Start(PySliceObject *slice);
 PyAPI_FUNC(PyObject*) PySlice_Stop(PySliceObject *slice);
 PyAPI_FUNC(PyObject*) PySlice_Step(PySliceObject *slice);
@@ -39,7 +48,7 @@ PyAPI_FUNC(PyObject*) PySlice_Step(PySliceObject *slice);
 PyAPI_DATA(PyTypeObject) PySlice_Type;
 PyAPI_DATA(PyTypeObject) PyEllipsis_Type;
 
-#define PySlice_Check(op) Py_IS_TYPE(op, &PySlice_Type)
+#define PySlice_Check(op) Py_IS_TYPE((op), &PySlice_Type)
 
 PyAPI_FUNC(PyObject *) PySlice_New(PyObject* start, PyObject* stop,
                                   PyObject* step);

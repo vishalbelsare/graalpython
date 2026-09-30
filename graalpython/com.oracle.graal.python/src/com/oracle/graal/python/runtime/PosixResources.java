@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,20 +43,23 @@ package com.oracle.graal.python.runtime;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channel;
 import java.nio.channels.Channels;
 import java.nio.channels.FileLock;
 import java.nio.channels.Pipe;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.PythonOS;
 import com.oracle.graal.python.util.SuppressFBWarnings;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleFile;
@@ -79,6 +82,7 @@ abstract class PosixResources extends PosixSupport {
     /** Context-local file-descriptor mappings and PID mappings */
     protected final PythonContext context;
     private final SortedMap<Integer, ChannelWrapper> files;
+    private final Map<Integer, Integer> fileModes;
     protected final Map<Integer, String> filePaths;
     private final List<Process> children;
     private final Map<String, Integer> inodes;
@@ -154,6 +158,33 @@ abstract class PosixResources extends PosixSupport {
         }
     }
 
+    private static class FlushingWritableByteChannel implements WritableByteChannel {
+        private final OutputStream stream;
+        private final WritableByteChannel delegate;
+
+        private FlushingWritableByteChannel(OutputStream stream) {
+            this.stream = stream;
+            delegate = Channels.newChannel(stream);
+        }
+
+        @Override
+        public int write(ByteBuffer src) throws IOException {
+            int res = delegate.write(src);
+            stream.flush();
+            return res;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return delegate.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
+    }
+
     private static class ChannelWrapper {
         Channel channel;
         int cnt;
@@ -184,7 +215,7 @@ abstract class PosixResources extends PosixSupport {
         }
 
         void setNewChannel(OutputStream outputStream) {
-            this.channel = Channels.newChannel(outputStream);
+            this.channel = new FlushingWritableByteChannel(outputStream);
             this.cnt = 1;
         }
     }
@@ -192,14 +223,17 @@ abstract class PosixResources extends PosixSupport {
     protected PosixResources(PythonContext context) {
         this.context = context;
         files = Collections.synchronizedSortedMap(new TreeMap<>());
+        fileModes = Collections.synchronizedMap(new HashMap<>());
         filePaths = Collections.synchronizedMap(new HashMap<>());
         children = Collections.synchronizedList(new ArrayList<>());
-        String osProperty = System.getProperty("os.name");
 
         files.put(FD_STDIN, ChannelWrapper.createForStandardStream());
         files.put(FD_STDOUT, ChannelWrapper.createForStandardStream());
         files.put(FD_STDERR, ChannelWrapper.createForStandardStream());
-        if (osProperty != null && osProperty.toLowerCase(Locale.ENGLISH).contains("win")) {
+        fileModes.put(FD_STDIN, defaultFileMode());
+        fileModes.put(FD_STDOUT, defaultFileMode());
+        fileModes.put(FD_STDERR, defaultFileMode());
+        if (PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32) {
             filePaths.put(FD_STDIN, "STDIN");
             filePaths.put(FD_STDOUT, "STDOUT");
             filePaths.put(FD_STDERR, "STDERR");
@@ -231,6 +265,7 @@ abstract class PosixResources extends PosixSupport {
     @TruffleBoundary
     private void addFD(int fd, Channel channel, String path) {
         files.put(fd, new ChannelWrapper(channel));
+        fileModes.put(fd, defaultFileMode());
         if (path != null) {
             filePaths.put(fd, path);
         }
@@ -249,6 +284,7 @@ abstract class PosixResources extends PosixSupport {
                 }
 
                 files.remove(fd);
+                fileModes.remove(fd);
                 filePaths.remove(fd);
             }
             return true;
@@ -266,10 +302,21 @@ abstract class PosixResources extends PosixSupport {
         if (channelWrapper != null) {
             channelWrapper.cnt += 1;
             files.put(fd2, channelWrapper);
+            fileModes.put(fd2, fileModes.get(fd1));
             if (path != null) {
                 filePaths.put(fd2, path);
             }
         }
+    }
+
+    private static int defaultFileMode() {
+        return PythonLanguage.getPythonOS() == PythonOS.PLATFORM_WIN32 ? PosixConstants.O_BINARY.getValueIfDefined() : 0;
+    }
+
+    @TruffleBoundary
+    protected int setModeTracked(int fd, int mode) {
+        Integer previousMode = fileModes.replace(fd, mode);
+        return previousMode == null ? -1 : previousMode;
     }
 
     protected boolean isStandardStream(int fd) {

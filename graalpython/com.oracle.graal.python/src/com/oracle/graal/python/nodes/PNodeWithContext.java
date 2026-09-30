@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,7 +41,6 @@
 package com.oracle.graal.python.nodes;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
 import com.oracle.graal.python.runtime.PosixSupport;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonOptions;
@@ -51,18 +50,9 @@ import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NonIdempotent;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.profiles.ValueProfile;
 
-@ImportStatic({PGuards.class, PythonOptions.class, SpecialMethodNames.class, SpecialAttributeNames.class, SpecialMethodSlot.class, BuiltinNames.class})
+@ImportStatic({PGuards.class, PythonOptions.class, SpecialMethodNames.class, SpecialAttributeNames.class, BuiltinNames.class})
 public abstract class PNodeWithContext extends Node {
-
-    /**
-     * @return {@code true} if this node can be shared statically.
-     */
-    @Idempotent
-    protected final boolean isUncached() {
-        return !isAdoptable();
-    }
 
     @TruffleBoundary
     public static void printStack() {
@@ -80,6 +70,11 @@ public abstract class PNodeWithContext extends Node {
         return PythonContext.get(this);
     }
 
+    @NonIdempotent
+    public static PythonContext getContext(Node node) {
+        return PythonContext.get(node);
+    }
+
     @Idempotent
     public final boolean isSingleContext() {
         return getLanguage().isSingleContext();
@@ -88,10 +83,6 @@ public abstract class PNodeWithContext extends Node {
     @Idempotent
     public static boolean isSingleContext(Node node) {
         return PythonLanguage.get(node).isSingleContext();
-    }
-
-    public ValueProfile createValueIdentityProfile() {
-        return getLanguage().isSingleContext() ? ValueProfile.createIdentityProfile() : ValueProfile.createClassProfile();
     }
 
     public final PosixSupport getPosixSupport() {

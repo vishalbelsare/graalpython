@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,20 +40,20 @@
  */
 package com.oracle.graal.python.builtins.modules;
 
-import static com.oracle.graal.python.nodes.BuiltinNames.T_NT;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_POSIX;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.PythonOS;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.PythonOS;
 import com.oracle.graal.python.builtins.modules.PosixModuleBuiltins.PathConversionNode;
 import com.oracle.graal.python.builtins.modules.PosixModuleBuiltins.PosixPath;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -65,7 +65,7 @@ import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProv
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.graal.python.runtime.PosixSupportLibrary;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
@@ -73,11 +73,13 @@ import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
-@CoreFunctions(defineModule = "nt", isEager = true)
+@CoreFunctions(defineModule = "nt", isEager = true, os = PythonOS.PLATFORM_WIN32)
 public final class NtModuleBuiltins extends PythonBuiltins {
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return NtModuleBuiltinsFactory.getFactories();
@@ -86,31 +88,30 @@ public final class NtModuleBuiltins extends PythonBuiltins {
     @Override
     public void initialize(Python3Core core) {
         super.initialize(core);
-        if (PythonOS.getPythonOS() == PythonOS.PLATFORM_WIN32) {
-            addBuiltinConstant("_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR", 0x100);
-            addBuiltinConstant("_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS", 0x1000);
-            core.removeBuiltinModule(T_POSIX);
-        } else {
-            core.removeBuiltinModule(T_NT);
-        }
+        core.removeBuiltinModule(T_POSIX);
     }
 
     @Builtin(name = "_getfullpathname", minNumOfPositionalArgs = 1, parameterNames = {"path"})
     @GenerateNodeFactory
     abstract static class GetfullpathnameNode extends PythonUnaryBuiltinNode {
         @Specialization
-        @TruffleBoundary
-        Object getfullpathname(Object path,
-                        @Bind("this") Node inliningTarget,
+        Object getfullpathname(VirtualFrame frame, Object path,
+                        @Bind Node inliningTarget,
                         @Cached PyOSFSPathNode fsPathNode,
                         @Cached CastToJavaStringNode castStr) {
             // TODO should call win api
+            String fspath;
             try {
-                String fspath = castStr.execute(fsPathNode.execute(null, inliningTarget, path));
-                return PythonUtils.toTruffleStringUncached(getContext().getEnv().getPublicTruffleFile(fspath).getAbsoluteFile().toString());
+                fspath = castStr.execute(fsPathNode.execute(frame, inliningTarget, path));
             } catch (CannotCastException e) {
                 return path;
             }
+            return getTruffleStringPath(fspath);
+        }
+
+        @TruffleBoundary
+        private TruffleString getTruffleStringPath(String fspath) {
+            return PythonUtils.toTruffleStringUncached(getContext().getEnv().getPublicTruffleFile(fspath).getAbsoluteFile().toString());
         }
     }
 
@@ -123,12 +124,12 @@ public final class NtModuleBuiltins extends PythonBuiltins {
         Object splitroot(PosixPath path) {
             // TODO should call WINAPI PathCchSkipRoot
 
-            PythonObjectFactory factory = PythonObjectFactory.getUncached();
+            PythonLanguage language = PythonLanguage.get(null);
             TruffleString pathString = PosixSupportLibrary.getUncached().getPathAsString(getPosixSupport(), path.value);
             int len = pathString.codePointLengthUncached(TS_ENCODING);
             int index = pathString.indexOfCodePointUncached(':', 0, len, TS_ENCODING);
             if (index <= 0) {
-                return factory.createTuple(new Object[]{T_EMPTY_STRING, pathString});
+                return PFactory.createTuple(language, new Object[]{T_EMPTY_STRING, pathString});
             } else {
                 index++;
                 int first = pathString.codePointAtIndexUncached(index, TS_ENCODING);
@@ -137,7 +138,7 @@ public final class NtModuleBuiltins extends PythonBuiltins {
                 }
                 TruffleString root = pathString.substringUncached(0, index, TS_ENCODING, false);
                 TruffleString rest = pathString.substringUncached(index, len - index, TS_ENCODING, false);
-                return factory.createTuple(new Object[]{root, rest});
+                return PFactory.createTuple(language, new Object[]{root, rest});
             }
         }
 

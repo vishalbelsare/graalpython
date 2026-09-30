@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,14 +37,44 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import sys
-import pathlib
-import os
-from . import CPyExtTestCase, CPyExtFunction, CPyExtFunctionOutVars, unhandled_error_compare, GRAALPYTHON
 import builtins
-__dir__ = __file__.rpartition("/")[0]
+import os
+import pathlib
+import sys
+import types
+import unittest
+
+from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare, CPyExtType
 
 __global_builtins_dict = builtins.__dict__
+
+FSPathUnicodeSubclass = CPyExtType(
+    "FSPathUnicodeSubclass",
+    '',
+    struct_base='PyUnicodeObject base;',
+    tp_base='&PyUnicode_Type',
+    tp_new='0',
+    tp_alloc='0',
+    tp_free='0',
+)
+
+FSPathBytesSubclass = CPyExtType(
+    "FSPathBytesSubclass",
+    '',
+    struct_base='PyBytesObject base;',
+    tp_itemsize='sizeof(char)',
+    tp_base='&PyBytes_Type',
+    tp_new='0',
+    tp_alloc='0',
+    tp_free='0',
+)
+
+class FSPathWrapper:
+    def __init__(self, value):
+        self.value = value
+
+    def __fspath__(self):
+        return self.value
 
 
 def _reference_importmodule(args):
@@ -62,11 +92,59 @@ def _reference_builtins(args):
     return type(__global_builtins_dict)
 
 
+async def _async_generator():
+    yield None
+
+
 class TestMisc(CPyExtTestCase):
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestMisc, self).compile_module(name)
+    test__PyNamespace_New = CPyExtFunction(
+        lambda args: types.SimpleNamespace() if args[0] is None else types.SimpleNamespace(**args[0]),
+        lambda: (
+            (None,),
+            ({},),
+            ({"answer": 42, "text": "hello"},),
+        ),
+        code='''#define Py_BUILD_CORE
+        #include "internal/pycore_namespace.h"
+        #undef Py_BUILD_CORE
+
+        PyObject* wrap__PyNamespace_New(PyObject* kwds) {
+            return _PyNamespace_New(kwds == Py_None ? NULL : kwds);
+        }
+        ''',
+        resultspec="N",
+        argspec="O",
+        arguments=["PyObject* kwds"],
+        callfunction="wrap__PyNamespace_New",
+    )
+
+    test_builtin_type_objects = CPyExtFunction(
+        lambda args: True,
+        lambda: (
+            (_async_generator().__anext__(), 0),
+            (iter(lambda: None, None), 1),
+            (classmethod(lambda: None), 2),
+            (dict.__dict__["fromkeys"], 3),
+            (staticmethod(lambda: None), 4),
+        ),
+        callfunction="check_builtin_type_object",
+        code='''
+        static int check_builtin_type_object(PyObject* obj, int kind) {
+            PyTypeObject* expected_types[] = {
+                &_PyAsyncGenASend_Type,
+                &PyCallIter_Type,
+                &PyClassMethod_Type,
+                &PyClassMethodDescr_Type,
+                &PyStaticMethod_Type,
+            };
+            return Py_IS_TYPE(obj, expected_types[kind]);
+        }
+        ''',
+        resultspec="i",
+        argspec="Oi",
+        arguments=["PyObject* obj", "int kind"],
+    )
 
     test_PyEllipsis_isSingleton = CPyExtFunction(
         lambda args: 1,
@@ -99,6 +177,31 @@ class TestMisc(CPyExtTestCase):
         argspec="O",
         arguments=["PyObject* ellipsis_singleton"],
     )
+
+    test_empty_tuple_user = CPyExtFunction(
+        lambda args: 1,
+        lambda: (
+            tuple(),
+        ),
+        code="""
+        static int CheckEmptyTupleUser(PyObject* ignored) {
+            PyObject *tuple_empty = PyTuple_New(0);
+            int result = tuple_empty != NULL &&
+                         PyTuple_CheckExact(tuple_empty) &&
+                         PyTuple_GET_SIZE(tuple_empty) == 0;
+            Py_XDECREF(tuple_empty);
+            return result;
+        }
+        """,
+        resultspec="i",
+        argspec="",
+        arguments=["PyObject* ignored"],
+        callfunction="CheckEmptyTupleUser",
+    )
+
+    def test_sre_bytes_empty_user(self):
+        import re
+        self.assertEqual(re.sub(b"a", b"", b"banana"), b"bnn")
 
     test_PyImport_ImportModule = CPyExtFunction(
         _reference_importmodule,
@@ -167,33 +270,14 @@ class TestMisc(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
-    test_PyTruffle_Intrinsic_Pmovmskb = CPyExtFunction(
-        lambda args: True,
+    test_PyImport_GetModule = CPyExtFunction(
+        lambda args: sys.modules.get(args[0]),
         lambda: (
-            (0xffffcafebabe, 0xefffdeadbeef),
+            ("os",),
         ),
-        code="""
-#ifndef __aarch64__
-        #include <emmintrin.h>
-#endif
-        PyObject* PyTruffle_Intrinsic_Pmovmskb(PyObject* arg0, PyObject* arg1) {
-#ifdef __aarch64__
-            return Py_True;
-#else
-            int r;
-            int64_t a = (int64_t) PyLong_AsSsize_t(arg0);
-            int64_t b = (int64_t) PyLong_AsSsize_t(arg1);
-            __m128i zero = _mm_setzero_si128();
-            __m128i v = _mm_set_epi64(_m_from_int64(b), _m_from_int64(a));
-            v = _mm_cmpeq_epi8(v, zero);
-            r = _mm_movemask_epi8(v);
-            return (r == 0 || r == 49344) ? Py_True : Py_False;
-#endif
-        }
-        """,
         resultspec="O",
-        argspec="OO",
-        arguments=["PyObject* arg0", "PyObject* arg1"],
+        argspec="O",
+        arguments=["PyObject* name"],
         cmpfunc=unhandled_error_compare
     )
 
@@ -245,11 +329,19 @@ class TestMisc(CPyExtTestCase):
         ),
         code="""
         #ifdef GRAALVM_PYTHON
-        // internal function defined in 'capi.c'
-        int PyTruffle_ToNative(void *);
+        #include <graalpy/testcapi.h>
+
+        static int call_GraalPyPrivate_ToNative(void *arg) {
+            if (GraalPyTestCAPI == NULL) {
+                if (GraalPyTestCAPI_Import() < 0) {
+                    return -1;
+                }
+            }
+            return GraalPyTestCAPI->ToNative(arg);
+        }
         #else
         // nothing to do on CPython
-        static inline int PyTruffle_ToNative(void *arg) {
+        static inline int call_GraalPyPrivate_ToNative(void *arg) {
             return 0;
         }
         #endif
@@ -262,14 +354,21 @@ class TestMisc(CPyExtTestCase):
 
             double dval = PyFloat_AsDouble(val);
 
-            if (PyTruffle_ToNative(val)) {
+            if (call_GraalPyPrivate_ToNative(val)) {
+                if (PyErr_Occurred()) {
+                    return NULL;
+                }
                 return Py_False;
             }
 
             // a fresh object with the same value
             PyObject *val1 = PyFloat_FromDouble(dval);
 
-            if (PyTruffle_ToNative(val1)) {
+            if (call_GraalPyPrivate_ToNative(val1)) {
+                if (PyErr_Occurred()) {
+                    Py_DECREF(val1);
+                    return NULL;
+                }
                 return Py_False;
             }
 
@@ -278,7 +377,7 @@ class TestMisc(CPyExtTestCase):
 
             // reset val's refcnt to X
             Py_DECREF(val);
-            
+
             return val_refcnt == Py_REFCNT(val) ? Py_True : Py_False;
         }
         """,
@@ -348,6 +447,8 @@ class TestMisc(CPyExtTestCase):
             (b"bytespath",),
             ("stringpath",),
             (pathlib.Path("pathpath"),),
+            (FSPathWrapper(FSPathUnicodeSubclass("native-stringpath")),),
+            (FSPathWrapper(FSPathBytesSubclass(b"native-bytespath")),),
             (123,),
             (object(),),
         ),
@@ -362,3 +463,77 @@ class TestMisc(CPyExtTestCase):
         arguments=["PyObject* value"],
         cmpfunc=unhandled_error_compare
     )
+
+    test_PyOS_FSPath_native_subclass = CPyExtFunction(
+        lambda args: 1,
+        lambda: (
+            (FSPathUnicodeSubclass("stringpath"),),
+            (FSPathBytesSubclass(b"bytespath"),),
+        ),
+        callfunction="call_PyOS_FSPath_native_subclass",
+        code="""
+        static int call_PyOS_FSPath_native_subclass(PyObject* value) {
+            PyObject* result = PyOS_FSPath(value);
+            if (result == NULL) {
+                return -1;
+            }
+            int same = result == value;
+            Py_DECREF(result);
+            return same;
+        }
+        """,
+        resultspec="i",
+        argspec="O",
+        arguments=["PyObject* value"],
+    )
+
+    def test_os_fspath_native_subclass(self):
+        for value in (FSPathUnicodeSubclass("stringpath"), FSPathBytesSubclass(b"bytespath")):
+            assert os.fspath(value) is value
+
+    def test_os_fspath_native_subclass_return(self):
+        for value in (FSPathUnicodeSubclass("stringpath"), FSPathBytesSubclass(b"bytespath")):
+            assert os.fspath(FSPathWrapper(value)) is value
+
+
+@unittest.skipUnless(sys.implementation.name == 'graalpy', "GraalPy-only")
+def test_graalpy_version():
+    tester = CPyExtType(
+        "VersionTester",
+        code='''
+        static PyObject* get_version_str(PyObject* unused) {
+            return PyUnicode_FromString(GRAALPY_VERSION);
+        }
+        static PyObject* get_version_num(PyObject* unused) {
+            return PyLong_FromLong(GRAALPY_VERSION_NUM);
+        }
+        ''',
+        tp_methods='''
+        {"get_version_str", (PyCFunction)get_version_str, METH_NOARGS | METH_STATIC, ""},
+        {"get_version_num", (PyCFunction)get_version_num, METH_NOARGS | METH_STATIC, ""}
+        ''',
+    )
+    version = sys.implementation.version
+    assert tester.get_version_str() == f'{version.major}.{version.minor}.{version.micro}'
+    assert tester.get_version_num() == sys.implementation.hexversion
+    # This is an anti-backport trap. The commit that changed the hexversion format should not be backported because
+    # existing projects might already contain tests for the next feature release in the old format (pybind11 does)
+    assert version.major >= 25
+
+
+def test_unicode_docstring():
+    class ClassWithDoc:
+        """This class has a doc 🙂"""
+
+    tester = CPyExtType(
+        "DocstringTester",
+        code='''
+        static PyObject* get_doc(PyObject* unused, PyObject* type) {
+            return PyUnicode_FromString(((PyTypeObject*)type)->tp_doc);
+        }
+        ''',
+        tp_methods='''
+        {"get_doc", (PyCFunction)get_doc, METH_O | METH_STATIC, ""}
+        ''',
+    )
+    assert tester.get_doc(ClassWithDoc)

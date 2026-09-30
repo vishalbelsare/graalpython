@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,7 +36,6 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
 
 def assert_raises(err, fn, *args, **kwargs):
     raised = False
@@ -543,11 +542,11 @@ def test_modify_locals():
     ll['b'] = 3
     assert 'x' in locals()
     assert 'll' in locals()
-    assert locals()['a'] == 2
-    assert locals()['b'] == 3
-    assert set(locals().keys()) == {'x', 'll', 'a', 'b'}
+    assert 'a' not in locals()
+    assert 'b' not in locals()
+    assert set(locals().keys()) == {'x', 'll'}
     y = 4
-    assert set(locals().keys()) == {'x', 'll', 'a', 'b', 'y'}
+    assert set(locals().keys()) == {'x', 'll', 'y'}
 
 
 def test_locals_function():
@@ -945,3 +944,29 @@ def test_free_var_with_nonlocals():
     c = fnc.__code__
     assert c.co_freevars == ('var',)
     assert c.co_cellvars == tuple()
+
+
+def test_name_errors():
+    def assert_raises_name_error(name, fn, *args, **kwargs):
+        try:
+            fn(*args, **kwargs)
+        except NameError as e:
+            assert str(e) == f"name '{name}' is not defined"
+            assert e.name == name
+
+    assert_raises_name_error('foo', exec, 'foo')
+    assert_raises_name_error('foo', exec, 'foo', {})
+    assert_raises_name_error('foo', exec, 'del foo')
+    assert_raises_name_error('foo', exec, 'del foo', {})
+
+    def load_global():
+        global xxx
+        xxx
+
+    assert_raises_name_error('xxx', load_global)
+
+    def delete_global():
+        global yyy
+        del yyy
+
+    assert_raises_name_error('yyy', delete_global)

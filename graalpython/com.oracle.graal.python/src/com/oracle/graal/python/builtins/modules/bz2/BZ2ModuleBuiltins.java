@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,57 +40,19 @@
  */
 package com.oracle.graal.python.builtins.modules.bz2;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.BZ2Compressor;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.BZ2Decompressor;
-
+import java.util.Collections;
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
-import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.nodes.BuiltinNames;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
-import com.oracle.truffle.api.dsl.Specialization;
 
 @CoreFunctions(defineModule = BuiltinNames.J_BZ2)
 public final class BZ2ModuleBuiltins extends PythonBuiltins {
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
-        return BZ2ModuleBuiltinsFactory.getFactories();
-    }
-
-    protected static final int INITIAL_BUFFER_SIZE = 8192;
-
-    @Override
-    public void initialize(Python3Core core) {
-        super.initialize(core);
-    }
-
-    @Builtin(name = "BZ2Compressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true, constructsClass = BZ2Compressor)
-    @GenerateNodeFactory
-    public abstract static class BZ2CompressorNode extends PythonBuiltinNode {
-        @Specialization
-        static BZ2Object.BZ2Compressor doNew(Object cls, @SuppressWarnings("unused") Object arg,
-                        @Cached PythonObjectFactory factory) {
-            // data filled in subsequent __init__ call - see BZ2CompressorBuiltins.InitNode
-            return factory.createBZ2Compressor(cls);
-        }
-    }
-
-    @Builtin(name = "BZ2Decompressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true, constructsClass = BZ2Decompressor)
-    @GenerateNodeFactory
-    public abstract static class BZ2DecompressorNode extends PythonBuiltinNode {
-        @Specialization
-        static BZ2Object.BZ2Decompressor doNew(Object cls, @SuppressWarnings("unused") Object arg,
-                        @Cached PythonObjectFactory factory) {
-            // data filled in subsequent __init__ call - see BZ2DecompressorBuiltins.InitNode
-            return factory.createBZ2Decompressor(cls);
-        }
+        return Collections.emptyList();
     }
 }

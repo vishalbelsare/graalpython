@@ -1,4 +1,4 @@
-# Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,7 +39,7 @@
 
 import sys
 
-from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare
+from . import CPyExtTestCase, CPyExtFunction, CPyExtType, unhandled_error_compare
 
 test_frame = sys._getframe(0)
 test_frame_no_back = test_frame
@@ -49,9 +49,23 @@ while test_frame_no_back.f_back:
 
 class TestMisc(CPyExtTestCase):
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super().compile_module(name)
+    def test_PyFrame_GetLocals_proxy(self):
+        Tester = CPyExtType(
+            "GetFrameLocalsTester",
+            code="""
+            static PyObject* get_locals(PyObject* unused, PyObject* frame) {
+                return PyFrame_GetLocals((PyFrameObject*)frame);
+            }
+            """,
+            tp_methods='{"get_locals", (PyCFunction)get_locals, METH_O | METH_STATIC, NULL}',
+        )
+
+        value = 1
+        frame = sys._getframe()
+        locals_proxy = Tester.get_locals(frame)
+        assert type(locals_proxy) is type(frame.f_locals)
+        locals_proxy["value"] = 2
+        assert value == 2
 
     test_PyFrame_GetCode = CPyExtFunction(
         lambda args: args[0].f_code,

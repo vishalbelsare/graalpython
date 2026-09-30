@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,37 +40,38 @@
  */
 package com.oracle.graal.python.nodes.object;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageCopy;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
+import com.oracle.graal.python.nodes.HiddenAttr;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
 
 @GenerateUncached
-@SuppressWarnings("truffle-inlining")       // footprint reduction 36 -> 17
+@GenerateInline(false)       // footprint reduction 36 -> 17
 public abstract class DeleteDictNode extends PNodeWithContext {
     public abstract void execute(PythonObject object);
 
     @Specialization
     static void doPythonObject(PythonObject object,
-                    @CachedLibrary(limit = "4") DynamicObjectLibrary dylib,
-                    @Bind("this") Node inliningTarget,
-                    @Cached HashingStorageCopy copyNode,
-                    @Cached PythonObjectFactory factory) {
+                    @Bind Node inliningTarget,
+                    @Cached HiddenAttr.ReadNode readHiddenAttrNode,
+                    @Cached HiddenAttr.WriteNode writeHiddenAttrNode,
+                    @Cached HashingStorageCopy copyNode) {
         /* There is no special handling for class MROs because type.__dict__ cannot be deleted. */
         assert !PGuards.isPythonClass(object);
-        PDict oldDict = (PDict) dylib.getOrDefault(object, PythonObject.DICT, null);
+        PDict oldDict = (PDict) readHiddenAttrNode.execute(inliningTarget, object, HiddenAttr.DICT, null);
         if (oldDict != null) {
             HashingStorage storage = oldDict.getDictStorage();
             if (storage instanceof DynamicObjectStorage && ((DynamicObjectStorage) storage).getStore() == object) {
@@ -86,8 +87,8 @@ public abstract class DeleteDictNode extends PNodeWithContext {
          * empty dict dissociated from this object seems like the cleanest option. The disadvantage
          * is that the current values won't get garbage collected.
          */
-        PDict newDict = factory.createDict();
-        object.setDict(dylib, newDict);
+        PDict newDict = PFactory.createDict(PythonLanguage.get(inliningTarget));
+        object.setDict(inliningTarget, writeHiddenAttrNode, newDict);
     }
 
     @NeverDefault

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,37 +40,54 @@
  */
 package com.oracle.graal.python.builtins.objects.itertools;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.nodes.ErrorMessages.ARG_CANNOT_BE_NEGATIVE;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___SETSTATE__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedSetStateBuiltin;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.list.PList;
+import com.oracle.graal.python.builtins.objects.iterator.IteratorNodes;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.lib.PyLongAsIntNode;
-import com.oracle.graal.python.lib.PyObjectGetItem;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.PyNumberAsSizeNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.nodes.util.CannotCastException;
+import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
@@ -79,12 +96,108 @@ import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PProduct})
 public final class ProductBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = ProductBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ProductBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "product", minNumOfPositionalArgs = 1, takesVarArgs = true, keywordOnlyNames = {"repeat"})
+    @GenerateNodeFactory
+    public abstract static class ProductNode extends PythonBuiltinNode {
+
+        @Specialization(guards = {"isTypeNode.execute(inliningTarget, cls)", "isNoValue(repeat)"})
+        static Object constructNoneRepeat(VirtualFrame frame, Object cls, Object[] iterables, @SuppressWarnings("unused") PNone repeat,
+                        @SuppressWarnings("unused") @Bind Node inliningTarget,
+                        @Cached.Shared @Cached IteratorNodes.ToArrayNode toArrayNode,
+                        @SuppressWarnings("unused") @Cached.Shared("typeNode") @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached.Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            PProduct self = PFactory.createProduct(cls, getInstanceShape.execute(cls));
+            constructOneRepeat(frame, self, iterables, toArrayNode);
+            return self;
+        }
+
+        @Specialization(guards = {"isTypeNode.execute(inliningTarget, cls)", "!isNoValue(repeat)"}, limit = "1")
+        static Object constructRepeat(VirtualFrame frame, Object cls, Object[] iterables, Object repeat,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PyNumberAsSizeNode asSizeNode,
+                        @Cached.Shared @Cached IteratorNodes.ToArrayNode toArrayNode,
+                        @Cached InlinedBranchProfile errorProfile,
+                        @Cached InlinedBranchProfile zeroProfile,
+                        @Cached InlinedBranchProfile oneProfile,
+                        @Cached InlinedBranchProfile genericProfile,
+                        @Cached InlinedLoopConditionProfile loopProfile,
+                        @SuppressWarnings("unused") @Exclusive @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached.Shared @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            int repeatInt = asSizeNode.executeExact(frame, inliningTarget, repeat);
+            if (repeatInt < 0) {
+                errorProfile.enter(inliningTarget);
+                throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ARG_CANNOT_BE_NEGATIVE, "repeat");
+            }
+            PProduct self = PFactory.createProduct(cls, getInstanceShape.execute(cls));
+            if (repeatInt == 0) {
+                zeroProfile.enter(inliningTarget);
+                self.setGears(new Object[0][]);
+                self.setIndices(new int[0]);
+                self.setLst(null);
+                self.setStopped(false);
+            } else if (repeatInt == 1) {
+                oneProfile.enter(inliningTarget);
+                constructOneRepeat(frame, self, iterables, toArrayNode);
+            } else {
+                genericProfile.enter(inliningTarget);
+                Object[][] lists = unpackIterables(frame, iterables, toArrayNode);
+                Object[][] gears = new Object[lists.length * repeatInt][];
+                loopProfile.profileCounted(inliningTarget, repeatInt);
+                LoopNode.reportLoopCount(inliningTarget, repeatInt);
+                for (int i = 0; loopProfile.inject(inliningTarget, i < repeatInt); i++) {
+                    PythonUtils.arraycopy(lists, 0, gears, i * lists.length, lists.length);
+                }
+                construct(self, gears);
+            }
+            return self;
+        }
+
+        private static void constructOneRepeat(VirtualFrame frame, PProduct self, Object[] iterables, IteratorNodes.ToArrayNode toArrayNode) {
+            Object[][] gears = unpackIterables(frame, iterables, toArrayNode);
+            construct(self, gears);
+        }
+
+        private static void construct(PProduct self, Object[][] gears) {
+            self.setGears(gears);
+            for (int i = 0; i < gears.length; i++) {
+                if (gears[i].length == 0) {
+                    self.setIndices(null);
+                    self.setLst(null);
+                    self.setStopped(true);
+                    return;
+                }
+            }
+            self.setIndices(new int[gears.length]);
+            self.setLst(null);
+            self.setStopped(false);
+        }
+
+        private static Object[][] unpackIterables(VirtualFrame frame, Object[] iterables, IteratorNodes.ToArrayNode toArrayNode) {
+            Object[][] lists = new Object[iterables.length][];
+            for (int i = 0; i < lists.length; i++) {
+                lists[i] = toArrayNode.execute(frame, iterables[i]);
+            }
+            return lists;
+        }
+
+        @Specialization(guards = "!isTypeNode.execute(inliningTarget, cls)")
+        @SuppressWarnings("unused")
+        static Object construct(Object cls, Object iterables, Object repeat,
+                        @Bind Node inliningTarget,
+                        @Cached.Shared("typeNode") @Cached TypeNodes.IsTypeNode isTypeNode) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -93,34 +206,33 @@ public final class ProductBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
 
         @Specialization(guards = {"!self.isStopped()", "!hasLst(self)"})
         static Object next(PProduct self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached InlinedLoopConditionProfile loopProfile,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object[] lst = new Object[self.getGears().length];
             loopProfile.profileCounted(inliningTarget, lst.length);
             for (int i = 0; loopProfile.inject(inliningTarget, i < lst.length); i++) {
                 lst[i] = self.getGears()[i][0];
             }
             self.setLst(lst);
-            return factory.createTuple(lst);
+            return PFactory.createTuple(language, lst);
         }
 
         @Specialization(guards = {"!self.isStopped()", "hasLst(self)"})
         static Object next(PProduct self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedConditionProfile gearsProfile,
                         @Cached InlinedConditionProfile indexProfile,
                         @Cached InlinedBranchProfile wasStoppedProfile,
                         @Exclusive @Cached InlinedLoopConditionProfile loopProfile,
                         @Cached InlinedBranchProfile doneProfile,
-                        @Shared @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind PythonLanguage language) {
             Object[][] gears = self.getGears();
             int x = gears.length - 1;
             if (gearsProfile.profile(inliningTarget, x >= 0)) {
@@ -140,20 +252,18 @@ public final class ProductBuiltins extends PythonBuiltins {
 
             if (self.isStopped()) {
                 wasStoppedProfile.enter(inliningTarget);
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
 
             // the existing lst array can be changed in a following next call
             Object[] ret = new Object[self.getLst().length];
             PythonUtils.arraycopy(self.getLst(), 0, ret, 0, ret.length);
-            return factory.createTuple(ret);
+            return PFactory.createTuple(language, ret);
         }
 
-        @SuppressWarnings("unused")
         @Specialization(guards = "self.isStopped()")
-        static Object nextStopped(PProduct self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raiseStopIteration();
+        static Object nextStopped(@SuppressWarnings("unused") PProduct self) {
+            throw iteratorExhausted();
         }
 
         private static void rotatePreviousGear(Node inliningTarget, PProduct self, InlinedLoopConditionProfile loopProfile, InlinedBranchProfile doneProfile) {
@@ -190,68 +300,65 @@ public final class ProductBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
 
         @Specialization
-        static Object reduce(PProduct self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile stoppedProfile,
-                        @Cached InlinedConditionProfile noLstProfile,
-                        @Cached GetClassNode getClassNode,
-                        @Cached PythonObjectFactory factory) {
-            Object type = getClassNode.execute(inliningTarget, self);
-            if (stoppedProfile.profile(inliningTarget, self.isStopped())) {
-                PTuple empty = factory.createEmptyTuple();
-                return factory.createTuple(new Object[]{type, factory.createTuple(new Object[]{empty})});
+        static Object reduce(PProduct self) {
+            PythonLanguage language = PythonLanguage.get(null);
+            Object type = GetClassNode.executeUncached(self);
+            if (self.isStopped()) {
+                PTuple empty = PFactory.createEmptyTuple(language);
+                return PFactory.createTuple(language, new Object[]{type, PFactory.createTuple(language, new Object[]{empty})});
             }
-            PTuple gearTuples = createGearTuple(self, factory);
-            if (noLstProfile.profile(inliningTarget, self.getLst() == null)) {
-                return factory.createTuple(new Object[]{type, gearTuples});
+            PTuple gearTuples = createGearTuple(self, language);
+            if (self.getLst() == null) {
+                return PFactory.createTuple(language, new Object[]{type, gearTuples});
             }
-            PTuple indicesTuple = factory.createTuple(PythonUtils.arrayCopyOf(self.getIndices(), self.getIndices().length));
-            return factory.createTuple(new Object[]{type, gearTuples, indicesTuple});
+            PTuple indicesTuple = PFactory.createTuple(language, PythonUtils.arrayCopyOf(self.getIndices(), self.getIndices().length));
+            return PFactory.createTuple(language, new Object[]{type, gearTuples, indicesTuple});
         }
 
-        private static PTuple createGearTuple(PProduct self, PythonObjectFactory factory) {
-            PList[] lists = new PList[self.getGears().length];
-            for (int i = 0; i < lists.length; i++) {
-                lists[i] = factory.createList(self.getGears()[i]);
+        private static PTuple createGearTuple(PProduct self, PythonLanguage language) {
+            PTuple[] tuples = new PTuple[self.getGears().length];
+            for (int i = 0; i < tuples.length; i++) {
+                tuples[i] = PFactory.createTuple(language, self.getGears()[i]);
             }
-            return factory.createTuple(lists);
+            return PFactory.createTuple(language, tuples);
         }
     }
 
     @Builtin(name = J___SETSTATE__, minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    public abstract static class SetStateNode extends PythonBinaryBuiltinNode {
+    public abstract static class SetStateNode extends DeprecatedSetStateBuiltin {
         @Specialization
-        static Object setState(VirtualFrame frame, PProduct self, Object state,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PyObjectGetItem getItemNode,
-                        @Cached InlinedLoopConditionProfile loopProfile,
-                        @Cached PyLongAsIntNode pyLongAsIntNode,
-                        @Cached InlinedBranchProfile stoppedProfile,
-                        @Cached InlinedConditionProfile indexProfile) {
+        @TruffleBoundary
+        static Object setState(PProduct self, Object state,
+                        @Bind Node inliningTarget) {
             Object[][] gears = self.getGears();
+            if (!PyTupleCheckNode.executeUncached(state) || PyTupleSizeNode.executeUncached(state) != gears.length) {
+                throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.INVALID_ARGS, T___SETSTATE__);
+            }
             Object[] lst = new Object[gears.length];
             int[] indices = self.getIndices();
-            loopProfile.profileCounted(inliningTarget, gears.length);
-            for (int i = 0; loopProfile.inject(inliningTarget, i < gears.length); i++) {
-                Object o = getItemNode.execute(frame, inliningTarget, state, i);
-                int index = pyLongAsIntNode.execute(frame, inliningTarget, o);
-                int gearSize = gears[i].length;
-                if (indices == null || gearSize == 0) {
-                    stoppedProfile.enter(inliningTarget);
-                    self.setStopped(true);
-                    return PNone.NONE;
+            try {
+                for (int i = 0; i < gears.length; i++) {
+                    Object o = PyTupleGetItem.executeUncached(state, i);
+                    int index = CastToJavaIntExactNode.executeUncached(o);
+                    int gearSize = gears[i].length;
+                    if (indices == null || gearSize == 0) {
+                        self.setStopped(true);
+                        return PNone.NONE;
+                    }
+                    if (index < 0) {
+                        index = 0;
+                    } else if (index > gearSize - 1) {
+                        index = gearSize - 1;
+                    }
+                    indices[i] = index;
+                    lst[i] = gears[i][index];
                 }
-                if (indexProfile.profile(inliningTarget, index < 0)) {
-                    index = 0;
-                } else if (index > gearSize - 1) {
-                    index = gearSize - 1;
-                }
-                indices[i] = index;
-                lst[i] = gears[i][index];
+            } catch (CannotCastException e) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.INTEGER_REQUIRED);
             }
             self.setLst(lst);
             return PNone.NONE;

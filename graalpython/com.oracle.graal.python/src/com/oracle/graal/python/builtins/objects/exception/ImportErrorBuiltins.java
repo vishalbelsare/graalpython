@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,18 +40,19 @@
  */
 package com.oracle.graal.python.builtins.objects.exception;
 
-import static com.oracle.graal.python.nodes.ErrorMessages.S_IS_AN_INVALID_ARG_FOR_S;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
+import static com.oracle.graal.python.nodes.ErrorMessages.GOT_UNEXPECTED_KEYWORD_ARG;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_NAME;
 import static com.oracle.graal.python.nodes.StringLiterals.T_PATH;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -62,16 +63,16 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageSetItem;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.lib.PyUnicodeCheckExactNode;
+import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
-import com.oracle.graal.python.nodes.util.SplitArgsNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -84,6 +85,8 @@ import com.oracle.truffle.api.strings.TruffleString;
 @CoreFunctions(extendClasses = PythonBuiltinClassType.ImportError)
 public final class ImportErrorBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = ImportErrorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return ImportErrorBuiltinsFactory.getFactories();
@@ -94,7 +97,7 @@ public final class ImportErrorBuiltins extends PythonBuiltins {
     protected static final int IDX_PATH = 2;
     public static final int IMPORT_ERR_NUM_ATTRS = IDX_PATH + 1;
 
-    public static final BaseExceptionAttrNode.StorageFactory IMPORT_ERROR_ATTR_FACTORY = (args, factory) -> {
+    public static final BaseExceptionAttrNode.StorageFactory IMPORT_ERROR_ATTR_FACTORY = (args) -> {
         Object[] attrs = new Object[IMPORT_ERR_NUM_ATTRS];
         if (args.length == 1) {
             attrs[IDX_MSG] = args[0];
@@ -108,43 +111,26 @@ public final class ImportErrorBuiltins extends PythonBuiltins {
      * 'takesVarArgs = true' and ' takesVarKeywordArgs = true' because otherwise the created root
      * node would fail.
      */
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, //
-                    takesVarArgs = true, varArgsMarker = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     public abstract static class ImportErrorInitNode extends PythonVarargsBuiltinNode {
-        private static final TruffleString NAME = tsLiteral("name");
-        private static final TruffleString PATH = tsLiteral("path");
-
-        @Child private SplitArgsNode splitArgsNode;
-
-        @Override
-        public Object varArgExecute(VirtualFrame frame, Object self, Object[] arguments, PKeyword[] keywords) throws VarargsBuiltinDirectInvocationNotSupported {
-            if (arguments.length == 0) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                throw VarargsBuiltinDirectInvocationNotSupported.INSTANCE;
-            }
-            if (splitArgsNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                splitArgsNode = insert(SplitArgsNode.create());
-            }
-            Object[] argsWithoutSelf = splitArgsNode.executeCached(arguments);
-            return execute(frame, arguments[0], argsWithoutSelf, keywords);
-        }
-
         @Specialization
-        Object init(PBaseException self, Object[] args, PKeyword[] kwargs,
+        static Object init(PBaseException self, Object[] args, PKeyword[] kwargs,
+                        @Bind Node inliningTarget,
                         @Cached BaseExceptionBuiltins.BaseExceptionInitNode baseExceptionInitNode,
-                        @Cached TruffleString.EqualNode equalNode) {
+                        @Cached TruffleString.EqualNode equalNode,
+                        @Cached PRaiseNode raiseNode) {
             baseExceptionInitNode.execute(self, args);
-            Object[] attrs = IMPORT_ERROR_ATTR_FACTORY.create(args, null);
+            Object[] attrs = IMPORT_ERROR_ATTR_FACTORY.create(args);
             for (PKeyword kw : kwargs) {
                 TruffleString kwName = kw.getName();
-                if (equalNode.execute(kwName, NAME, TS_ENCODING)) {
+                if (equalNode.execute(kwName, T_NAME, TS_ENCODING)) {
                     attrs[IDX_NAME] = kw.getValue();
-                } else if (equalNode.execute(kwName, PATH, TS_ENCODING)) {
+                } else if (equalNode.execute(kwName, T_PATH, TS_ENCODING)) {
                     attrs[IDX_PATH] = kw.getValue();
                 } else {
-                    throw raise(PythonBuiltinClassType.TypeError, S_IS_AN_INVALID_ARG_FOR_S, kw.getName(), "ImportError");
+                    throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, GOT_UNEXPECTED_KEYWORD_ARG, "ImportError", kw.getName());
                 }
             }
             self.setExceptionAttributes(attrs);
@@ -186,7 +172,7 @@ public final class ImportErrorBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class ImportErrorReduceNode extends PythonUnaryBuiltinNode {
         private static Object getState(Node inliningTarget, PBaseException self, GetDictIfExistsNode getDictIfExistsNode, HashingStorageSetItem setHashingStorageItem,
-                        HashingStorageCopy copyStorageNode, BaseExceptionAttrNode attrNode, PythonObjectFactory factory) {
+                        HashingStorageCopy copyStorageNode, BaseExceptionAttrNode attrNode, PythonLanguage language) {
             PDict dict = getDictIfExistsNode.execute(self);
             final Object name = attrNode.get(self, IDX_NAME, IMPORT_ERROR_ATTR_FACTORY);
             final Object path = attrNode.get(self, IDX_PATH, IMPORT_ERROR_ATTR_FACTORY);
@@ -198,7 +184,7 @@ public final class ImportErrorBuiltins extends PythonBuiltins {
                 if (path != null) {
                     storage = setHashingStorageItem.execute(inliningTarget, storage, T_PATH, path);
                 }
-                return factory.createDict(storage);
+                return PFactory.createDict(language, storage);
             } else if (dict != null) {
                 return dict;
             } else {
@@ -208,30 +194,30 @@ public final class ImportErrorBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object reduce(PBaseException self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached BaseExceptionAttrNode attrNode,
                         @Cached GetClassNode getClassNode,
                         @Cached GetDictIfExistsNode getDictIfExistsNode,
                         @Cached ExceptionNodes.GetArgsNode getArgsNode,
                         @Cached HashingStorageSetItem setHashingStorageItem,
                         @Cached HashingStorageCopy copyStorageNode,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             Object clazz = getClassNode.execute(inliningTarget, self);
             Object args = getArgsNode.execute(inliningTarget, self);
-            Object state = getState(inliningTarget, self, getDictIfExistsNode, setHashingStorageItem, copyStorageNode, attrNode, factory);
+            Object state = getState(inliningTarget, self, getDictIfExistsNode, setHashingStorageItem, copyStorageNode, attrNode, language);
             if (state == PNone.NONE) {
-                return factory.createTuple(new Object[]{clazz, args});
+                return PFactory.createTuple(language, new Object[]{clazz, args});
             }
-            return factory.createTuple(new Object[]{clazz, args, state});
+            return PFactory.createTuple(language, new Object[]{clazz, args, state});
         }
     }
 
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ImportErrorStrNode extends PythonUnaryBuiltinNode {
         @Specialization
         Object str(VirtualFrame frame, PBaseException self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached BaseExceptionAttrNode attrNode,
                         @Cached BaseExceptionBuiltins.StrNode exStrNode,
                         @Cached PyUnicodeCheckExactNode unicodeCheckExactNode) {

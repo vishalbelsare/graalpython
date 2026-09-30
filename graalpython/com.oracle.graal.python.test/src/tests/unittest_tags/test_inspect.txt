@@ -1,243 +1,311 @@
-*graalpython.lib-python.3.test.test_inspect.TestBlockComments.test_class_async_method
-*graalpython.lib-python.3.test.test_inspect.TestBlockComments.test_class_method
-*graalpython.lib-python.3.test.test_inspect.TestBlockComments.test_toplevel_class
-*graalpython.lib-python.3.test.test_inspect.TestBoundArguments.test_signature_bound_arguments_apply_defaults
-*graalpython.lib-python.3.test.test_inspect.TestBoundArguments.test_signature_bound_arguments_arguments_type
-*graalpython.lib-python.3.test.test_inspect.TestBoundArguments.test_signature_bound_arguments_equality
-*graalpython.lib-python.3.test.test_inspect.TestBoundArguments.test_signature_bound_arguments_pickle
-*graalpython.lib-python.3.test.test_inspect.TestBoundArguments.test_signature_bound_arguments_repr
-*graalpython.lib-python.3.test.test_inspect.TestBoundArguments.test_signature_bound_arguments_unhashable
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_class_decorator
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_class_definition_in_multiline_comment
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_class_definition_in_multiline_string_definition
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_class_inside_conditional
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_findsource_binary
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_findsource_code_in_linecache
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_findsource_with_out_of_bounds_lineno
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_findsource_without_filename
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_getsource_on_method
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_method_in_dynamic_class
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_multiline_sig
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_multiple_children_classes
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_nested_class
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_nested_class_definition
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_nested_class_definition_indented_string
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_nested_class_definition_inside_async_function
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_nested_class_definition_inside_function
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_nested_func
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_one_liner_dedent_non_name
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_one_liner_followed_by_non_name
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_with_comment
-*graalpython.lib-python.3.test.test_inspect.TestBuggyCases.test_with_comment_instead_of_docstring
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_argspec_api_ignores_wrapped
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_DynamicClassAttribute
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_VirtualAttribute
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_VirtualAttribute_multi_classes
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_builtin_types
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_class_attrs_with_buggy_dir
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_metaclass_class_attribute
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_newstyle
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_classify_overrides_bool
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_get_annotations_with_stock_annotations
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_get_annotations_with_stringized_annotations
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getargspec
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getargspec_method
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getfullargspec
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getfullargspec_builtin_func
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getfullargspec_builtin_func_no_signature
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getfullargspec_definition_order_preserved_on_kwonly
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getfullargspec_signature_annos
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getfullargspec_signature_attr
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getmembers_VirtualAttribute
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getmembers_descriptors
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getmembers_method
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_getmembers_with_buggy_dir
-*graalpython.lib-python.3.test.test_inspect.TestClassesAndFunctions.test_newstyle_mro
-*graalpython.lib-python.3.test.test_inspect.TestDecorators.test_replacing_decorator
-*graalpython.lib-python.3.test.test_inspect.TestFormatAnnotation.test_typing_replacement
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_builtins_as_dict
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_builtins_as_module
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_builtins_fallback
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_generator_closure
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_getclosurevars_empty
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_getclosurevars_error
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_method_closure
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_name_resolution
-*graalpython.lib-python.3.test.test_inspect.TestGetClosureVars.test_nonlocal_vars
-*graalpython.lib-python.3.test.test_inspect.TestGetCoroutineState.test_closed_after_exhaustion
-*graalpython.lib-python.3.test.test_inspect.TestGetCoroutineState.test_closed_after_immediate_exception
-*graalpython.lib-python.3.test.test_inspect.TestGetCoroutineState.test_created
-*graalpython.lib-python.3.test.test_inspect.TestGetCoroutineState.test_easy_debugging
-*graalpython.lib-python.3.test.test_inspect.TestGetCoroutineState.test_getcoroutinelocals
-*graalpython.lib-python.3.test.test_inspect.TestGetCoroutineState.test_suspended
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_closed_after_exhaustion
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_closed_after_immediate_exception
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_created
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_easy_debugging
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_getgeneratorlocals
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_getgeneratorlocals_empty
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_getgeneratorlocals_error
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_running
-*graalpython.lib-python.3.test.test_inspect.TestGetGeneratorState.test_suspended
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_basic
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_classAttribute
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_classVirtualAttribute
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_class_as_property
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_custom_object_dict
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_descriptor
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_descriptor_raises_AttributeError
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_dict_as_property
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_inherited
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_inherited_classattribute
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_inherited_slots
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_instance_attr
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_metaclass
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_metaclass_dict_as_property
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_metaclass_with_descriptor
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_metaclass_with_metaclass_with_dict_as_property
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_module
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_mro_as_property
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_no_dict_no_slots
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_no_dict_no_slots_instance_member
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_property
-*graalpython.lib-python.3.test.test_inspect.TestGetattrStatic.test_slots
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsFunctions.test_keyword_only
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsFunctions.test_multiple_features
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsFunctions.test_plain
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsFunctions.test_varargs
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsFunctions.test_varkw
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsFunctions.test_varkw_only
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsMethods.test_keyword_only
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsMethods.test_multiple_features
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsMethods.test_plain
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsMethods.test_varargs
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsMethods.test_varkw
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsMethods.test_varkw_only
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsUnboundMethods.test_keyword_only
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsUnboundMethods.test_multiple_features
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsUnboundMethods.test_plain
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsUnboundMethods.test_varargs
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsUnboundMethods.test_varkw
-*graalpython.lib-python.3.test.test_inspect.TestGetcallargsUnboundMethods.test_varkw_only
-*graalpython.lib-python.3.test.test_inspect.TestGetsourceInteractive.test_getclasses_interactive
-*graalpython.lib-python.3.test.test_inspect.TestGettingSourceOfToplevelFrames.test_range_toplevel_frame
-*graalpython.lib-python.3.test.test_inspect.TestGettingSourceOfToplevelFrames.test_range_traceback_toplevel_frame
-*graalpython.lib-python.3.test.test_inspect.TestInterpreterStack.test_abuse_done
-*graalpython.lib-python.3.test.test_inspect.TestInterpreterStack.test_frame
-*graalpython.lib-python.3.test.test_inspect.TestInterpreterStack.test_previous_frame
-*graalpython.lib-python.3.test.test_inspect.TestInterpreterStack.test_stack
-*graalpython.lib-python.3.test.test_inspect.TestInterpreterStack.test_trace
-*graalpython.lib-python.3.test.test_inspect.TestIsDataDescriptor.test_custom_descriptors
-*graalpython.lib-python.3.test.test_inspect.TestIsDataDescriptor.test_functions
-*graalpython.lib-python.3.test.test_inspect.TestIsDataDescriptor.test_property
-*graalpython.lib-python.3.test.test_inspect.TestIsDataDescriptor.test_slot
-*graalpython.lib-python.3.test.test_inspect.TestMain.test_builtins
-*graalpython.lib-python.3.test.test_inspect.TestMain.test_custom_getattr
-*graalpython.lib-python.3.test.test_inspect.TestMain.test_only_source
-*graalpython.lib-python.3.test.test_inspect.TestMain.test_qualname_source
-*graalpython.lib-python.3.test.test_inspect.TestNoEOL.test_class
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_anonymous
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_lambda_in_list
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_manyargs
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_oneline_lambda
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_onelinefunc
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_threeline_lambda
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_twoline_indented_lambda
-*graalpython.lib-python.3.test.test_inspect.TestOneliners.test_twolinefunc
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_equality
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_hashable
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_immutability
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_implicit
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_kinds
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_object
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_positional_only
-*graalpython.lib-python.3.test.test_inspect.TestParameterObject.test_signature_parameter_replace
-*graalpython.lib-python.3.test.test_inspect.TestPredicates.test_get_slot_members
-*graalpython.lib-python.3.test.test_inspect.TestPredicates.test_isabstract
-*graalpython.lib-python.3.test.test_inspect.TestPredicates.test_isabstract_during_init_subclass
-*graalpython.lib-python.3.test.test_inspect.TestPredicates.test_isclass
-*graalpython.lib-python.3.test.test_inspect.TestPredicates.test_isroutine
-*graalpython.lib-python.3.test.test_inspect.TestReload.test_getsource_reload
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_cleandoc
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_finddoc
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getclasses
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getcomments
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getdoc_inherited
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getfile
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getfile_broken_repr
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getfile_builtin_class
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getfile_builtin_function_or_method
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getfile_builtin_module
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getframeinfo_get_first_line
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getfunctions
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getmodule
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getmodule_file_not_found
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getmodule_recursion
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getsource
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getsource_on_code_object
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_getsourcefile
-*graalpython.lib-python.3.test.test_inspect.TestRetrievingSourceCode.test_proceed_with_fake_filename
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_args_and_kwargs
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_args_and_varargs
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_arguments
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_empty
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_implicit_arg
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_just_args
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_just_kwargs
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_kwonly
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_positional_only
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_posonly_kwargs
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_var
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_vararg_name
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_varargs_order
-*graalpython.lib-python.3.test.test_inspect.TestSignatureBind.test_signature_bind_with_self_arg
-*graalpython.lib-python.3.test.test_inspect.TestSignatureDefinitions.test_builtins_have_signatures
-*graalpython.lib-python.3.test.test_inspect.TestSignatureDefinitions.test_python_function_override_signature
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signater_parameters_is_ordered
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_annotations_with_local_namespaces
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_definition_order_preserved_on_kwonly
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_equality
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_eval_str
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_from_callable_class
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_from_callable_python_obj
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_from_functionlike_object
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_functionlike_class
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_hashable
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_immutability
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_none_annotation
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_object
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_object_pickle
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_builtins
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_builtins_no_signature
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_callable_objects
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_class
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_classmethod
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_complex_args
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_decorated
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_decorated_builtins
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_fake_partialmethod
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_generic_subclass
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_lambdas
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_mangled_parameters
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_method
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_noarg
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_non_function
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_partial
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_partialmethod
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_staticmethod
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_subclass
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_wargs
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_on_wkwonly
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_replace_anno
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_str
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_str_positional_only
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_without_self
-*graalpython.lib-python.3.test.test_inspect.TestSignatureObject.test_signature_wrapped_bound_method
-*graalpython.lib-python.3.test.test_inspect.TestSignaturePrivateHelpers.test_signature_get_bound_param
-*graalpython.lib-python.3.test.test_inspect.TestSignaturePrivateHelpers.test_signature_strip_non_python_syntax
-*graalpython.lib-python.3.test.test_inspect.TestUnwrap.test_cycle
-*graalpython.lib-python.3.test.test_inspect.TestUnwrap.test_recursion_limit
-*graalpython.lib-python.3.test.test_inspect.TestUnwrap.test_stop
-*graalpython.lib-python.3.test.test_inspect.TestUnwrap.test_unhashable
-*graalpython.lib-python.3.test.test_inspect.TestUnwrap.test_unwrap_one
-*graalpython.lib-python.3.test.test_inspect.TestUnwrap.test_unwrap_several
+test.test_inspect.test_inspect.IsTestBase.test__all__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBlockComments.test_class_async_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBlockComments.test_class_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBlockComments.test_toplevel_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBoundArguments.test_signature_bound_arguments_apply_defaults @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBoundArguments.test_signature_bound_arguments_arguments_type @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBoundArguments.test_signature_bound_arguments_equality @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBoundArguments.test_signature_bound_arguments_pickle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBoundArguments.test_signature_bound_arguments_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBoundArguments.test_signature_bound_arguments_unhashable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_class_decorator @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_class_definition_in_multiline_comment @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_class_definition_in_multiline_string_definition @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_class_definition_same_name_diff_methods @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_class_inside_conditional @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_class_with_method_from_other_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_comment_or_empty_line_after_decorator @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_findsource_code_in_linecache @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_findsource_on_class_with_out_of_bounds_lineno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_findsource_on_func_with_out_of_bounds_lineno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_findsource_without_filename @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_generator_expression @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_getsource_on_class_code_object @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_getsource_on_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_method_in_dynamic_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_multiline_sig @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_multiple_children_classes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_nested_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_nested_class_definition @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_nested_class_definition_indented_string @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_nested_class_definition_inside_async_function @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_nested_class_definition_inside_function @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_nested_func @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_one_liner_dedent_non_name @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_one_liner_followed_by_non_name @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_with_comment @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestBuggyCases.test_with_comment_instead_of_docstring @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_argspec_api_ignores_wrapped @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_DynamicClassAttribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_VirtualAttribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_VirtualAttribute_multi_classes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_builtin_types @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_class_attrs_with_buggy_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_metaclass_class_attribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_newstyle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_classify_overrides_bool @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_get_annotations_with_stock_annotations @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_get_annotations_with_stringized_annotations @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getfullargspec @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getfullargspec_definition_order_preserved_on_kwonly @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getfullargspec_signature_annos @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getfullargspec_signature_attr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_VirtualAttribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_custom_broken_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_custom_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_custom_duplicated_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_descriptors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_static @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_getmembers_with_buggy_dir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_newstyle_mro @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep695_generic_class_with_future_annotations @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep695_generic_class_with_future_annotations_and_local_shadowing @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep695_generic_class_with_future_annotations_name_clash_with_global_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep_695_generic_function_with_future_annotations @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep_695_generic_function_with_future_annotations_name_clash_with_global_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep_695_generic_method_with_future_annotations @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep_695_generic_method_with_future_annotations_name_clash_with_global_and_local_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep_695_generic_method_with_future_annotations_name_clash_with_global_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestClassesAndFunctions.test_pep_695_generics_with_future_annotations_nested_in_function @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestComplexDecorator.test_parens_in_decorator @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestDecorators.test_decorator_with_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestDecorators.test_getsource_unwrap @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestDecorators.test_replacing_decorator @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestDecorators.test_wrapped_decorator @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestFormatAnnotation.test_formatannotationrelativeto @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestFormatAnnotation.test_typing_replacement @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetAsyncGenState.test_easy_debugging @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetAsyncGenState.test_getasyncgenlocals @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetAsyncGenState.test_getasyncgenlocals_empty @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetAsyncGenState.test_getasyncgenlocals_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_builtins_as_dict @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_builtins_as_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_builtins_fallback @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_generator_closure @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_getclosurevars_empty @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_getclosurevars_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_method_closure @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_name_resolution @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetClosureVars.test_nonlocal_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_closed_after_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_closed_after_exhaustion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_closed_after_immediate_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_created @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_easy_debugging @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_getcoroutinelocals @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetCoroutineState.test_suspended @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_closed_after_close @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_closed_after_exhaustion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_closed_after_immediate_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_created @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_easy_debugging @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_getgeneratorlocals @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_getgeneratorlocals_empty @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_getgeneratorlocals_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_running @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_suspended @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetGeneratorState.test_types_coroutine_wrapper_state @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_basic @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_classAttribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_classVirtualAttribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_class_as_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_custom___getattr__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_custom___getattribute__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_custom_object_dict @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_descriptor @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_descriptor_raises_AttributeError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_dict_as_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_inherited @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_inherited_classattribute @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_inherited_slots @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_instance_attr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_metaclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_metaclass_dict_as_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_metaclass_with_descriptor @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_metaclass_with_metaclass_with_dict_as_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_mro_as_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_mutated_mro @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_no_dict_no_slots @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_no_dict_no_slots_instance_member @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetattrStatic.test_slots @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsFunctions.test_keyword_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsFunctions.test_multiple_features @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsFunctions.test_plain @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsFunctions.test_varargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsFunctions.test_varkw @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsFunctions.test_varkw_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsMethods.test_keyword_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsMethods.test_multiple_features @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsMethods.test_plain @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsMethods.test_varargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsMethods.test_varkw @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsMethods.test_varkw_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsUnboundMethods.test_keyword_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsUnboundMethods.test_multiple_features @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsUnboundMethods.test_plain @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsUnboundMethods.test_varargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsUnboundMethods.test_varkw @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetcallargsUnboundMethods.test_varkw_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetsourceInteractive.test_getclasses_interactive @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetsourceStdlib.test_getsource_stdlib_abc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetsourceStdlib.test_getsource_stdlib_collections_abc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetsourceStdlib.test_getsource_stdlib_decimal @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGetsourceStdlib.test_getsource_stdlib_tomllib @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGettingSourceOfToplevelFrames.test_range_toplevel_frame @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestGettingSourceOfToplevelFrames.test_range_traceback_toplevel_frame @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestInterpreterStack.test__all__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestInterpreterStack.test_abuse_done @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestInterpreterStack.test_frame @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestInterpreterStack.test_previous_frame @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestInterpreterStack.test_stack @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestInterpreterStack.test_trace @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsDataDescriptor.test_custom_descriptors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsDataDescriptor.test_functions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsDataDescriptor.test_property @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsDataDescriptor.test_slot @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsMethodDescriptor.test_builtin_descriptors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsMethodDescriptor.test_custom_descriptors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsMethodDescriptor.test_descriptor_being_a_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestIsMethodDescriptor.test_non_descriptors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestMain.test_builtins @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestMain.test_custom_getattr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestMain.test_details @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestMain.test_only_source @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestMain.test_qualname_source @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestNoEOL.test_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_anonymous @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_dataclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_enum @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_lambda_in_list @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_manyargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_namedtuple @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_nested_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_oneline_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_onelinefunc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_parenthesized_multiline_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_post_line_parenthesized_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_threeline_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_twoline_indented_lambda @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_twolinefunc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestOneliners.test_typeddict @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_equality @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_hashable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_immutability @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_kinds @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_object @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_positional_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestParameterObject.test_signature_parameter_replace @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test__all__ @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_excluding_predicates @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_get_slot_members @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_isabstract @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_isabstract_during_init_subclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_isawaitable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_isclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_iscoroutine @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_isroutine @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestPredicates.test_isroutine_singledispatch @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestReload.test_getsource_reload @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_cleandoc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_finddoc @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getclasses @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getcomments @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getdoc_inherited @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getfile @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getfile_broken_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getfile_builtin_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getfile_builtin_function_or_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getfile_builtin_module @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getframeinfo_get_first_line @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getfunctions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getmodule @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getmodule_file_not_found @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getmodule_recursion @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getsource @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getsource_empty_file @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getsource_on_class_without_firstlineno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getsource_on_code_object @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getsource_on_generated_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_getsourcefile @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestRetrievingSourceCode.test_proceed_with_fake_filename @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_args_and_kwargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_args_and_varargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_arguments @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_empty @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_just_args @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_just_kwargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_kwonly @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_positional_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_posonly_kwargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_var @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_vararg_name @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_varargs_order @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureBind.test_signature_bind_with_self_arg @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureDefinitions.test_python_function_override_signature @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signater_parameters_is_ordered @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_annotations_with_local_namespaces @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_as_callable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_as_str @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_definition_order_preserved_on_kwonly @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_equality @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_eval_str @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_format @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_format_all_arg_types @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_from_callable_builtin_obj @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_from_callable_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_from_callable_python_obj @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_from_functionlike_object @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_functionlike_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_hashable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_immutability @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_none_annotation @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_object @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_object_pickle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_builtin_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_callable_objects @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_callable_objects_with_text_signature_attr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_class @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_class_with_init @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_class_with_wrapped_metaclass_call @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_class_with_wrapped_new @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_class_without_init @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_classmethod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_complex_args @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_decorated @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_derived_classes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_fake_partialmethod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_generic_subclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_lambdas @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_mangled_parameters @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_mocks @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_noarg @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_non_comparable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_non_function @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_noncallable_mocks @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_partial @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_partialmethod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_staticmethod @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_subclass @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_wargs @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_wkwonly @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_on_wrapper @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_parsing_with_defaults @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_replace_anno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_replace_parameters @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_replaced @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_str @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_str_positional_only @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_without_self @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignatureObject.test_signature_wrapped_bound_method @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestSignaturePrivateHelpers.test_signature_strip_non_python_syntax @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_cycle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_recursion_limit @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_stop @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_unhashable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_unwrap_one @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_unwrap_several @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_inspect.test_inspect.TestUnwrap.test_wrapped_descriptor @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023, Oracle and/or its affiliates.
+# Copyright (c) 2023, 2024, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -72,18 +72,20 @@ add_library(${TARGET_LZMASUPPORT} SHARED)
 # we want '-fPIC' even for the static lib
 set_target_properties(${TARGET_LZMA} PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
 
+set_target_properties(${TARGET_LZMASUPPORT} PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+
 # preprocessor defines for all platforms
 target_compile_definitions(${TARGET_LZMA} PRIVATE HAVE_CONFIG_H)
 target_compile_definitions(${TARGET_LZMASUPPORT} PRIVATE NDEBUG)
 
 if(WIN32)
     target_compile_options(${TARGET_LZMA} PRIVATE /Z7 /O2)
-    target_compile_options(${TARGET_LZMASUPPORT} PRIVATE /Z7 /O2 /WX)
+    target_compile_options(${TARGET_LZMASUPPORT} PRIVATE /Z7 /O2 /W3 /WX)
 else()
-    target_compile_options(${TARGET_LZMA} PRIVATE -fPIC -DPIC -g -O2)
+    target_compile_options(${TARGET_LZMA} PRIVATE -fPIC -DPIC -O2)
     target_compile_definitions(${TARGET_LZMA} PRIVATE PIC)
 
-    target_compile_options(${TARGET_LZMASUPPORT} PRIVATE -g -O3)
+    target_compile_options(${TARGET_LZMASUPPORT} PRIVATE -O3 -Wall -Werror)
 endif()
 
 # don't install into the system but into the MX project's output dir
@@ -133,8 +135,6 @@ target_sources(${TARGET_LZMA} PRIVATE
     "${SRC_DIR}/liblzma/common/index_hash.c"
     "${SRC_DIR}/liblzma/common/stream_decoder.c"
     "${SRC_DIR}/liblzma/common/vli_decoder.c"
-    "${SRC_DIR}/liblzma/check/crc64_table.c"
-    "${SRC_DIR}/liblzma/check/crc32_table.c"
     "${SRC_DIR}/liblzma/check/crc64_fast.c"
     "${SRC_DIR}/liblzma/check/crc32_fast.c"
     "${SRC_DIR}/liblzma/check/check.c"

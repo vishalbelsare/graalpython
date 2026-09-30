@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,18 +43,25 @@ package com.oracle.graal.python.builtins.objects.queue;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.Empty;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_SIMPLE_QUEUE;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM__;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.queue.SimpleQueueBuiltinsClinicProviders.SimpleQueueGetNodeClinicProviderGen;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.lib.PyLongAsLongAndOverflowNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
@@ -67,13 +74,14 @@ import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProv
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
 import com.oracle.graal.python.runtime.GilNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -83,9 +91,23 @@ import com.oracle.truffle.api.nodes.Node;
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PSimpleQueue)
 public final class SimpleQueueBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = SimpleQueueBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return SimpleQueueBuiltinsFactory.getFactories();
+    }
+
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_SIMPLE_QUEUE, minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    public abstract static class SimpleQueueNode extends PythonUnaryBuiltinNode {
+
+        @Specialization
+        static PSimpleQueue doGeneric(Object cls,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createSimpleQueue(cls, getInstanceShape.execute(cls));
+        }
     }
 
     @Builtin(name = "empty", minNumOfPositionalArgs = 1, //
@@ -125,13 +147,13 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
 
         @Specialization
         static Object doNoTimeout(PSimpleQueue self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode) {
             Object result = self.poll();
             if (result != null) {
                 return result;
             }
-            throw raiseNode.get(inliningTarget).raise(Empty);
+            throw raiseNode.raise(inliningTarget, Empty);
         }
     }
 
@@ -153,7 +175,6 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     @ArgumentClinic(name = "block", conversion = ClinicConversion.Boolean, defaultValue = "true")
     public abstract static class SimpleQueueGetNode extends PythonTernaryClinicBuiltinNode {
-        @Child private GilNode gil;
 
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
@@ -161,9 +182,10 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
         }
 
         @Specialization(guards = "!withTimeout(block, timeout)")
-        Object doNoTimeout(PSimpleQueue self, boolean block, @SuppressWarnings("unused") Object timeout,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+        static Object doNoTimeout(PSimpleQueue self, boolean block, @SuppressWarnings("unused") Object timeout,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached GilNode gil,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             // CPython first tries a non-blocking get without releasing the GIL
             Object result = self.poll();
             if (result != null) {
@@ -171,26 +193,26 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
             }
             if (block) {
                 try {
-                    ensureGil().release(true);
+                    gil.release(true);
                     return self.get();
                 } catch (InterruptedException e) {
                     CompilerDirectives.transferToInterpreter();
                     Thread.currentThread().interrupt();
                     return PNone.NONE;
                 } finally {
-                    ensureGil().acquire();
+                    gil.acquire();
                 }
             }
-            throw raiseNode.get(inliningTarget).raise(Empty);
+            throw raiseNode.raise(inliningTarget, Empty);
         }
 
         @Specialization(guards = "withTimeout(block, timeout)")
-        @SuppressWarnings("truffle-static-method")
-        Object doTimeout(VirtualFrame frame, PSimpleQueue self, boolean block, Object timeout,
-                        @Bind("this") Node inliningTarget,
+        static Object doTimeout(VirtualFrame frame, PSimpleQueue self, boolean block, Object timeout,
+                        @Bind Node inliningTarget,
                         @Cached PyLongAsLongAndOverflowNode asLongNode,
                         @Cached CastToJavaDoubleNode castToDouble,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached GilNode gil,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             assert block;
 
             // convert timeout object (given in seconds) to a Java long in microseconds
@@ -201,12 +223,12 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
                 try {
                     ltimeout = PythonUtils.multiplyExact(asLongNode.execute(frame, inliningTarget, timeout), 1000000);
                 } catch (OverflowException oe) {
-                    throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.TIMEOUT_VALUE_TOO_LARGE);
+                    throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.TIMEOUT_VALUE_TOO_LARGE);
                 }
             }
 
             if (ltimeout < 0) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.TIMEOUT_MUST_BE_NON_NEG_NUM);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.TIMEOUT_MUST_BE_NON_NEG_NUM);
             }
 
             // CPython first tries a non-blocking get without releasing the GIL
@@ -216,7 +238,7 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
             }
 
             try {
-                ensureGil().release(true);
+                gil.release(true);
                 result = self.get(ltimeout);
                 if (result != null) {
                     return result;
@@ -225,17 +247,9 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
                 CompilerDirectives.transferToInterpreter();
                 Thread.currentThread().interrupt();
             } finally {
-                ensureGil().acquire();
+                gil.acquire();
             }
-            throw raiseNode.get(inliningTarget).raise(Empty);
-        }
-
-        private GilNode ensureGil() {
-            if (gil == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                gil = insert(GilNode.create());
-            }
-            return gil;
+            throw raiseNode.raise(inliningTarget, Empty);
         }
 
         static boolean withTimeout(boolean block, Object timeout) {
@@ -258,14 +272,14 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
 
         @Specialization
         static PNone doGeneric(PSimpleQueue self, Object item, @SuppressWarnings("unused") Object block, @SuppressWarnings("unused") Object timeout,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode) {
             if (!self.put(item)) {
                 /*
                  * CPython uses a Python list as backing storage. This will throw an OverflowError
                  * if no more elements can be added to the list.
                  */
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             return PNone.NONE;
         }
@@ -283,14 +297,14 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
 
         @Specialization
         static PNone doGeneric(PSimpleQueue self, Object item,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Cached PRaiseNode raiseNode) {
             if (!self.put(item)) {
                 /*
                  * CPython uses a Python list as backing storage. This will throw an OverflowError
                  * if no more elements can be added to the list.
                  */
-                throw raiseNode.get(inliningTarget).raise(OverflowError);
+                throw raiseNode.raise(inliningTarget, OverflowError);
             }
             return PNone.NONE;
         }
@@ -301,8 +315,8 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
     public abstract static class ClassGetItemNode extends PythonBinaryBuiltinNode {
         @Specialization
         static Object classGetItem(Object cls, Object key,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createGenericAlias(cls, key);
+                        @Bind PythonLanguage language) {
+            return PFactory.createGenericAlias(language, cls, key);
         }
     }
 }

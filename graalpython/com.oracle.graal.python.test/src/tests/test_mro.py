@@ -1,4 +1,4 @@
-# Copyright (c) 2021, 2021, Oracle and/or its affiliates.
+# Copyright (c) 2021, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2020 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -175,28 +175,68 @@ def test_class_with_slots_assignment():
 
 def test_mro_change_on_attr_access():
     eq_called = []
-    class MyKey(object):        
-        def __hash__(self):            
+    class MyKey(object):
+        def __hash__(self):
             return hash('mykey')
         def __eq__(self, other):
             eq_called.append(1)
             X.__bases__ = (Base2,)
 
+    class Descr:
+        def __init__(self, value):
+            self.value = value
+        def __get__(self, obj, owner=None):
+            return self.value
+        def __set__(self, obj, value):
+            pass
+
     class Base(object):
-        mykey = 'base 42'
+        mykey = Descr('base 42')
+        def __str__(self): return 'Base'
 
     class Base2(object):
-        mykey = 'base2 42'
+        mykey = Descr('base2 42')
+        def __str__(self): return 'Base2'
 
     X = type('X', (Base,), {MyKey(): 5})
     assert X.mykey == 'base 42'
     assert eq_called == [1]
+
+    # Note: CPython does not invalidate the lookup cached on the type in __bases__ setter
+    assert X.mykey in ['base 42', 'base2 42']
+    assert eq_called in [[1], [1, 1]]
+
+    # Now try this on the object
+    eq_called = []
+    X = type('X', (Base,), {MyKey(): 5})
+    xobj = X()
+    xobj_dict = object.__getattribute__(xobj, "__dict__")
+    xobj_dict['mykey'] = 'false lead'
+    assert str(xobj) == 'Base'
+    assert xobj.mykey == 'base 42'
+    assert eq_called == [1]
+    assert str(xobj) == 'Base2', str(xobj) # slots are invalidated
+
+    # CPython does not invalidate the lookup cached on the type,
+    # so we check that it's one or the other
+    assert xobj.mykey in ['base 42', 'base2 42']
+    assert eq_called in [[1], [1, 1]]
+    original_eq_called_len = len(eq_called)
+
+    # This invalidates the lookup even on CPython, we should see __eq__ call and the new value
+    X.anotherkey = 'bogus'
+    assert xobj.mykey in 'base2 42'
+    assert len(eq_called) in [original_eq_called_len, original_eq_called_len + 1]
+
+    assert X.mykey == 'base2 42'
     
     # ----------------------------------
+    eq_called = []
     class MyKey(object):        
         def __hash__(self):            
             return hash('mykey')
         def __eq__(self, other):
+            eq_called.append(1)
             X.__bases__ = (Base,)
 
     class Base(object):
@@ -208,11 +248,15 @@ def test_mro_change_on_attr_access():
     X = type('X', (Base,Base2,), {MyKey(): 5})
     mk = X.mykey
     assert mk == '42'
-    
+    assert eq_called == [1]
+
+    eq_called = []
     X = type('X', (Base2,), {MyKey(): 5})
     assert X.mykey == '42'
+    assert eq_called == [1]
 
     # ----------------------------------
+    eq_called = []
     class Base(object):
         mykey = 'from Base2'        
 
@@ -223,7 +267,7 @@ def test_mro_change_on_attr_access():
     try:    
         assert X.mykey == '42'
     except AttributeError as e:
-        assert True
+        assert eq_called == [1]
     else:
         assert False
 

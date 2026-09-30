@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,3 +40,144 @@
  */
 #include "capi.h"
 
+static int
+_list_clear(PyListObject *a)
+{
+    int64_t i;
+    PyObject **item;
+
+    /* Because XDECREF can recursively invoke operations on
+       this list, we make it empty first. */
+    i = GraalPyPrivate_List_TruncateNativeStorage((PyObject *)a, &item);
+    if (i > 0) {
+        assert(item != NULL);
+        while (--i >= 0) {
+            Py_XDECREF(item[i]);
+        }
+        /* CPython calls 'PyMem_Free(item)' here but in our case, this will be
+           done by the NativeStorageReference. Since we already set the length
+           to zero, the items won't be decref'd again. */
+    }
+    /* Never fails; the return value can be ignored.
+       Note that there is no guarantee that the list is actually empty
+       at this point, because XDECREF may have populated it again! */
+    return 0;
+}
+
+static int
+list_traverse(PyListObject *o, visitproc visit, void *arg)
+{
+    int64_t size, i;
+    PyObject **ob_item;
+
+    /* In GraalPy, we only traverse the list if it has a native storage (which
+     * is indicated by 'size > 0'). We don't traverse managed storages. For an
+     * explanation, see 'dictobject.c: dict_traverse'.
+     */
+    if (points_to_py_handle_space(o)) {
+        size = GraalPyPrivate_List_TryGetItems((PyObject *)o, &ob_item);
+    } else {
+        size = Py_SIZE(o);
+        ob_item = o->ob_item;
+    }
+
+    for (i = size; --i >= 0; )
+        Py_VISIT(ob_item[i]);
+    return 0;
+}
+
+PyTypeObject PyList_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    "list",
+    sizeof(PyListObject),
+    0,
+    0,                                          /* tp_dealloc */ // GraalPy change: nulled
+    0,                                          /* tp_vectorcall_offset */
+    0,                                          /* tp_getattr */
+    0,                                          /* tp_setattr */
+    0,                                          /* tp_as_async */
+    0,                                          /* tp_repr */ // GraalPy change: nulled
+    0,                                          /* tp_as_number */
+    0,                                          /* tp_as_sequence */ // GraalPy change: nulled
+    0,                                          /* tp_as_mapping */ // GraalPy change: nulled
+    PyObject_HashNotImplemented,                /* tp_hash */
+    0,                                          /* tp_call */
+    0,                                          /* tp_str */
+    0,                                          /* tp_getattro */ // GraalPy change: nulled
+    0,                                          /* tp_setattro */
+    0,                                          /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+        Py_TPFLAGS_BASETYPE | Py_TPFLAGS_LIST_SUBCLASS |
+        _Py_TPFLAGS_MATCH_SELF | Py_TPFLAGS_SEQUENCE,  /* tp_flags */
+    0,                                          /* tp_doc */ // GraalPy change: nulled
+    (traverseproc)list_traverse,                /* tp_traverse */
+    (inquiry)_list_clear,                       /* tp_clear */
+    0,                                          /* tp_richcompare */ // GraalPy change: nulled
+    0,                                          /* tp_weaklistoffset */
+    0,                                          /* tp_iter */ // GraalPy change: nulled
+    0,                                          /* tp_iternext */
+    0,                                          /* tp_methods */ // GraalPy change: nulled
+    0,                                          /* tp_members */
+    0,                                          /* tp_getset */
+    0,                                          /* tp_base */
+    0,                                          /* tp_dict */
+    0,                                          /* tp_descr_get */
+    0,                                          /* tp_descr_set */
+    0,                                          /* tp_dictoffset */
+    0,                                          /* tp_init */ // GraalPy change: nulled
+    PyType_GenericAlloc,                        /* tp_alloc */
+    PyType_GenericNew,                          /* tp_new */
+    GraalPyPrivate_Object_GC_Del,              /* tp_free */ // GraalPy change: different function
+    .tp_vectorcall = 0, // GraalPy change: nulled
+};
+
+void GraalPyList_SET_ITEM(PyObject* op, Py_ssize_t index, PyObject* value) {
+    GraalPyList_ITEMS(op)[index] = value;
+}
+
+// deprecated alias for internal function, currently used in PyO3
+PyAPI_FUNC(void) _PyList_SET_ITEM(PyObject* a, Py_ssize_t b, PyObject* c) {
+    GraalPyList_SET_ITEM(a, b, c);
+}
+
+static inline int
+valid_index(Py_ssize_t i, Py_ssize_t limit)
+{
+    /* The cast to size_t lets us use just a single comparison
+       to check whether i is in the range: 0 <= i < limit.
+
+       See:  Section 14.2 "Bounds Checking" in the Agner Fog
+       optimization manual found at:
+       https://www.agner.org/optimize/optimizing_cpp.pdf
+    */
+    return (size_t) i < (size_t) limit;
+}
+
+int
+PyList_SetItem(PyObject *op, Py_ssize_t i,
+               PyObject *newitem)
+{
+    PyObject **p;
+    if (!PyList_Check(op)) {
+        Py_XDECREF(newitem);
+        PyErr_BadInternalCall();
+        return -1;
+    }
+    if (!valid_index(i, Py_SIZE(op))) {
+        Py_XDECREF(newitem);
+        PyErr_SetString(PyExc_IndexError,
+                        "list assignment index out of range");
+        return -1;
+    }
+    // GraalPy change: avoid direct struct access
+    p = GraalPyList_ITEMS(op) + i;
+    Py_XSETREF(*p, newitem);
+    return 0;
+}
+
+// GraalPy-additions
+PyObject **
+GraalPyList_ITEMS(PyObject *op)
+{
+    return GraalPyPrivate_GET_PyListObject_ob_item(op);
+}

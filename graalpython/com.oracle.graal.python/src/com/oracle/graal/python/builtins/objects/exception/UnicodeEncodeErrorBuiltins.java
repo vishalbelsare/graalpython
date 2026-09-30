@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,22 +47,24 @@ import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBui
 import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBuiltins.IDX_REASON;
 import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBuiltins.IDX_START;
 import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBuiltins.UNICODE_ERROR_ATTR_FACTORY;
-import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBuiltins.getArgAsInt;
+import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBuiltins.getArgAsLong;
 import static com.oracle.graal.python.builtins.objects.exception.UnicodeErrorBuiltins.getArgAsString;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___STR__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.str.StringNodes.CastToTruffleStringCheckedNode;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
+import com.oracle.graal.python.builtins.objects.str.StringNodes.CastToTruffleStringChecked1Node;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
@@ -70,7 +72,7 @@ import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
+import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
@@ -78,6 +80,7 @@ import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -86,47 +89,50 @@ import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = UnicodeEncodeError)
 public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = UnicodeEncodeErrorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return UnicodeEncodeErrorBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, takesVarArgs = true)
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     public abstract static class UnicodeEncodeErrorInitNode extends PythonBuiltinNode {
-        public abstract Object execute(PBaseException self, Object[] args);
 
         @Specialization
-        static Object initNoArgs(PBaseException self, Object[] args,
-                        @Bind("this") Node inliningTarget,
+        static Object initNoArgs(VirtualFrame frame, PBaseException self, Object[] args, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode toStringNode,
-                        @Cached CastToJavaIntExactNode toJavaIntExactNode,
+                        @Cached CastToJavaLongExactNode toJavaLongExactNode,
                         @Cached BaseExceptionBuiltins.BaseExceptionInitNode baseInitNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            baseInitNode.execute(self, args);
+                        @Cached PRaiseNode raiseNode) {
+            baseInitNode.execute(frame, self, args, keywords);
             // PyArg_ParseTuple(args, "UUnnU"), TODO: add proper error messages
             self.setExceptionAttributes(new Object[]{
                             getArgAsString(inliningTarget, args, 0, raiseNode, toStringNode),
                             getArgAsString(inliningTarget, args, 1, raiseNode, toStringNode),
-                            getArgAsInt(inliningTarget, args, 2, raiseNode, toJavaIntExactNode),
-                            getArgAsInt(inliningTarget, args, 3, raiseNode, toJavaIntExactNode),
+                            getArgAsLong(inliningTarget, args, 2, raiseNode, toJavaLongExactNode),
+                            getArgAsLong(inliningTarget, args, 3, raiseNode, toJavaLongExactNode),
                             getArgAsString(inliningTarget, args, 4, raiseNode, toStringNode)
             });
             return PNone.NONE;
         }
     }
 
-    @Builtin(name = J___STR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     public abstract static class UnicodeEncodeErrorStrNode extends PythonUnaryBuiltinNode {
         @Specialization
         TruffleString str(VirtualFrame frame, PBaseException self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached BaseExceptionAttrNode attrNode,
                         @Cached CastToTruffleStringNode toTruffleStringNode,
                         @Cached PyObjectStrAsTruffleStringNode strNode,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Cached TruffleString.CodePointAtIndexNode codePointAtIndexNode,
+                        @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
                         @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
             if (self.getExceptionAttributes() == null) {
                 // Not properly initialized.
@@ -136,12 +142,12 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
             // Get reason and encoding as strings, which they might not be if they've been
             // modified after we were constructed.
             final TruffleString object = toTruffleStringNode.execute(inliningTarget, attrNode.get(self, IDX_OBJECT, UNICODE_ERROR_ATTR_FACTORY));
-            final int start = attrNode.getInt(self, IDX_START, UNICODE_ERROR_ATTR_FACTORY);
-            final int end = attrNode.getInt(self, IDX_END, UNICODE_ERROR_ATTR_FACTORY);
+            final long start = attrNode.getLong(self, IDX_START, UNICODE_ERROR_ATTR_FACTORY);
+            final long end = attrNode.getLong(self, IDX_END, UNICODE_ERROR_ATTR_FACTORY);
             final TruffleString encoding = strNode.execute(frame, inliningTarget, attrNode.get(self, IDX_ENCODING, UNICODE_ERROR_ATTR_FACTORY));
             final TruffleString reason = strNode.execute(frame, inliningTarget, attrNode.get(self, IDX_REASON, UNICODE_ERROR_ATTR_FACTORY));
             if (start < codePointLengthNode.execute(object, TS_ENCODING) && end == start + 1) {
-                final int badChar = codePointAtIndexNode.execute(object, start, TS_ENCODING);
+                final int badChar = codePointAtIndexNode.execute(object, (int) start);
                 String badCharStr;
                 if (badChar <= 0xFF) {
                     badCharStr = PythonUtils.formatJString("\\x%02x", badChar);
@@ -160,6 +166,7 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
     // Equivalent of make_encode_exception
     @GenerateInline
     @GenerateCached(false)
+    @GenerateUncached
     public abstract static class MakeEncodeExceptionNode extends Node {
 
         /**
@@ -170,20 +177,22 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
          *            one
          * @return either {@code exceptionObject} if provided or a new exception object
          */
-        public abstract PBaseException execute(Node inliningTarget, PBaseException exceptionObject, TruffleString encoding, TruffleString inputObject, int startPos, int endPos, TruffleString reason);
+        public abstract PBaseException execute(VirtualFrame frame, Node inliningTarget, PBaseException exceptionObject, TruffleString encoding, TruffleString inputObject, int startPos, int endPos,
+                        TruffleString reason);
 
         @Specialization(guards = "exceptionObject == null")
-        static PBaseException createNew(Node inliningTarget, @SuppressWarnings("unused") PBaseException exceptionObject, TruffleString encoding, TruffleString inputObject, int startPos, int endPos,
+        static PBaseException createNew(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") PBaseException exceptionObject, TruffleString encoding, TruffleString inputObject,
+                        int startPos, int endPos,
                         TruffleString reason,
                         @Cached(inline = false) CallNode callNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            Object obj = callNode.execute(UnicodeEncodeError, encoding, inputObject, startPos, endPos, reason);
+                        @Cached PRaiseNode raiseNode) {
+            Object obj = callNode.execute(frame, UnicodeEncodeError, encoding, inputObject, startPos, endPos, reason);
             if (obj instanceof PBaseException exception) {
                 return exception;
             }
             // Shouldn't happen unless the user manually replaces the method, which is really
             // unexpected and shouldn't be permitted at all, but currently it is
-            throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.SHOULD_HAVE_RETURNED_EXCEPTION, UnicodeEncodeError, obj);
+            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.SHOULD_HAVE_RETURNED_EXCEPTION, UnicodeEncodeError, obj);
         }
 
         @Specialization(guards = "exceptionObject != null")
@@ -211,11 +220,11 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
         @Specialization
         static TruffleString doIt(Node inliningTarget, PBaseException exceptionObject,
                         @Cached(inline = false) BaseExceptionAttrNode attrNode,
-                        @Cached CastToTruffleStringCheckedNode castToStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached CastToTruffleStringChecked1Node castToStringNode,
+                        @Cached PRaiseNode raiseNode) {
             Object obj = attrNode.get(exceptionObject, IDX_OBJECT, UNICODE_ERROR_ATTR_FACTORY);
             if (obj == null) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.S_ATTRIBUTE_NOT_SET, "object");
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_ATTRIBUTE_NOT_SET, "object");
             }
             return castToStringNode.cast(inliningTarget, obj, ErrorMessages.S_ATTRIBUTE_MUST_BE_UNICODE, "object");
         }
@@ -235,17 +244,17 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
         static int doIt(Node inliningTarget, PBaseException exceptionObject,
                         @Cached PyUnicodeEncodeOrTranslateErrorGetObjectNode getObjectNode,
                         @Cached(inline = false) BaseExceptionAttrNode attrNode,
-                        @Cached(inline = false) TruffleString.CodePointLengthNode codePointLengthNode) {
+                        @Cached TruffleString.CodePointLengthNode codePointLengthNode) {
             TruffleString ts = getObjectNode.execute(inliningTarget, exceptionObject);
             int size = codePointLengthNode.execute(ts, TS_ENCODING);
-            int start = attrNode.getInt(exceptionObject, IDX_START, UNICODE_ERROR_ATTR_FACTORY);
+            long start = attrNode.getLong(exceptionObject, IDX_START, UNICODE_ERROR_ATTR_FACTORY);
             if (start < 0) {
                 start = 0;
             }
             if (start >= size) {
                 start = size - 1;
             }
-            return start;
+            return (int) start;
         }
     }
 
@@ -263,17 +272,17 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
         static int doIt(Node inliningTarget, PBaseException exceptionObject,
                         @Cached PyUnicodeEncodeOrTranslateErrorGetObjectNode getObjectNode,
                         @Cached(inline = false) BaseExceptionAttrNode attrNode,
-                        @Cached(inline = false) TruffleString.CodePointLengthNode codePointLengthNode) {
+                        @Cached TruffleString.CodePointLengthNode codePointLengthNode) {
             TruffleString ts = getObjectNode.execute(inliningTarget, exceptionObject);
             int size = codePointLengthNode.execute(ts, TS_ENCODING);
-            int end = attrNode.getInt(exceptionObject, IDX_END, UNICODE_ERROR_ATTR_FACTORY);
+            long end = attrNode.getLong(exceptionObject, IDX_END, UNICODE_ERROR_ATTR_FACTORY);
             if (end < 1) {
                 end = 1;
             }
             if (end > size) {
                 end = size;
             }
-            return end;
+            return (int) end;
         }
     }
 
@@ -291,11 +300,11 @@ public final class UnicodeEncodeErrorBuiltins extends PythonBuiltins {
         @Specialization
         static TruffleString doIt(Node inliningTarget, PBaseException exceptionObject,
                         @Cached(inline = false) BaseExceptionAttrNode attrNode,
-                        @Cached CastToTruffleStringCheckedNode castToStringNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached CastToTruffleStringChecked1Node castToStringNode,
+                        @Cached PRaiseNode raiseNode) {
             Object obj = attrNode.get(exceptionObject, IDX_ENCODING, UNICODE_ERROR_ATTR_FACTORY);
             if (obj == null) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.S_ATTRIBUTE_NOT_SET, "encoding");
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_ATTRIBUTE_NOT_SET, "encoding");
             }
             return castToStringNode.cast(inliningTarget, obj, ErrorMessages.S_ATTRIBUTE_MUST_BE_UNICODE, "encoding");
         }

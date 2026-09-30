@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,133 +25,153 @@
  */
 package com.oracle.graal.python.builtins.objects.function;
 
-import static com.oracle.graal.python.nodes.BuiltinNames.T_SELF;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_STRING;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import com.oracle.graal.python.nodes.PRootNode;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class Signature {
-    public static final Signature EMPTY = new Signature(-1, false, -1, false, PythonUtils.EMPTY_TRUFFLESTRING_ARRAY, PythonUtils.EMPTY_TRUFFLESTRING_ARRAY);
+    public static final Signature EMPTY = new Signature(-1, false, -1, PythonUtils.EMPTY_TRUFFLESTRING_ARRAY, PythonUtils.EMPTY_TRUFFLESTRING_ARRAY);
+    public static final Signature GENERIC_VARARGS = new Signature(-1, true, 0, null, null);
 
     private final int varArgIndex;
     private final int positionalOnlyArgIndex;
-    private final boolean isVarArgsMarker;
     private final boolean takesVarKeywordArgs;
     private final boolean checkEnclosingType;
+    // See javadoc for isHidden
+    private final boolean hidden;
 
     @CompilationFinal(dimensions = 1) private final TruffleString[] positionalParameterNames;
     @CompilationFinal(dimensions = 1) private final TruffleString[] keywordOnlyNames;
 
     private final TruffleString raiseErrorName;
 
-    public Signature(boolean takesVarKeywordArgs, int takesVarArgs, boolean varArgsMarker,
+    public Signature(boolean takesVarKeywordArgs, int takesVarArgs,
                     TruffleString[] parameterIds, TruffleString[] keywordNames) {
-        this(-1, takesVarKeywordArgs, takesVarArgs, varArgsMarker, parameterIds, keywordNames);
+        this(-1, takesVarKeywordArgs, takesVarArgs, parameterIds, keywordNames);
     }
 
-    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs, boolean varArgsMarker,
+    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs,
                     TruffleString[] parameterIds, TruffleString[] keywordNames) {
-        this(positionOnlyArgIndex, takesVarKeywordArgs, takesVarArgs, varArgsMarker, parameterIds, keywordNames, false);
+        this(positionOnlyArgIndex, takesVarKeywordArgs, takesVarArgs, parameterIds, keywordNames, false);
     }
 
-    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs, boolean varArgsMarker,
+    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs,
                     TruffleString[] parameterIds, TruffleString[] keywordNames, boolean checkEnclosingType) {
-        this(positionOnlyArgIndex, takesVarKeywordArgs, takesVarArgs, varArgsMarker, parameterIds, keywordNames, checkEnclosingType, T_EMPTY_STRING);
+        this(positionOnlyArgIndex, takesVarKeywordArgs, takesVarArgs, parameterIds, keywordNames, checkEnclosingType, T_EMPTY_STRING);
     }
 
-    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs, boolean varArgsMarker,
+    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs,
                     TruffleString[] parameterIds, TruffleString[] keywordNames, boolean checkEnclosingType, TruffleString raiseErrorName) {
+        this(positionOnlyArgIndex, takesVarKeywordArgs, takesVarArgs, parameterIds, keywordNames, checkEnclosingType, raiseErrorName, false);
+    }
+
+    public Signature(int positionOnlyArgIndex, boolean takesVarKeywordArgs, int takesVarArgs,
+                    TruffleString[] parameterIds, TruffleString[] keywordNames, boolean checkEnclosingType, TruffleString raiseErrorName, boolean hidden) {
         this.positionalOnlyArgIndex = positionOnlyArgIndex;
         this.takesVarKeywordArgs = takesVarKeywordArgs;
         this.varArgIndex = takesVarArgs;
-        this.isVarArgsMarker = varArgsMarker;
-        this.positionalParameterNames = (parameterIds != null) ? parameterIds : PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
-        this.keywordOnlyNames = (keywordNames != null) ? keywordNames : PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
+        this.positionalParameterNames = (parameterIds != null && parameterIds.length > 0) ? parameterIds : PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
+        this.keywordOnlyNames = (keywordNames != null && keywordNames.length > 0) ? keywordNames : PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
         this.checkEnclosingType = checkEnclosingType;
         this.raiseErrorName = raiseErrorName;
+        this.hidden = hidden;
     }
 
-    public static Signature createVarArgsAndKwArgsOnly() {
-        return new Signature(-1, true, 0, false, null, null);
-    }
-
-    public Signature createWithSelf() {
-        TruffleString[] parameterIdsWithSelf = new TruffleString[getParameterIds().length + 1];
-        parameterIdsWithSelf[0] = T_SELF;
-        PythonUtils.arraycopy(getParameterIds(), 0, parameterIdsWithSelf, 1, parameterIdsWithSelf.length - 1);
-
-        return new Signature(-1, takesVarKeywordArgs, varArgIndex, isVarArgsMarker,
-                        parameterIdsWithSelf, keywordOnlyNames);
-    }
-
-    public final int getNumOfRequiredKeywords() {
+    public int getNumOfRequiredKeywords() {
         return keywordOnlyNames.length;
     }
 
-    public final int getMaxNumOfPositionalArgs() {
+    public int getMaxNumOfPositionalArgs() {
         return positionalParameterNames.length;
     }
 
     /**
      *
      * @return The index to the positional only argument marker ('/'). Which means that all
-     *         positional only argument have index smaller then this.
+     *         positional only argument have index smaller than this.
      */
-    public final int getPositionalOnlyArgIndex() {
+    public int getPositionalOnlyArgIndex() {
         return positionalOnlyArgIndex;
     }
 
-    public final int getVarargsIdx() {
-        return varArgIndex;
-    }
-
-    public final boolean takesVarArgs() {
+    public boolean takesVarArgs() {
         return varArgIndex != -1;
     }
 
-    public final boolean isVarArgsMarker() {
-        return isVarArgsMarker;
-    }
-
-    public final boolean takesVarKeywordArgs() {
+    public boolean takesVarKeywordArgs() {
         return takesVarKeywordArgs;
     }
 
-    public final TruffleString[] getParameterIds() {
+    public TruffleString[] getParameterIds() {
         return positionalParameterNames;
     }
 
-    public final TruffleString[] getKeywordNames() {
+    public TruffleString[] getKeywordNames() {
         return keywordOnlyNames;
     }
 
-    public final boolean takesKeywordArgs() {
+    @TruffleBoundary
+    public TruffleString[] getVisibleKeywordNames() {
+        /*
+         * C slot wrappers (ab)use keyword defaults for storing the function pointers, we need to
+         * filter them out. Their names start with a dollar sign.
+         */
+        List<TruffleString> visibleKeywordNames = new ArrayList<>(keywordOnlyNames.length);
+        for (TruffleString k : keywordOnlyNames) {
+            if (k.byteLength(TS_ENCODING) > 0 && k.codePointAtByteIndexUncached(0, TS_ENCODING) != '$') {
+                visibleKeywordNames.add(k);
+            }
+        }
+        return visibleKeywordNames.toArray(TruffleString[]::new);
+    }
+
+    public boolean takesKeywordArgs() {
         return keywordOnlyNames.length > 0 || takesVarKeywordArgs;
     }
 
-    public final boolean takesRequiredKeywordArgs() {
-        return this.keywordOnlyNames.length > 0;
+    public int varArgsPArgumentsIndex() {
+        return getMaxNumOfPositionalArgs() + getNumOfRequiredKeywords();
     }
 
-    public final boolean takesPositionalOnly() {
-        return !takesVarArgs() && !takesVarKeywordArgs && !isVarArgsMarker && keywordOnlyNames.length == 0;
+    public int varKeywordsPArgumentsIndex() {
+        return getMaxNumOfPositionalArgs() + getNumOfRequiredKeywords() + (takesVarArgs() ? 1 : 0);
     }
 
-    public final boolean takesNoArguments() {
+    public boolean takesPositionalOnly() {
+        return !takesVarArgs() && !takesVarKeywordArgs && keywordOnlyNames.length == 0;
+    }
+
+    public boolean takesNoArguments() {
         return positionalParameterNames.length == 0 && takesPositionalOnly();
     }
 
-    public final boolean takesOneArgument() {
-        return positionalParameterNames.length == 1 && takesPositionalOnly();
-    }
-
-    public final boolean checkEnclosingType() {
+    public boolean checkEnclosingType() {
         return checkEnclosingType;
     }
 
-    public final TruffleString getRaiseErrorName() {
+    public TruffleString getRaiseErrorName() {
         return raiseErrorName;
+    }
+
+    /**
+     * Hidden signatures won't be shown to python as {@code __signature__} or
+     * {@code __text_signature__}. This is done to hide generic C function signatures, because it
+     * breaks assumptions of some packages, namely {@code pythran}
+     */
+    public boolean isHidden() {
+        return hidden;
+    }
+
+    public static Signature fromCallTarget(RootCallTarget callTarget) {
+        return callTarget.getRootNode() instanceof PRootNode rootNode ? rootNode.getSignature() : Signature.GENERIC_VARARGS;
     }
 }

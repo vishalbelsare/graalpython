@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -26,37 +26,41 @@
 package com.oracle.graal.python.builtins.objects.frame;
 
 import static com.oracle.graal.python.builtins.objects.PythonAbstractObject.objectHashCodeAsHexString;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.code.PCode;
-import com.oracle.graal.python.builtins.objects.frame.PFrame.Reference;
-import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.getsetdescriptor.DescriptorDeleteMarker;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
+import com.oracle.graal.python.builtins.objects.object.ObjectBuiltins;
 import com.oracle.graal.python.builtins.objects.object.ObjectBuiltins.DictNode;
-import com.oracle.graal.python.builtins.objects.object.ObjectBuiltinsFactory;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.lib.PyLongAsLongAndOverflowNode;
+import com.oracle.graal.python.lib.PyLongCheckExactNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.frame.GetFrameLocalsNode;
-import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
-import com.oracle.graal.python.nodes.frame.ReadCallerFrameNode;
-import com.oracle.graal.python.nodes.frame.ReadCallerFrameNode.FrameSelector;
+import com.oracle.graal.python.nodes.frame.ReadFrameNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaBooleanNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.CallerFlags;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.util.OverflowException;
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -65,29 +69,29 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.profiles.InlinedBranchProfile;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PFrame)
 public final class FrameBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = FrameBuiltinsSlotsGen.SLOTS;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return FrameBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static TruffleString repr(VirtualFrame frame, PFrame self,
+        TruffleString repr(VirtualFrame frame, PFrame self,
                         @Cached GetCodeNode getCodeNode,
-                        @Cached GetLinenoNode getLinenoNode,
+                        @Cached ReadFrameNode readFrameNode,
                         @Cached SimpleTruffleStringFormatNode simpleTruffleStringFormatNode) {
+            self = readFrameNode.ensureFresh(frame, self, CallerFlags.NEEDS_LASTI);
             PCode code = getCodeNode.executeObject(frame, self);
-            int lineno = getLinenoNode.executeInt(frame, self);
+            int lineno = self.getLine();
             return simpleTruffleStringFormatNode.format("<frame at 0x%s, file '%s', line %d, code %s>",
                             objectHashCodeAsHexString(self), code.getFilename(), lineno, code.getName());
         }
@@ -101,17 +105,16 @@ public final class FrameBuiltins extends PythonBuiltins {
         public abstract Object execute(VirtualFrame frame, PFrame self);
 
         @Specialization
-        Object get(VirtualFrame curFrame, PFrame self,
-                        @Cached PythonObjectFactory factory) {
+        Object get(VirtualFrame curFrame, PFrame self) {
             PythonObject globals = self.getGlobals();
             if (globals instanceof PythonModule) {
                 if (getDictNode == null) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
-                    getDictNode = insert(ObjectBuiltinsFactory.DictNodeGen.create());
+                    getDictNode = insert(ObjectBuiltins.DictNode.create());
                 }
                 return getDictNode.execute(curFrame, globals, PNone.NO_VALUE);
             } else {
-                return globals != null ? globals : factory.createDict();
+                return globals != null ? globals : PFactory.createDict(PythonLanguage.get(this));
             }
         }
 
@@ -126,7 +129,7 @@ public final class FrameBuiltins extends PythonBuiltins {
     public abstract static class GetBuiltinsNode extends PythonBuiltinNode {
         public abstract Object execute(VirtualFrame frame, PFrame self);
 
-        @Child private DictNode dictNode = ObjectBuiltinsFactory.DictNodeGen.create();
+        @Child private DictNode dictNode = ObjectBuiltins.DictNode.create();
 
         @Specialization
         Object get(VirtualFrame frame, @SuppressWarnings("unused") PFrame self) {
@@ -140,30 +143,52 @@ public final class FrameBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "f_lineno", minNumOfPositionalArgs = 1, isGetter = true)
+    @Builtin(name = "f_lineno", minNumOfPositionalArgs = 1, maxNumOfPositionalArgs = 2, isGetter = true, isSetter = true, allowsDelete = true)
     @GenerateNodeFactory
-    public abstract static class GetLinenoNode extends PythonBuiltinNode {
-        public abstract int executeInt(VirtualFrame frame, PFrame self);
+    public abstract static class LinenoNode extends PythonBinaryBuiltinNode {
 
         @Specialization
-        int get(VirtualFrame frame, PFrame self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile isCurrentFrameProfile,
-                        @Cached MaterializeFrameNode materializeNode) {
-            // Special case because this builtin can be called without going through an invoke node:
-            // we need to sync the location of the frame if and only if 'self' represents the
-            // current frame. If 'self' represents another frame on the stack, the location is
-            // already set
-            if (isCurrentFrameProfile.profile(inliningTarget, frame != null && PArguments.getCurrentFrameInfo(frame) == self.getRef())) {
-                PFrame pyFrame = materializeNode.execute(frame, this, false, false);
-                assert pyFrame == self;
-            }
-            return self.getLine();
+        Object delete(PFrame self, DescriptorDeleteMarker ignored,
+                        @Bind Node inliningTarget,
+                        @Cached @Cached.Exclusive PRaiseNode raise) {
+            throw raise.raise(inliningTarget, PythonBuiltinClassType.AttributeError, ErrorMessages.CANNOT_DELETE);
         }
 
-        @NeverDefault
-        public static GetLinenoNode create() {
-            return FrameBuiltinsFactory.GetLinenoNodeFactory.create(null);
+        @Specialization(guards = "isNoValue(newLineno)")
+        int get(VirtualFrame frame, PFrame self, Object newLineno,
+                        @Cached @Cached.Exclusive ReadFrameNode readFrameNode) {
+            return readFrameNode.ensureFresh(frame, self, CallerFlags.NEEDS_LASTI).getLine();
+        }
+
+        @Specialization(guards = {"!isNoValue(newLineno)", "!isDeleteMarker(newLineno)"})
+        static PNone set(VirtualFrame frame, PFrame self, Object newLineno,
+                        @Bind Node inliningTarget,
+                        @Cached @Cached.Exclusive ReadFrameNode readFrameNode,
+                        @Cached @Cached.Exclusive PRaiseNode raise,
+                        @Cached PyLongCheckExactNode isLong,
+                        @Cached PyLongAsLongAndOverflowNode toLong) {
+            readFrameNode.ensureFresh(frame, self, CallerFlags.NEEDS_LASTI);
+            if (self.isTraceArgument()) {
+                if (isLong.execute(inliningTarget, newLineno)) {
+                    try {
+                        long lineno = toLong.execute(frame, inliningTarget, newLineno);
+                        if (lineno <= Integer.MAX_VALUE && lineno >= Integer.MIN_VALUE) {
+                            self.setJumpDestLine((int) lineno);
+                        } else {
+                            throw raise.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.LINENO_OUT_OF_RANGE);
+                        }
+                    } catch (OverflowException e) {
+                        throw raise.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.LINENO_OUT_OF_RANGE);
+                    }
+                } else {
+                    throw raise.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.LINENO_MUST_BE_AN_INTEGER);
+                }
+            } else {
+                PythonContext context = PythonContext.get(inliningTarget);
+                throw raise.raise(inliningTarget, PythonBuiltinClassType.ValueError, ErrorMessages.CANT_JUMP_FROM_S_EVENT,
+                                context.getThreadState(context.getLanguage(inliningTarget)).getTracingWhat().pythonName);
+            }
+            return PNone.NONE;
         }
     }
 
@@ -171,8 +196,9 @@ public final class FrameBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class GetLastiNode extends PythonUnaryBuiltinNode {
         @Specialization
-        int get(PFrame self) {
-            return self.getLasti();
+        int get(VirtualFrame frame, PFrame self,
+                        @Cached ReadFrameNode readFrameNode) {
+            return readFrameNode.ensureFresh(frame, self, CallerFlags.NEEDS_LASTI).getLasti();
         }
     }
 
@@ -207,12 +233,13 @@ public final class FrameBuiltins extends PythonBuiltins {
         }
 
         @Specialization(guards = "!isNoValue(v)")
-        static Object doSet(PFrame self, Object v, @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode raise, @Cached CastToJavaBooleanNode cast) {
+        static Object doSet(PFrame self, Object v, @Bind Node inliningTarget,
+                        @Cached PRaiseNode raise,
+                        @Cached CastToJavaBooleanNode cast) {
             try {
                 self.setTraceLine(cast.execute(inliningTarget, v));
             } catch (CannotCastException e) {
-                throw raise.raise(PythonBuiltinClassType.TypeError, ErrorMessages.ATTRIBUTE_VALUE_MUST_BE_BOOL);
+                throw raise.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.ATTRIBUTE_VALUE_MUST_BE_BOOL);
             }
             return PNone.NONE;
         }
@@ -224,11 +251,9 @@ public final class FrameBuiltins extends PythonBuiltins {
         public abstract PCode executeObject(VirtualFrame frame, PFrame self);
 
         @Specialization
-        static PCode get(PFrame self,
-                        @Cached PythonObjectFactory factory) {
-            RootCallTarget ct = self.getTarget();
-            assert ct != null;
-            return factory.createCode(ct);
+        static Object get(PFrame self) {
+            PCode code = self.getCode();
+            return code != null ? code : PNone.NONE;
         }
 
         @NeverDefault
@@ -237,24 +262,18 @@ public final class FrameBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "f_locals", minNumOfPositionalArgs = 1, isGetter = true)
+    @Builtin(name = "f_locals", minNumOfPositionalArgs = 1, isGetter = true, callerFlags = CallerFlags.NEEDS_MATERIALIZED_LOCALS)
     @GenerateNodeFactory
     public abstract static class GetLocalsNode extends PythonUnaryBuiltinNode {
         @Specialization
-        Object getUpdating(VirtualFrame frame, PFrame self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedConditionProfile profile,
-                        @Cached MaterializeFrameNode materializeNode,
-                        @Cached GetFrameLocalsNode getFrameLocalsNode) {
-            // Special case because this builtin can be called without going through an invoke node:
-            // we need to sync the values of the frame if and only if 'self' represents the current
-            // frame. If 'self' represents another frame on the stack, the values are already
-            // refreshed.
-            if (profile.profile(inliningTarget, frame != null && PArguments.getCurrentFrameInfo(frame) == self.getRef())) {
-                PFrame pyFrame = materializeNode.execute(false, true, frame);
-                assert pyFrame == self;
+        Object getLocals(VirtualFrame frame, PFrame self,
+                        @Bind Node inliningTarget,
+                        @Cached ReadFrameNode readFrameNode) {
+            self = readFrameNode.ensureFresh(frame, self, CallerFlags.NEEDS_MATERIALIZED_LOCALS);
+            if (self.getCustomLocals() != null) {
+                return self.getCustomLocals();
             }
-            return getFrameLocalsNode.execute(inliningTarget, self);
+            return PFactory.createFrameLocalsProxy(PythonLanguage.get(inliningTarget), self);
         }
     }
 
@@ -265,68 +284,15 @@ public final class FrameBuiltins extends PythonBuiltins {
 
         @Specialization
         Object getBackref(VirtualFrame frame, PFrame self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedBranchProfile noBackref,
-                        @Cached InlinedBranchProfile topRef,
-                        @Cached InlinedConditionProfile notMaterialized,
-                        @Cached ReadCallerFrameNode readCallerFrame) {
-            PFrame.Reference backref;
-            for (PFrame cur = self;; cur = backref.getPyFrame()) {
-                backref = cur.getBackref();
-                if (backref == Reference.EMPTY) {
-                    return PNone.NONE;
-                }
-                PFrame callerFrame;
-                if (backref == null) {
-                    noBackref.enter(inliningTarget);
-                    // The backref is not there. There's three cases:
-
-                    // a) self is still on the stack and the caller isn't filled in
-                    // b) this frame has returned, but not (yet) to a Python caller
-                    // c) this frame has no caller (it is/was a top frame)
-                    callerFrame = readCallerFrame.executeWith(cur.getRef(), FrameSelector.ALL_PYTHON_FRAMES, 0);
-
-                    // We don't need to mark the caller frame as 'escaped' because if 'self' is
-                    // escaped, the caller frame will be escaped when leaving the current function.
-
-                    if (callerFrame == null) {
-                        topRef.enter(inliningTarget);
-                        // so we won't do this again
-                        cur.setBackref(PFrame.Reference.EMPTY);
-                        return PNone.NONE;
-                    } else {
-                        backref = callerFrame.getRef();
-                        cur.setBackref(backref);
-                    }
-                } else {
-                    callerFrame = materialize(frame, inliningTarget, readCallerFrame, backref, notMaterialized);
-                }
-                assert callerFrame.getRef() == backref;
-                RootNode rootNode = callerFrame.getLocation().getRootNode();
-                if (rootNode != null && !rootNode.isInternal()) {
-                    return callerFrame;
-                }
+                        @Cached ReadFrameNode readCallerFrame) {
+            PFrame backref = readCallerFrame.getFrameForReference(frame, self.getRef(), ReadFrameNode.AllPythonFramesSelector.INSTANCE, 1, 0,
+                            self.getThread());
+            if (backref != null) {
+                backref.getRef().markAsEscaped();
+                return backref;
+            } else {
+                return PNone.NONE;
             }
-        }
-
-        private static PFrame materialize(VirtualFrame frame, Node inliningTarget, ReadCallerFrameNode readCallerFrameNode, PFrame.Reference backref, InlinedConditionProfile notMaterialized) {
-            if (notMaterialized.profile(inliningTarget, backref.getPyFrame() == null)) {
-                // Special case: the backref's PFrame object is not yet available; this is because
-                // the frame is still on the stack. So we need to find and materialize it.
-                for (int i = 0;; i++) {
-                    PFrame caller = readCallerFrameNode.executeWith(frame, i);
-                    if (caller == null) {
-                        break;
-                    } else if (caller.getRef() == backref) {
-                        // now, the PFrame object is available since the readCallerFrameNode
-                        // materialized it
-                        assert backref.getPyFrame() != null;
-                        return caller;
-                    }
-                }
-                assert false : "could not find frame of backref on the stack";
-            }
-            return backref.getPyFrame();
         }
 
         @NeverDefault

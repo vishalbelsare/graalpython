@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -65,9 +65,9 @@ import static com.oracle.graal.python.nodes.ErrorMessages.INVALID_FILTER;
 import static com.oracle.graal.python.nodes.ErrorMessages.INVALID_FILTER_CHAIN_FOR_FORMAT;
 import static com.oracle.graal.python.nodes.ErrorMessages.VALUE_TOO_LARGE_TO_FIT_INTO_INDEX;
 import static com.oracle.graal.python.nodes.StringLiterals.T_ID;
-import static com.oracle.graal.python.runtime.NFILZMASupport.LZMA_ID_ERROR;
-import static com.oracle.graal.python.runtime.NFILZMASupport.LZMA_PRESET_ERROR;
-import static com.oracle.graal.python.runtime.NFILZMASupport.MAX_OPTS_INDEX;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.LZMA_ID_ERROR;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.LZMA_PRESET_ERROR;
+import static com.oracle.graal.python.runtime.NativeLZMASupport.MAX_OPTS_INDEX;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
@@ -117,8 +117,7 @@ import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
 import com.oracle.graal.python.nodes.util.CastToJavaLongLossyNode;
-import com.oracle.graal.python.runtime.NFILZMASupport;
-import com.oracle.graal.python.runtime.NativeLibrary;
+import com.oracle.graal.python.runtime.NativeLZMASupport;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.util.OverflowException;
@@ -203,13 +202,13 @@ public class LZMANodes {
 
         @Specialization
         long ll(long l,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             if (l < 0) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.CANT_CONVERT_NEG_INT_TO_UNSIGNED);
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.CANT_CONVERT_NEG_INT_TO_UNSIGNED);
             }
             if (l > MAX_UINT32 && with32BitLimit) {
-                throw raiseNode.get(inliningTarget).raise(OverflowError, ErrorMessages.VALUE_TOO_LARGE_FOR_UINT32);
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.VALUE_TOO_LARGE_FOR_UINT32);
             }
             return l;
         }
@@ -217,13 +216,13 @@ public class LZMANodes {
         @Specialization
         @SuppressWarnings("truffle-static-method")
         long o(Object o,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CastToJavaLongExactNode cast,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             try {
                 return ll(cast.execute(inliningTarget, o), inliningTarget, raiseNode);
             } catch (CannotCastException e) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, INTEGER_REQUIRED);
+                throw raiseNode.raise(inliningTarget, TypeError, INTEGER_REQUIRED);
             }
         }
 
@@ -239,31 +238,31 @@ public class LZMANodes {
     }
 
     @ImportStatic(PGuards.class)
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 48 -> 30
+    @GenerateInline(false)       // footprint reduction 48 -> 30
     public abstract static class GetOptionsDict extends Node {
         public abstract HashingStorage execute(VirtualFrame frame, Object dict);
 
         @Specialization
         static HashingStorage fast(VirtualFrame frame, PDict dict,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("getItem") @Cached HashingStorageGetItem getItem,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             HashingStorage storage = dict.getDictStorage();
             if (!getItem.hasKey(frame, inliningTarget, storage, T_ID)) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, FILTER_SPECIFIER_MUST_HAVE);
+                throw raiseNode.raise(inliningTarget, ValueError, FILTER_SPECIFIER_MUST_HAVE);
             }
             return storage;
         }
 
         @Specialization(guards = "!isDict(object)")
         static HashingStorage slow(VirtualFrame frame, Object object,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("getItem") @Cached HashingStorageGetItem getItem,
                         @Cached GetDictIfExistsNode getDict,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             PDict dict = getDict.execute(object);
             if (dict == null) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, FILTER_SPEC_MUST_BE_DICT);
+                throw raiseNode.raise(inliningTarget, TypeError, FILTER_SPEC_MUST_BE_DICT);
             }
             return fast(frame, dict, inliningTarget, getItem, raiseNode);
         }
@@ -292,23 +291,23 @@ public class LZMANodes {
                         @Cached CastToJavaLongLossyNode toLong,
                         @Cached InlinedConditionProfile errProfile,
                         @Cached HashingStorageGetItem getItem,
-                        @Cached PRaiseNode.Lazy raise,
-                        @Cached(inline = false) TruffleString.EqualNode equalNode) {
+                        @Cached PRaiseNode raise,
+                        @Cached TruffleString.EqualNode equalNode) {
             Object key = itKey.execute(inliningTarget, storage, it);
             TruffleString skey = strNode.execute(frame, inliningTarget, key);
             int idx = getOptionIndex(skey, s, equalNode);
             if (errProfile.profile(inliningTarget, idx == -1)) {
-                throw raise.get(inliningTarget).raise(ValueError, ErrorMessages.INVALID_FILTER_SPECIFIED_FOR_FILTER, s.filterType);
+                throw raise.raise(inliningTarget, ValueError, ErrorMessages.INVALID_FILTER_SPECIFIED_FOR_FILTER, s.filterType);
             }
             long l = toLong.execute(inliningTarget, getItem.execute(inliningTarget, s.dictStorage, skey));
             if (errProfile.profile(inliningTarget, l < 0)) {
-                throw raise.get(inliningTarget).raise(OverflowError, ErrorMessages.CANT_CONVERT_NEG_INT_TO_UNSIGNED);
+                throw raise.raise(inliningTarget, OverflowError, ErrorMessages.CANT_CONVERT_NEG_INT_TO_UNSIGNED);
             }
             if (errProfile.profile(inliningTarget, l > MAX_UINT32 && idx > 0) /*
                                                                                * filters are special
                                                                                * case
                                                                                */) {
-                throw raise.get(inliningTarget).raise(OverflowError, ErrorMessages.VALUE_TOO_LARGE_FOR_UINT32);
+                throw raise.raise(inliningTarget, OverflowError, ErrorMessages.VALUE_TOO_LARGE_FOR_UINT32);
             }
             s.options[idx] = l;
             return s;
@@ -408,20 +407,20 @@ public class LZMANodes {
     }
 
     // corresponds to 'lzma_filter_converter' in '_lzmamodule.c'
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 108 -> 92
+    @GenerateInline(false)       // footprint reduction 108 -> 92
     public abstract static class LZMAFilterConverter extends Node {
 
         public abstract long[] execute(VirtualFrame frame, Object spec);
 
         @Specialization
         static long[] converter(VirtualFrame frame, Object spec,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached ForEachOption getOptions,
                         @Cached CastToJavaLongLossyNode toLong,
                         @Cached GetOptionsDict getOptionsDict,
                         @Cached HashingStorageGetItem getItem,
                         @Cached HashingStorageForEach forEachNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             HashingStorage dict = getOptionsDict.execute(frame, spec);
             Object idObj = getItem.execute(inliningTarget, dict, T_ID);
             long id = toLong.execute(inliningTarget, idObj);
@@ -451,7 +450,7 @@ public class LZMANodes {
                     state = new OptionsState("BCJ", BCJOption.values(), options, dict);
                     break;
                 default:
-                    throw raiseNode.get(inliningTarget).raise(ValueError, INVALID_FILTER, id);
+                    throw raiseNode.raise(inliningTarget, ValueError, INVALID_FILTER, id);
             }
             options[0] = id;
             forEachNode.execute(frame, inliningTarget, dict, getOptions, state);
@@ -460,23 +459,23 @@ public class LZMANodes {
     }
 
     // corresponds to 'parse_filter_chain_spec' in '_lzmamodule.c'
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 88 -> 69
+    @GenerateInline(false)       // footprint reduction 88 -> 69
     public abstract static class LZMAParseFilterChain extends Node {
 
         public abstract long[][] execute(VirtualFrame frame, Object filterSpecs);
 
         @Specialization
         long[][] parseFilter(VirtualFrame frame, Object filterSpecs,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached PyObjectGetItem getItemNode,
                         @Cached LZMAFilterConverter converter,
                         @Cached SequenceNodes.CheckIsSequenceNode checkIsSequenceNode,
                         @Cached PyObjectSizeNode sizeNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             checkIsSequenceNode.execute(inliningTarget, filterSpecs);
             int numFilters = sizeNode.execute(frame, inliningTarget, filterSpecs);
             if (numFilters > LZMA_FILTERS_MAX) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.TOO_MAMNY_FILTERS_LZMA_SUPPORTS_MAX_S, LZMA_FILTERS_MAX);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.TOO_MAMNY_FILTERS_LZMA_SUPPORTS_MAX_S, LZMA_FILTERS_MAX);
             }
             long[][] filters = new long[numFilters][0];
             for (int i = 0; i < numFilters; i++) {
@@ -486,49 +485,42 @@ public class LZMANodes {
         }
     }
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 40 -> 21
+    @GenerateInline(false)       // footprint reduction 40 -> 21
     protected abstract static class NativeFilterChain extends Node {
 
-        public abstract void execute(VirtualFrame frame, Object lzmast, PythonContext context, Object filterSpecs);
+        public abstract void execute(VirtualFrame frame, long lzmast, PythonContext context, Object filterSpecs);
 
         @Specialization
-        static void parseFilterChainSpec(VirtualFrame frame, Object lzmast, PythonContext context, Object filterSpecs,
-                        @Bind("this") Node inliningTarget,
-                        @Cached NativeLibrary.InvokeNativeFunction setFilterSpecLZMA,
-                        @Cached NativeLibrary.InvokeNativeFunction setFilterSpecDelta,
-                        @Cached NativeLibrary.InvokeNativeFunction setFilterSpecBCJ,
+        static void parseFilterChainSpec(VirtualFrame frame, long lzmast, PythonContext context, Object filterSpecs,
+                        @Bind Node inliningTarget,
                         @Cached LZMAParseFilterChain parseFilterChain,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             long[][] filters = parseFilterChain.execute(frame, filterSpecs);
             for (int i = 0; i < filters.length; i++) {
-                setFilterOptions(inliningTarget, lzmast, filters[i], i, context, setFilterSpecLZMA, setFilterSpecDelta, setFilterSpecBCJ, raiseNode);
+                setFilterOptions(inliningTarget, lzmast, filters[i], i, context, raiseNode);
             }
         }
 
-        private static void setFilterOptions(Node inliningTarget, Object lzmast, long[] filter, int fidx, PythonContext context,
-                        NativeLibrary.InvokeNativeFunction setFilterSpecLZMA,
-                        NativeLibrary.InvokeNativeFunction setFilterSpecDelta,
-                        NativeLibrary.InvokeNativeFunction setFilterSpecBCJ,
-                        PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = context.getNFILZMASupport();
-            Object opts = context.getEnv().asGuestValue(filter);
+        private static void setFilterOptions(Node inliningTarget, long lzmast, long[] filter, int fidx, PythonContext context,
+                        PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = context.getNativeLZMASupport();
             int err;
             long id = filter[0];
             switch (LZMAFilter.from(id)) {
                 case LZMA_FILTER_LZMA1:
                 case LZMA_FILTER_LZMA2:
                     assert filter.length == 10;
-                    err = lzmaSupport.setFilterSpecLZMA(lzmast, fidx, opts, setFilterSpecLZMA);
+                    err = lzmaSupport.setFilterSpecLZMA(lzmast, fidx, filter);
                     if (err != LZMA_OK) {
                         if (err == LZMA_PRESET_ERROR) {
-                            throw raiseNode.get(inliningTarget).raise(LZMAError, INVALID_COMPRESSION_PRESET, filter[LZMAOption.preset.ordinal()]);
+                            throw raiseNode.raise(inliningTarget, LZMAError, INVALID_COMPRESSION_PRESET, filter[LZMAOption.preset.ordinal()]);
                         }
                         errorHandling(inliningTarget, err, raiseNode);
                     }
                     return;
                 case LZMA_FILTER_DELTA:
                     assert filter.length == 2;
-                    err = lzmaSupport.setFilterSpecDelta(lzmast, fidx, opts, setFilterSpecDelta);
+                    err = lzmaSupport.setFilterSpecDelta(lzmast, fidx, filter);
                     if (err != LZMA_OK) {
                         errorHandling(inliningTarget, err, raiseNode);
                     }
@@ -540,13 +532,13 @@ public class LZMANodes {
                 case LZMA_FILTER_ARMTHUMB:
                 case LZMA_FILTER_SPARC:
                     assert filter.length == 2;
-                    err = lzmaSupport.setFilterSpecBCJ(lzmast, fidx, opts, setFilterSpecBCJ);
+                    err = lzmaSupport.setFilterSpecBCJ(lzmast, fidx, filter);
                     if (err != LZMA_OK) {
                         errorHandling(inliningTarget, err, raiseNode);
                     }
                     return;
             }
-            throw raiseNode.get(inliningTarget).raise(ValueError, INVALID_FILTER, id);
+            throw raiseNode.raise(inliningTarget, ValueError, INVALID_FILTER, id);
         }
     }
 
@@ -559,14 +551,14 @@ public class LZMANodes {
         @Specialization
         static FilterOptions[] parseFilterChainSpec(VirtualFrame frame, Node inliningTarget, Object filterSpecs,
                         @Cached(inline = false) LZMAParseFilterChain parseFilterChain,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             long[][] filters = parseFilterChain.execute(frame, filterSpecs);
             FilterOptions[] optionsChain = new FilterOptions[filters.length];
             for (int i = 0; i < filters.length; i++) {
                 try {
                     optionsChain[i] = getFilterOptions(filters[i], inliningTarget);
                 } catch (UnsupportedOptionsException e) {
-                    throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.M, e);
+                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.M, e);
                 }
 
             }
@@ -592,7 +584,7 @@ public class LZMANodes {
                     try {
                         lzma2Options = new LZMA2Options(filter[1]);
                     } catch (UnsupportedOptionsException e) {
-                        throw PRaiseNode.raiseUncached(raisingNode, LZMAError, INVALID_COMPRESSION_PRESET, filter[LZMAOption.preset.ordinal()]);
+                        throw PRaiseNode.raiseStatic(raisingNode, LZMAError, INVALID_COMPRESSION_PRESET, filter[LZMAOption.preset.ordinal()]);
                     }
                     for (int j = 2; j < filter.length; j++) {
                         setLZMAOption(lzma2Options, j, filter[j]);
@@ -643,7 +635,7 @@ public class LZMANodes {
                     }
                     return sparcOptions;
             }
-            throw PRaiseNode.raiseUncached(raisingNode, ValueError, INVALID_FILTER, longFilter[0]);
+            throw PRaiseNode.raiseStatic(raisingNode, ValueError, INVALID_FILTER, longFilter[0]);
         }
 
         @TruffleBoundary
@@ -680,42 +672,38 @@ public class LZMANodes {
         }
     }
 
-    @ImportStatic(LZMAModuleBuiltins.class)
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 60 -> 42
+    @ImportStatic({LZMAModuleBuiltins.class, PGuards.class})
+    @GenerateInline(false)       // footprint reduction 60 -> 42
     public abstract static class LZMACompressInit extends Node {
 
         public abstract void execute(VirtualFrame frame, LZMACompressor self, int format, long preset, Object filters);
 
         @Specialization(guards = "format == FORMAT_XZ")
         static void xz(LZMACompressor.Native self, @SuppressWarnings("unused") int format, long preset, @SuppressWarnings("unused") PNone filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaEasyEncoder,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
-            int lzret = lzmaSupport.lzmaEasyEncoder(lzmast, preset, self.getCheck(), lzmaEasyEncoder);
+            int lzret = lzmaSupport.lzmaEasyEncoder(lzmast, preset, self.getCheck());
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
         }
 
-        @Specialization(guards = "format == FORMAT_XZ")
+        @Specialization(guards = {"format == FORMAT_XZ", "!isPNone(filters)"})
         static void xz(VirtualFrame frame, LZMACompressor.Native self, @SuppressWarnings("unused") int format, @SuppressWarnings("unused") long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaStreamEncoder,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached NativeFilterChain filterChain,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             PythonContext ctxt = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = ctxt.getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+            NativeLZMASupport lzmaSupport = ctxt.getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
             filterChain.execute(frame, lzmast, ctxt, filters);
-            int lzret = lzmaSupport.lzmaStreamEncoder(lzmast, self.getCheck(), lzmaStreamEncoder);
+            int lzret = lzmaSupport.lzmaStreamEncoder(lzmast, self.getCheck());
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -724,35 +712,31 @@ public class LZMANodes {
         @SuppressWarnings("unused")
         @Specialization(guards = "format == FORMAT_ALONE")
         static void alone(LZMACompressor.Native self, int format, long preset, PNone filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaAloneEncoderPreset,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
-            int lzret = lzmaSupport.lzmaAloneEncoderPreset(lzmast, preset, lzmaAloneEncoderPreset);
+            int lzret = lzmaSupport.lzmaAloneEncoderPreset(lzmast, preset);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
         }
 
         @SuppressWarnings("unused")
-        @Specialization(guards = "format == FORMAT_ALONE")
+        @Specialization(guards = {"format == FORMAT_ALONE", "!isPNone(filters)"})
         static void alone(VirtualFrame frame, LZMACompressor.Native self, int format, long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaAloneEncoder,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached NativeFilterChain filterChain,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             PythonContext ctxt = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = ctxt.getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+            NativeLZMASupport lzmaSupport = ctxt.getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
             filterChain.execute(frame, lzmast, ctxt, filters);
-            int lzret = lzmaSupport.lzmaAloneEncoder(lzmast, lzmaAloneEncoder);
+            int lzret = lzmaSupport.lzmaAloneEncoder(lzmast);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -761,18 +745,16 @@ public class LZMANodes {
         @SuppressWarnings("unused")
         @Specialization(guards = "format == FORMAT_RAW")
         static void raw(VirtualFrame frame, LZMACompressor.Native self, int format, long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaRawEncoder,
+                        @Bind Node inliningTarget,
                         @Exclusive @Cached NativeFilterChain filterChain,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             PythonContext ctxt = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = ctxt.getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+            NativeLZMASupport lzmaSupport = ctxt.getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
             filterChain.execute(frame, lzmast, ctxt, filters);
-            int lzret = lzmaSupport.lzmaRawEncoder(lzmast, lzmaRawEncoder);
+            int lzret = lzmaSupport.lzmaRawEncoder(lzmast);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -780,79 +762,78 @@ public class LZMANodes {
 
         @Specialization(guards = "format == FORMAT_XZ")
         static void xz(LZMACompressor.Java self, @SuppressWarnings("unused") int format, long preset, @SuppressWarnings("unused") PNone filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached PRaiseNode raiseNode) {
             try {
                 self.lzmaEasyEncoder(parseLZMAOptions(preset));
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.ValueError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, PythonErrorType.ValueError, ErrorMessages.M, e);
             }
         }
 
-        @Specialization(guards = "format == FORMAT_XZ")
+        @Specialization(guards = {"format == FORMAT_XZ", "!isPNone(filters)"})
         static void xz(VirtualFrame frame, LZMACompressor.Java self, @SuppressWarnings("unused") int format, @SuppressWarnings("unused") long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached JavaFilterChain filterChain,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             try {
                 self.lzmaStreamEncoder(filterChain.execute(frame, inliningTarget, filters));
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.M, e);
             }
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "format == FORMAT_ALONE")
         static void alone(LZMACompressor.Java self, int format, long preset, PNone filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached PRaiseNode raiseNode) {
             try {
                 self.lzmaAloneEncoder(parseLZMAOptions(preset));
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.M, e);
             }
         }
 
         @SuppressWarnings("unused")
-        @Specialization(guards = "format == FORMAT_ALONE")
+        @Specialization(guards = {"format == FORMAT_ALONE", "!isPNone(filters)"})
         static void alone(VirtualFrame frame, LZMACompressor.Java self, int format, long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached JavaFilterChain filterChain,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             FilterOptions[] optionsChain = filterChain.execute(frame, inliningTarget, filters);
             if (optionsChain.length != 1 && !(optionsChain[0] instanceof LZMA2Options)) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, INVALID_FILTER_CHAIN_FOR_FORMAT);
+                throw raiseNode.raise(inliningTarget, ValueError, INVALID_FILTER_CHAIN_FOR_FORMAT);
             }
             try {
                 self.lzmaAloneEncoder((LZMA2Options) optionsChain[0]);
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.M, e);
             }
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "format == FORMAT_RAW")
         static void raw(VirtualFrame frame, LZMACompressor.Java self, int format, long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared @Cached JavaFilterChain filterChain,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                        @Shared @Cached PRaiseNode raiseNode) {
             FilterOptions[] optionsChain = filterChain.execute(frame, inliningTarget, filters);
             if (optionsChain.length != 1 && !(optionsChain[0] instanceof LZMA2Options)) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, INVALID_FILTER_CHAIN_FOR_FORMAT);
+                throw raiseNode.raise(inliningTarget, ValueError, INVALID_FILTER_CHAIN_FOR_FORMAT);
             }
             try {
                 self.lzmaRawEncoder(optionsChain);
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.M, e);
             }
         }
 
         @Fallback
         @SuppressWarnings("unused")
         static void error(VirtualFrame frame, LZMACompressor self, int format, long preset, Object filters,
-                        @Bind("this") Node inliningTarget,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            throw raiseNode.get(inliningTarget).raise(ValueError, INVALID_CONTAINER_FORMAT, format);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, INVALID_CONTAINER_FORMAT, format);
         }
     }
 
@@ -873,13 +854,11 @@ public class LZMANodes {
 
         @Specialization
         static byte[] nativeCompress(Node inliningTarget, LZMACompressor.Native self, PythonContext context, byte[] bytes, int len, int action,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction compress,
                         @Cached GetOutputNativeBufferNode getBuffer,
                         @Cached InlinedConditionProfile errProfile,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = context.getNFILZMASupport();
-            Object inGuest = context.getEnv().asGuestValue(bytes);
-            int err = lzmaSupport.compress(self.getLzs(), inGuest, len, action, INITIAL_BUFFER_SIZE, compress);
+                        @Exclusive @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = context.getNativeLZMASupport();
+            int err = lzmaSupport.compress(self.getLzs(), bytes, len, action, INITIAL_BUFFER_SIZE);
             if (errProfile.profile(inliningTarget, err != LZMA_OK)) {
                 errorHandling(inliningTarget, err, raiseNode);
             }
@@ -889,32 +868,32 @@ public class LZMANodes {
         @SuppressWarnings("unused")
         @Specialization(guards = "action == LZMA_RUN")
         static byte[] javaCompress(Node inliningTarget, LZMACompressor.Java self, PythonContext context, byte[] bytes, int len, int action,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             try {
                 self.write(bytes, 0, len);
                 byte[] result = self.getByteArray();
                 self.resetBuffer();
                 return result;
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.M, e);
             }
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "action == LZMA_FINISH")
         static byte[] javaFlush(Node inliningTarget, LZMACompressor.Java self, PythonContext context, byte[] bytes, int len, int action,
-                        @Exclusive @Cached PRaiseNode.Lazy raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             try {
                 self.finish();
                 return self.getByteArray();
             } catch (IOException e) {
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.M, e);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.M, e);
             }
         }
     }
 
     @ImportStatic(LZMAModuleBuiltins.class)
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 40 -> 21
+    @GenerateInline(false)       // footprint reduction 40 -> 21
     public abstract static class LZMADecompressInit extends Node {
 
         public abstract void execute(VirtualFrame frame, LZMADecompressor self, int format, Object memlimit);
@@ -926,16 +905,14 @@ public class LZMANodes {
 
         @Specialization(guards = "format == FORMAT_AUTO")
         static void auto(LZMADecompressor.Native self, @SuppressWarnings("unused") int format, int memlimit,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaAutoDecoder,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
             int decoderFlags = LZMA_TELL_ANY_CHECK | LZMA_TELL_NO_CHECK;
-            int lzret = lzmaSupport.lzmaAutoDecoder(lzmast, memlimit, decoderFlags, lzmaAutoDecoder);
+            int lzret = lzmaSupport.lzmaAutoDecoder(lzmast, memlimit, decoderFlags);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -943,16 +920,14 @@ public class LZMANodes {
 
         @Specialization(guards = "format == FORMAT_XZ")
         static void xz(LZMADecompressor.Native self, @SuppressWarnings("unused") int format, int memlimit,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaStreamDecoder,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
             int decoderFlags = LZMA_TELL_ANY_CHECK | LZMA_TELL_NO_CHECK;
-            int lzret = lzmaSupport.lzmaStreamDecoder(lzmast, memlimit, decoderFlags, lzmaStreamDecoder);
+            int lzret = lzmaSupport.lzmaStreamDecoder(lzmast, memlimit, decoderFlags);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -960,15 +935,13 @@ public class LZMANodes {
 
         @Specialization(guards = "format == FORMAT_ALONE")
         static void alone(LZMADecompressor.Native self, @SuppressWarnings("unused") int format, int memlimit,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("cs") @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Exclusive @Cached NativeLibrary.InvokeNativeFunction lzmaAloneDecoder,
+                        @Bind Node inliningTarget,
                         @Shared @Cached InlinedConditionProfile errProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+                        @Shared @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = PythonContext.get(inliningTarget).getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
-            int lzret = lzmaSupport.lzmaAloneDecoder(lzmast, memlimit, lzmaAloneDecoder);
+            int lzret = lzmaSupport.lzmaAloneDecoder(lzmast, memlimit);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -985,23 +958,21 @@ public class LZMANodes {
         @SuppressWarnings("unused")
         @Specialization
         static void rawJava(VirtualFrame frame, LZMADecompressor.Java self, Object filters,
-                        @Cached(inline = false) PRaiseNode raiseNode) {
-            throw raiseNode.raise(SystemError, T_LZMA_JAVA_ERROR);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, T_LZMA_JAVA_ERROR);
         }
 
         @Specialization
         static void rawNative(VirtualFrame frame, Node inliningTarget, LZMADecompressor.Native self, Object filters,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction createStream,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction lzmaRawDecoder,
                         @Cached(inline = false) NativeFilterChain filterChain,
                         @Cached InlinedConditionProfile errProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             PythonContext context = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = context.getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+            NativeLZMASupport lzmaSupport = context.getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             self.init(lzmast, lzmaSupport);
             filterChain.execute(frame, lzmast, context, filters);
-            int lzret = lzmaSupport.lzmaRawDecoder(lzmast, lzmaRawDecoder);
+            int lzret = lzmaSupport.lzmaRawDecoder(lzmast);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -1110,29 +1081,24 @@ public class LZMANodes {
 
         @Specialization
         static byte[] nativeInternalDecompress(Node inliningTarget, LZMADecompressor.Native self, int maxLength,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction decompress,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction getLzsAvailIn,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction getLzsAvailOut,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction getNextInIndex,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction getLzsCheck,
                         @Cached GetOutputNativeBufferNode getBuffer,
-                        @Exclusive @Cached PRaiseNode.Lazy lazyRaiseNode,
+                        @Exclusive @Cached PRaiseNode lazyRaiseNode,
                         @Cached InlinedConditionProfile errProfile) {
             PythonContext context = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = context.getNFILZMASupport();
-            Object inGuest = context.getEnv().asGuestValue(self.getNextIn());
+            NativeLZMASupport lzmaSupport = context.getNativeLZMASupport();
+            byte[] inGuest = self.getNextIn();
             int offset = self.getNextInIndex();
-            int err = lzmaSupport.decompress(self.getLzs(), inGuest, offset, maxLength, INITIAL_BUFFER_SIZE, self.getLzsAvailIn(), decompress);
-            long nextInIdx = lzmaSupport.getNextInIndex(self.getLzs(), getNextInIndex);
-            long lzsAvailIn = lzmaSupport.getLzsAvailIn(self.getLzs(), getLzsAvailIn);
-            long lzsAvailOut = lzmaSupport.getLzsAvailOut(self.getLzs(), getLzsAvailOut);
-            self.setCheck(lzmaSupport.getLzsCheck(self.getLzs(), getLzsCheck));
+            int err = lzmaSupport.decompress(self.getLzs(), inGuest, offset, maxLength, INITIAL_BUFFER_SIZE, self.getLzsAvailIn());
+            long nextInIdx = lzmaSupport.getNextInIndex(self.getLzs());
+            long lzsAvailIn = lzmaSupport.getLzsAvailIn(self.getLzs());
+            long lzsAvailOut = lzmaSupport.getLzsAvailOut(self.getLzs());
+            self.setCheck(lzmaSupport.getLzsCheck(self.getLzs()));
             try {
                 self.setNextInIndex(nextInIdx);
                 self.setLzsAvailIn(lzsAvailIn);
                 self.setLzsAvailOut(lzsAvailOut);
             } catch (OverflowException of) {
-                throw lazyRaiseNode.get(inliningTarget).raise(SystemError, VALUE_TOO_LARGE_TO_FIT_INTO_INDEX);
+                throw lazyRaiseNode.raise(inliningTarget, SystemError, VALUE_TOO_LARGE_TO_FIT_INTO_INDEX);
             }
             if (err == LZMA_STREAM_END) {
                 self.setEOF();
@@ -1145,7 +1111,7 @@ public class LZMANodes {
         @TruffleBoundary
         @Specialization
         static byte[] javaInternalDecompress(Node inliningTarget, LZMADecompressor.Java self, int maxLength,
-                        @Exclusive @Cached PRaiseNode.Lazy lazyRaiseNode) {
+                        @Exclusive @Cached PRaiseNode lazyRaiseNode) {
             if (maxLength == 0) {
                 return PythonUtils.EMPTY_BYTE_ARRAY;
             }
@@ -1191,7 +1157,7 @@ public class LZMANodes {
             } catch (EOFException eof) {
                 self.setEOF();
             } catch (IOException e) {
-                PRaiseNode.raiseUncached(inliningTarget, OSError, e);
+                PRaiseNode.raiseStatic(inliningTarget, OSError, e);
             }
             byte[] ret = toByteArray(baos);
             self.decompressedData(ret.length);
@@ -1225,27 +1191,24 @@ public class LZMANodes {
     @GenerateCached(false)
     public abstract static class GetOutputNativeBufferNode extends Node {
 
-        public abstract byte[] execute(Node inliningTarget, Object lzmast, PythonContext context);
+        public abstract byte[] execute(Node inliningTarget, long lzmast, PythonContext context);
 
         @Specialization
-        static byte[] getBuffer(Node inliningTarget, Object lzmast, PythonContext context,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction getBufferSize,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction getBuffer,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            NFILZMASupport lzmaSupport = context.getNFILZMASupport();
+        static byte[] getBuffer(Node inliningTarget, long lzmast, PythonContext context,
+                        @Cached PRaiseNode raiseNode) {
+            NativeLZMASupport lzmaSupport = context.getNativeLZMASupport();
             int size;
             try {
-                size = PInt.intValueExact(lzmaSupport.getOutputBufferSize(lzmast, getBufferSize));
+                size = PInt.intValueExact(lzmaSupport.getOutputBufferSize(lzmast));
             } catch (OverflowException of) {
-                throw raiseNode.get(inliningTarget).raise(SystemError, VALUE_TOO_LARGE_TO_FIT_INTO_INDEX);
+                throw raiseNode.raise(inliningTarget, SystemError, VALUE_TOO_LARGE_TO_FIT_INTO_INDEX);
             }
             if (size == 0) {
                 return PythonUtils.EMPTY_BYTE_ARRAY;
             }
             byte[] resultArray = new byte[size];
-            Object out = context.getEnv().asGuestValue(resultArray);
             /* this will clear the native output once retrieved */
-            lzmaSupport.getOutputBuffer(lzmast, out, getBuffer);
+            lzmaSupport.getOutputBuffer(lzmast, resultArray);
             return resultArray;
         }
     }
@@ -1258,13 +1221,12 @@ public class LZMANodes {
 
         @NonIdempotent
         protected boolean useNativeContext() {
-            return PythonContext.get(this).getNFILZMASupport().isAvailable();
+            return PythonContext.get(this).getNativeLZMASupport().isAvailable();
         }
 
         @Specialization(guards = "useNativeContext()")
-        static boolean checkNative(Node inliningTarget, int checkId,
-                        @Cached(inline = false) NativeLibrary.InvokeNativeFunction checkIsSupported) {
-            return PythonContext.get(inliningTarget).getNFILZMASupport().checkIsSupported(checkId, checkIsSupported) == 1;
+        static boolean checkNative(Node inliningTarget, int checkId) {
+            return PythonContext.get(inliningTarget).getNativeLZMASupport().checkIsSupported(checkId) == 1;
         }
 
         @TruffleBoundary
@@ -1279,78 +1241,72 @@ public class LZMANodes {
         }
     }
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 48 -> 29
+    @GenerateInline(false)       // footprint reduction 48 -> 29
     public abstract static class EncodeFilterProperties extends Node {
 
         public abstract byte[] execute(VirtualFrame frame, Object filter);
 
         @NonIdempotent
         protected boolean useNativeContext() {
-            return PythonContext.get(this).getNFILZMASupport().isAvailable();
+            return PythonContext.get(this).getNativeLZMASupport().isAvailable();
         }
 
         @Specialization(guards = "useNativeContext()")
         static byte[] encodeNative(VirtualFrame frame, Object filter,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached LZMAFilterConverter filterConverter,
                         @Cached GetOutputNativeBufferNode getBuffer,
-                        @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Cached NativeLibrary.InvokeNativeFunction encodeFilter,
-                        @Cached NativeLibrary.InvokeNativeFunction deallocateStream,
                         @Cached InlinedConditionProfile errProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             PythonContext ctxt = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = ctxt.getNFILZMASupport();
-            Object lzmast = lzmaSupport.createStream(createStream);
+            NativeLZMASupport lzmaSupport = ctxt.getNativeLZMASupport();
+            long lzmast = lzmaSupport.createStream();
             long[] opts = filterConverter.execute(frame, filter);
-            int lzret = lzmaSupport.encodeFilter(lzmast, ctxt.getEnv().asGuestValue(opts), encodeFilter);
+            int lzret = lzmaSupport.encodeFilter(lzmast, opts);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
-                lzmaSupport.deallocateStream(lzmast, deallocateStream);
+                lzmaSupport.deallocateStream(lzmast);
                 if (lzret == LZMA_PRESET_ERROR) {
-                    throw raiseNode.get(inliningTarget).raise(LZMAError, INVALID_COMPRESSION_PRESET, opts[LZMAOption.preset.ordinal()]);
+                    throw raiseNode.raise(inliningTarget, LZMAError, INVALID_COMPRESSION_PRESET, opts[LZMAOption.preset.ordinal()]);
                 }
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
             byte[] encoded = getBuffer.execute(inliningTarget, lzmast, ctxt);
-            lzmaSupport.deallocateStream(lzmast, deallocateStream);
+            lzmaSupport.deallocateStream(lzmast);
             return encoded;
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "!useNativeContext()")
         static byte[] encodeJava(Object filter,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(SystemError, T_LZMA_JAVA_ERROR);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, T_LZMA_JAVA_ERROR);
         }
     }
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 52 -> 34
+    @GenerateInline(false)       // footprint reduction 52 -> 34
     public abstract static class DecodeFilterProperties extends Node {
 
         public abstract void execute(VirtualFrame frame, long id, byte[] encoded, PDict dict);
 
         @NonIdempotent
         protected boolean useNativeContext() {
-            return PythonContext.get(this).getNFILZMASupport().isAvailable();
+            return PythonContext.get(this).getNativeLZMASupport().isAvailable();
         }
 
         @Specialization(guards = "useNativeContext()")
         static void decodeNative(VirtualFrame frame, long id, byte[] encoded, PDict dict,
-                        @Bind("this") Node inliningTarget,
-                        @Cached NativeLibrary.InvokeNativeFunction decodeFilter,
+                        @Bind Node inliningTarget,
                         @Cached HashingStorageSetItem setItem,
                         @Cached InlinedConditionProfile errProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             PythonContext ctxt = PythonContext.get(inliningTarget);
-            NFILZMASupport lzmaSupport = ctxt.getNFILZMASupport();
+            NativeLZMASupport lzmaSupport = ctxt.getNativeLZMASupport();
             long[] opts = new long[MAX_OPTS_INDEX];
             int len = encoded.length;
-            Object encodedProps = ctxt.getEnv().asGuestValue(encoded);
-            Object filter = ctxt.getEnv().asGuestValue(opts);
-            int lzret = lzmaSupport.decodeFilter(id, encodedProps, len, filter, decodeFilter);
+            int lzret = lzmaSupport.decodeFilter(id, encoded, len, opts);
             if (errProfile.profile(inliningTarget, lzret != LZMA_OK)) {
                 if (lzret == LZMA_ID_ERROR) {
-                    throw raiseNode.get(inliningTarget).raise(LZMAError, INVALID_FILTER, opts[LZMAOption.id.ordinal()]);
+                    throw raiseNode.raise(inliningTarget, LZMAError, INVALID_FILTER, opts[LZMAOption.id.ordinal()]);
                 }
                 errorHandling(inliningTarget, lzret, raiseNode);
             }
@@ -1360,8 +1316,8 @@ public class LZMANodes {
         @SuppressWarnings("unused")
         @Specialization(guards = "!useNativeContext()")
         static void decodeJava(long id, byte[] encoded, PDict dict,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(SystemError, T_LZMA_JAVA_ERROR);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, SystemError, T_LZMA_JAVA_ERROR);
         }
 
         static void buildFilterSpec(VirtualFrame frame, Node inliningTarget, long[] opts, PDict dict, HashingStorageSetItem setItem) {
@@ -1386,7 +1342,11 @@ public class LZMANodes {
                 case LZMA_FILTER_ARM:
                 case LZMA_FILTER_ARMTHUMB:
                 case LZMA_FILTER_SPARC:
-                    addField(frame, inliningTarget, setItem, dict, BCJOption.start_offset.OptName(), opts[BCJOption.start_offset.ordinal()]);
+                    // reusing unused array field for checking if options is null
+                    int isOptionNil = BCJOption.start_offset.ordinal() + 1;
+                    if (opts[isOptionNil] == 0) {
+                        addField(frame, inliningTarget, setItem, dict, BCJOption.start_offset.OptName(), opts[BCJOption.start_offset.ordinal()]);
+                    }
                     break;
             }
         }
@@ -1435,7 +1395,7 @@ public class LZMANodes {
         }
     }
 
-    protected static int errorHandling(Node inliningTarget, int lzret, PRaiseNode.Lazy raiseNode) {
+    protected static int errorHandling(Node inliningTarget, int lzret, PRaiseNode raiseNode) {
         switch (lzret) {
             case LZMA_OK:
             case LZMA_GET_CHECK:
@@ -1443,23 +1403,23 @@ public class LZMANodes {
             case LZMA_STREAM_END:
                 return 0;
             case LZMA_UNSUPPORTED_CHECK:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.UNSUPPORTED_INTEGRITY_CHECK);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.UNSUPPORTED_INTEGRITY_CHECK);
             case LZMA_MEM_ERROR:
-                throw raiseNode.get(inliningTarget).raise(MemoryError);
+                throw raiseNode.raise(inliningTarget, MemoryError);
             case LZMA_MEMLIMIT_ERROR:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.MEM_USAGE_LIMIT_EXCEEDED);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.MEM_USAGE_LIMIT_EXCEEDED);
             case LZMA_FORMAT_ERROR:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.INPUT_FMT_NOT_SUPPORTED_BY_DECODER);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.INPUT_FMT_NOT_SUPPORTED_BY_DECODER);
             case LZMA_OPTIONS_ERROR:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.INVALID_UNSUPPORTED_OPTIONS);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.INVALID_UNSUPPORTED_OPTIONS);
             case LZMA_DATA_ERROR:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.CORRUPT_INPUT_DATA);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.CORRUPT_INPUT_DATA);
             case LZMA_BUF_ERROR:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.INSUFFICIENT_BUFFER_SPACE);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.INSUFFICIENT_BUFFER_SPACE);
             case LZMA_PROG_ERROR:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.INTERNAL_ERROR);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.INTERNAL_ERROR);
             default:
-                throw raiseNode.get(inliningTarget).raise(LZMAError, ErrorMessages.UNRECOGNIZED_ERROR_FROM_LIBLZMA, lzret);
+                throw raiseNode.raise(inliningTarget, LZMAError, ErrorMessages.UNRECOGNIZED_ERROR_FROM_LIBLZMA, lzret);
         }
     }
 }

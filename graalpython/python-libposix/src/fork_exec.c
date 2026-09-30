@@ -1,8 +1,32 @@
-/* Copyright (c) 2021, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2021, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
  */
+#ifdef _WIN32
+
+#include <errno.h>
+#include <stdint.h>
+
+__declspec(dllexport) int32_t fork_exec(
+            char *data, int64_t *offsets, int32_t offsetsLen, int32_t argsPos, int32_t envPos, int32_t cwdPos,
+            int32_t stdinRdFd, int32_t stdinWrFd,
+            int32_t stdoutRdFd, int32_t stdoutWrFd,
+            int32_t stderrRdFd, int32_t stderrWrFd,
+            int32_t errPipeRdFd, int32_t errPipeWrFd,
+            int32_t closeFds,
+            int32_t restoreSignals,
+            int32_t callSetsid,
+            int32_t pgidToSet,
+            int32_t allowVFork,
+            int32_t *fdsToKeep, int64_t fdsToKeepLen
+            ) {
+    errno = ENOSYS;
+    return -1;
+}
+
+#else
+
 #if defined(__gnu_linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1
 #endif
@@ -11,13 +35,35 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <assert.h>
+#include <string.h>
+#include <limits.h>
+#include <signal.h>
+
+#include "errno_capture.h"
 
 // These definitions emulate CPython's equivalents so that the copy&pasted code below works without too many changes
 #define HAVE_DIRFD 1
 #define HAVE_SETSID 1
+
+#if defined(__GNUC__) || defined(__clang__)
+#define Py_NO_INLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define Py_NO_INLINE __declspec(noinline)
+#else
+#define Py_NO_INLINE
+#endif
+
+#if defined(__linux__)
+/* If this is ever expanded to non-Linux platforms, verify what calls are
+ * allowed after vfork(). Ex: setsid() may be disallowed on macOS? */
+#define VFORK_USABLE 1
+#endif
 
 int32_t set_inheritable(int32_t fd, int32_t inheritable);
 
@@ -175,6 +221,47 @@ _close_fds_by_brute_force(long start_fd, int *fds_to_keep, ssize_t num_fds_to_ke
     }
 }
 
+#if defined(__linux__) && defined(SYS_getdents64)
+struct linux_dirent64 {
+    unsigned long long d_ino;
+    long long d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[256];
+};
+
+static void
+_close_open_fds_safe(long start_fd, int *fds_to_keep, ssize_t fds_to_keep_len)
+{
+    int fd_dir_fd = open(FD_DIR, O_RDONLY);
+    if (fd_dir_fd == -1) {
+        _close_fds_by_brute_force(start_fd, fds_to_keep, fds_to_keep_len);
+        return;
+    }
+
+    char buffer[sizeof(struct linux_dirent64)];
+    int bytes;
+    while ((bytes = syscall(SYS_getdents64, fd_dir_fd, (struct linux_dirent64 *)buffer, sizeof(buffer))) > 0) {
+        struct linux_dirent64 *entry;
+        int offset;
+        for (offset = 0; offset < bytes; offset += entry->d_reclen) {
+            int fd;
+            entry = (struct linux_dirent64 *)(buffer + offset);
+            if ((fd = _pos_int_from_ascii(entry->d_name)) < 0)
+                continue;
+            if (fd != fd_dir_fd && fd >= start_fd &&
+                !_is_fd_in_sorted_fd_sequence(fd, fds_to_keep, fds_to_keep_len)) {
+                close(fd);
+            }
+        }
+    }
+    close(fd_dir_fd);
+}
+
+#define _close_open_fds _close_open_fds_safe
+
+#else
+
 /* Close all open file descriptors from start_fd and higher.
  * Do not close any in the sorted py_fds_to_keep tuple.
  *
@@ -241,6 +328,36 @@ _close_open_fds_maybe_unsafe(long start_fd, int* fds_to_keep, ssize_t fds_to_kee
 
 #define _close_open_fds _close_open_fds_maybe_unsafe
 
+#endif
+
+#ifdef VFORK_USABLE
+static void
+reset_signal_handlers(const sigset_t *child_sigmask)
+{
+    struct sigaction sa_dfl = {.sa_handler = SIG_DFL};
+    for (int sig = 1; sig < _NSIG; sig++) {
+        if (sig == SIGKILL || sig == SIGSTOP) {
+            continue;
+        }
+        if (sigismember(child_sigmask, sig) == 1) {
+            continue;
+        }
+
+        struct sigaction sa;
+        if (sigaction(sig, NULL, &sa) == -1) {
+            continue;
+        }
+
+        void *h = (sa.sa_flags & SA_SIGINFO ? (void *)sa.sa_sigaction :
+                                              (void *)sa.sa_handler);
+        if (h == SIG_IGN || h == SIG_DFL) {
+            continue;
+        }
+        (void) sigaction(sig, &sa_dfl, NULL);
+    }
+}
+#endif
+
 /*
  * This function is code executed in the child process immediately after fork
  * to set things up and call exec().
@@ -251,8 +368,11 @@ _close_open_fds_maybe_unsafe(long start_fd, int* fds_to_keep, ssize_t fds_to_kee
  *
  * This restriction is documented at
  * http://www.opengroup.org/onlinepubs/009695399/functions/fork.html.
+ *
+ * If this function is called after vfork(), even more care must be taken.
+ * The child shares the parent's address space until execve() or _exit().
  */
-static void
+Py_NO_INLINE static void
 child_exec(char *const exec_array[],
            char *const argv[],
            char *const envp[],
@@ -263,12 +383,15 @@ child_exec(char *const exec_array[],
            int errpipe_read, int errpipe_write,
            int close_fds, int restore_signals,
            int call_setsid,
+           int pgid_to_set,
+           const void *child_sigmask,
            int *fds_to_keep,
            ssize_t fds_to_keep_len)
 {
-    int i, saved_errno, reached_preexec = 0;
+    int i, saved_errno;
     /* Buffer large enough to hold a hex integer.  We can't malloc. */
     char hex_errno[sizeof(saved_errno)*2+1];
+    const char *err_msg = "noexec";
 
     if (make_inheritable(fds_to_keep, fds_to_keep_len, errpipe_write) < 0)
         goto error;
@@ -326,18 +449,34 @@ child_exec(char *const exec_array[],
     /* We no longer manually close p2cread, c2pwrite, and errwrite here as
      * _close_open_fds takes care when it is not already non-inheritable. */
 
-    if (cwd)
-        POSIX_CALL(chdir(cwd));
+    if (cwd) {
+        if (chdir(cwd) == -1) {
+            err_msg = "noexec:chdir";
+            goto error;
+        }
+    }
 
     if (restore_signals)
         _Py_RestoreSignals();
+
+#ifdef VFORK_USABLE
+    if (child_sigmask) {
+        reset_signal_handlers((const sigset_t *)child_sigmask);
+        if ((errno = pthread_sigmask(SIG_SETMASK, child_sigmask, NULL))) {
+            goto error;
+        }
+    }
+#endif
 
 #ifdef HAVE_SETSID
     if (call_setsid)
         POSIX_CALL(setsid());
 #endif
 
-    reached_preexec = 1;
+    if (pgid_to_set >= 0)
+        POSIX_CALL(setpgid(0, pgid_to_set));
+
+    err_msg = "";
 
     /* close FDs after executing preexec_fn, which might open FDs */
     if (close_fds) {
@@ -380,20 +519,62 @@ error:
         }
         _Py_write_noraise(errpipe_write, cur, hex_errno + sizeof(hex_errno) - cur);
         _Py_write_noraise(errpipe_write, ":", 1);
-        if (!reached_preexec) {
-            /* Indicate to the parent that the error happened before exec(). */
-            _Py_write_noraise(errpipe_write, "noexec", 6);
-        }
         /* We can't call strerror(saved_errno).  It is not async signal safe.
          * The parent process will look the error message up. */
     } else {
         _Py_write_noraise(errpipe_write, "SubprocessError:0:", 18);
     }
+    _Py_write_noraise(errpipe_write, err_msg, strlen(err_msg));
+}
+
+Py_NO_INLINE static pid_t
+do_fork_exec(char *const exec_list[],
+             char *const argv[],
+             char *const envp[],
+             const char *cwd,
+             int stdinRdFd, int stdinWrFd,
+             int stdoutRdFd, int stdoutWrFd,
+             int stderrRdFd, int stderrWrFd,
+             int errPipeRdFd, int errPipeWrFd,
+             int closeFds, int restoreSignals,
+             int callSetsid,
+             int pgidToSet,
+             const void *childSigmask,
+             int *fdsToKeep, int64_t fdsToKeepLen)
+{
+    pid_t pid;
+#ifdef VFORK_USABLE
+    if (childSigmask) {
+        pid = vfork();
+    } else
+#endif
+    {
+        pid = fork();
+    }
+
+    if (pid != 0) {
+        return pid;
+    }
+
+    child_exec(
+        exec_list, argv, envp, cwd,
+        stdinRdFd, stdinWrFd,
+        stdoutRdFd, stdoutWrFd,
+        stderrRdFd, stderrWrFd,
+        errPipeRdFd, errPipeWrFd,
+        closeFds,
+        restoreSignals,
+        callSetsid,
+        pgidToSet,
+        childSigmask,
+        fdsToKeep, fdsToKeepLen
+    );
+    _exit(255);
 }
 
 
 /*
- * data, offsets, offsetsLen, argsPos, envPos, cwdPos - see comment in NFiPosixSupport.forkExec()
+ * data, offsets, offsetsLen, argsPos, envPos, cwdPos - see comment in NativePosixSupport.forkExec()
  * stdinRdFd - read end of the pipe for the child's stdin - closed by parent, dupped to fd 0 by child
  * stdinWrFd - write end of the pipe for the child's stdin - closed by child, written to by parent
  * stdoutRdFd - read end of the pipe for the child's stdout - closed by child, read from by parent
@@ -409,6 +590,8 @@ error:
  *            (if nonzero, then errPipeWrFd must be in fdsToKeep)
  * restoreSignals - currently not used
  * callSetsid - if nonzero, the child calls setsid before exec()
+ * pgidToSet - if non-negative, the child calls setpgid(0, pgidToSet) before exec()
+ * allowVFork - if nonzero, use vfork() instead of fork() where it is safe and supported
  * fdsToKeep, fdsToKeepLen - a sorted list of fds to keep open (the child clears their O_CLOEXEC)
  */
 int32_t fork_exec(
@@ -420,6 +603,8 @@ int32_t fork_exec(
             int32_t closeFds,
             int32_t restoreSignals,
             int32_t callSetsid,
+            int32_t pgidToSet,
+            int32_t allowVFork,
             int32_t *fdsToKeep, int64_t fdsToKeepLen
             ) {
 
@@ -434,20 +619,47 @@ int32_t fork_exec(
     char **envp = envPos == -1 ? NULL : strings + envPos;
     char *cwd = cwdPos == -1 ? NULL : strings[cwdPos];
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        child_exec(
-            exec_list, argv, envp, cwd,
-            stdinRdFd, stdinWrFd,
-            stdoutRdFd, stdoutWrFd,
-            stderrRdFd, stderrWrFd,
-            errPipeRdFd, errPipeWrFd,
-            closeFds,
-            restoreSignals,
-            callSetsid,
-            fdsToKeep, fdsToKeepLen
-        );
-        _exit(255);
+#ifdef VFORK_USABLE
+    const void *oldSigmask = NULL;
+    sigset_t oldSigs;
+    /* Keep process-group setup on the normal fork path. */
+    if (allowVFork && pgidToSet < 0) {
+        sigset_t allSigs;
+        sigfillset(&allSigs);
+        int err = pthread_sigmask(SIG_BLOCK, &allSigs, &oldSigs);
+        if (err) {
+            errno = err;
+            capture_errno();
+            return -1;
+        }
+        oldSigmask = &oldSigs;
     }
+#else
+    const void *oldSigmask = NULL;
+#endif
+
+    pid_t pid = do_fork_exec(
+        exec_list, argv, envp, cwd,
+        stdinRdFd, stdinWrFd,
+        stdoutRdFd, stdoutWrFd,
+        stderrRdFd, stderrWrFd,
+        errPipeRdFd, errPipeWrFd,
+        closeFds,
+        restoreSignals,
+        callSetsid,
+        pgidToSet,
+        oldSigmask,
+        fdsToKeep, fdsToKeepLen
+    );
+
+#ifdef VFORK_USABLE
+    if (oldSigmask) {
+        (void) pthread_sigmask(SIG_SETMASK, oldSigmask, NULL);
+    }
+#endif
+
+    capture_errno();
     return pid;
 }
+
+#endif

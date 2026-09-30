@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,9 +41,8 @@
 package com.oracle.graal.python.test.advanced;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
-import java.lang.management.ThreadInfo;
-import java.lang.management.ThreadMXBean;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -63,11 +62,15 @@ import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Context.Builder;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.Source;
 import org.netbeans.lib.profiler.heap.Heap;
 import org.netbeans.lib.profiler.heap.HeapFactory;
 import org.netbeans.lib.profiler.heap.Instance;
 import org.netbeans.lib.profiler.heap.JavaClass;
+import org.netbeans.lib.profiler.heap.ObjectArrayInstance;
 
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.HandleContext;
+import com.oracle.graal.python.test.integration.Utils;
 import com.sun.management.HotSpotDiagnosticMXBean;
 
 public class LeakTest extends AbstractLanguageLauncher {
@@ -98,9 +101,15 @@ public class LeakTest extends AbstractLanguageLauncher {
 
     private boolean sharedEngine = false;
     private boolean keepDump = false;
+    private int repeatAndCheckSize = -1;
+    private boolean nullStdout = false;
+    private boolean forbidCApiResidue = false;
     private String languageId;
-    private String code;
+    private String code = "";
+    private Source source;
     private List<String> forbiddenClasses = new ArrayList<>();
+
+    private static final int REPEAT_AND_CHECK_BASLINE_ITERATION = 32;
 
     private final class SystemExit extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -122,8 +131,8 @@ public class LeakTest extends AbstractLanguageLauncher {
             }
 
             MBeanServer server = doFullGC();
-            String threadDump = getThreadDump();
-            Path dumpFile = dumpHeap(server);
+            String threadDump = Utils.getThreadDump();
+            Path dumpFile = dumpHeap(server, keepDump);
             boolean fail = checkForLeaks(dumpFile);
             if (fail) {
                 System.err.print(threadDump);
@@ -131,24 +140,6 @@ public class LeakTest extends AbstractLanguageLauncher {
             } else {
                 System.exit(0);
             }
-        }
-
-        private String getThreadDump() {
-            ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
-            ThreadInfo[] threads = threadMXBean.getThreadInfo(threadMXBean.getAllThreadIds(), 100);
-            final String line = "=====================================\n";
-            StringBuilder sb = new StringBuilder(line);
-            for (ThreadInfo thread : threads) {
-                if (thread != null) {
-                    sb.append("-------\n");
-                    sb.append(thread.getThreadName()).append('\n');
-                    sb.append("Thread state:").append(thread.getThreadState()).append('\n');
-                    for (StackTraceElement element : thread.getStackTrace()) {
-                        sb.append("    ").append(element).append('\n');
-                    }
-                }
-            }
-            return sb.append(line).toString();
         }
 
         private boolean checkForLeaks(Path dumpFile) {
@@ -175,54 +166,90 @@ public class LeakTest extends AbstractLanguageLauncher {
                         }
                     }
                 }
+                if (forbidCApiResidue && checkCApiResidue(heap)) {
+                    fail = true;
+                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
             return fail;
         }
 
-        private Path dumpHeap(MBeanServer server) {
-            Path dumpFile = null;
-            try {
-                Path p = Files.createTempDirectory("leakTest");
-                if (!keepDump) {
-                    p.toFile().deleteOnExit();
-                }
-                dumpFile = p.resolve("heapdump.hprof");
-                if (!keepDump) {
-                    dumpFile.toFile().deleteOnExit();
-                } else {
-                    System.out.println("Dump file: " + dumpFile.toString());
-                }
-                HotSpotDiagnosticMXBean mxBean = ManagementFactory.newPlatformMXBeanProxy(server,
-                                "com.sun.management:type=HotSpotDiagnostic", HotSpotDiagnosticMXBean.class);
-                mxBean.dumpHeap(dumpFile.toString(), true);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+        private boolean checkCApiResidue(Heap heap) {
+            JavaClass cls = heap.getJavaClassByName(HandleContext.class.getName());
+            if (cls == null) {
+                System.err.println("Could not find " + HandleContext.class.getName() + " in heap dump");
+                return true;
             }
-            return dumpFile;
+            boolean fail = false;
+            for (Object i : cls.getInstances()) {
+                Instance inst = (Instance) i;
+                if (!isReachable(inst)) {
+                    continue;
+                }
+                List<String> residues = new ArrayList<>();
+                addResidue(residues, inst, "referencesToBeFreed", this::collectionSize);
+                addResidue(residues, inst, "nativeLookup", this::collectionSize);
+                addResidue(residues, inst, "nativeWeakRef", this::collectionSize);
+                addResidue(residues, inst, "nativeTypeLookup", this::objectArraySize);
+                addResidue(residues, inst, "nativeStubLookup", this::objectArraySize);
+                addResidue(residues, inst, "nativeStorageReferences", this::collectionSize);
+                addResidue(residues, inst, "pyCapsuleReferences", this::collectionSize);
+                if (!residues.isEmpty()) {
+                    fail = true;
+                    System.err.println("C API residue in reachable HandleContext " + inst.getInstanceId() + ": " +
+                                    String.join(", ", residues));
+                }
+            }
+            return fail;
         }
 
-        private MBeanServer doFullGC() {
-            // do this a few times to dump a small heap if we can
-            MBeanServer server = null;
-            for (int i = 0; i < 10; i++) {
-                System.gc();
-                Runtime.getRuntime().freeMemory();
-                server = ManagementFactory.getPlatformMBeanServer();
-                try {
-                    ObjectName objectName = new ObjectName("com.sun.management:type=DiagnosticCommand");
-                    server.invoke(objectName, "gcRun", new Object[]{null}, new String[]{String[].class.getName()});
-                } catch (MalformedObjectNameException | InstanceNotFoundException | ReflectionException | MBeanException e) {
-                    throw new RuntimeException(e);
+        private void addResidue(List<String> residues, Instance inst, String name, FieldSize fieldSize) {
+            Object fieldValue = inst.getValueOfField(name);
+            if (fieldValue == null) {
+                residues.add(name + "=missing");
+                return;
+            }
+            int size = fieldSize.apply(fieldValue);
+            if (size > 0) {
+                residues.add(name + "=" + size);
+            }
+        }
+
+        @FunctionalInterface
+        private interface FieldSize {
+            int apply(Object object);
+        }
+
+        private int collectionSize(Object object) {
+            if (object instanceof Instance instance) {
+                Object size = instance.getValueOfField("size");
+                if (size instanceof Number n) {
+                    return n.intValue();
                 }
-                try {
-                    Thread.sleep(2000);
-                } catch (InterruptedException e1) {
-                    // do nothing
+                Object baseCount = instance.getValueOfField("baseCount");
+                if (baseCount instanceof Number n) {
+                    return n.intValue();
+                }
+                Object map = instance.getValueOfField("map");
+                if (map instanceof Instance mapInstance) {
+                    return collectionSize(mapInstance);
                 }
             }
-            return server;
+            return 0;
+        }
+
+        private int objectArraySize(Object object) {
+            if (object instanceof ObjectArrayInstance array) {
+                int size = 0;
+                for (Object value : array.getValues()) {
+                    if (value != null) {
+                        size++;
+                    }
+                }
+                return size;
+            }
+            return 0;
         }
 
         private int getCntAndErrors(JavaClass cls, List<String> errors) {
@@ -231,7 +258,7 @@ public class LeakTest extends AbstractLanguageLauncher {
                 boolean realLeak = false;
                 for (Object i : cls.getInstances()) {
                     Instance inst = (Instance) i;
-                    if (inst.isGCRoot() || inst.getNearestGCRootPointer() != null) {
+                    if (isReachable(inst)) {
                         realLeak = true;
                         break;
                     }
@@ -246,11 +273,67 @@ public class LeakTest extends AbstractLanguageLauncher {
             return cnt;
         }
 
+        private boolean isReachable(Instance inst) {
+            return inst.isGCRoot() || inst.getNearestGCRootPointer() != null;
+        }
+
         @SuppressWarnings("sync-override")
         @Override
         public final Throwable fillInStackTrace() {
             return this;
         }
+    }
+
+    private static MBeanServer doFullGC() {
+        // do this a few times to dump a small heap if we can
+        MBeanServer server = null;
+        for (int i = 0; i < 10; i++) {
+            System.gc();
+            Runtime.getRuntime().freeMemory();
+            server = ManagementFactory.getPlatformMBeanServer();
+            try {
+                ObjectName objectName = new ObjectName("com.sun.management:type=DiagnosticCommand");
+                server.invoke(objectName, "gcRun", new Object[]{null}, new String[]{String[].class.getName()});
+            } catch (MalformedObjectNameException | InstanceNotFoundException | ReflectionException | MBeanException e) {
+                throw new RuntimeException(e);
+            }
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e1) {
+                // do nothing
+            }
+        }
+        return server;
+    }
+
+    private static Path dumpHeap(MBeanServer server, boolean keepDump) {
+        Path dumpFile = null;
+        try {
+            Path p = Files.createTempDirectory("leakTest");
+            if (!keepDump) {
+                p.toFile().deleteOnExit();
+            }
+            dumpFile = p.resolve("heapdump.hprof");
+            if (!keepDump) {
+                dumpFile.toFile().deleteOnExit();
+            } else {
+                System.out.println("Dump file: " + dumpFile.toString());
+            }
+            HotSpotDiagnosticMXBean mxBean = ManagementFactory.newPlatformMXBeanProxy(server,
+                            "com.sun.management:type=HotSpotDiagnostic", HotSpotDiagnosticMXBean.class);
+            mxBean.dumpHeap(dumpFile.toString(), true);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return dumpFile;
+    }
+
+    private static long getJavaHeapSize(boolean createHeapDump) {
+        MBeanServer server = doFullGC();
+        if (createHeapDump) {
+            dumpHeap(server, true);
+        }
+        return Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
     }
 
     @Override
@@ -269,6 +352,16 @@ public class LeakTest extends AbstractLanguageLauncher {
                 code = arguments.get(++i);
             } else if (arg.equals("--forbidden-class")) {
                 forbiddenClasses.add(arguments.get(++i));
+            } else if (arg.equals("--repeat-and-check-size")) {
+                repeatAndCheckSize = Integer.parseInt(arguments.get(++i));
+                if (repeatAndCheckSize <= REPEAT_AND_CHECK_BASLINE_ITERATION) {
+                    System.err.printf("--repeat-and-check-size must be at least %d\n", REPEAT_AND_CHECK_BASLINE_ITERATION);
+                    System.exit(1);
+                }
+            } else if (arg.equals("--null-stdout")) {
+                nullStdout = true;
+            } else if (arg.equals("--forbid-capi-residue")) {
+                forbidCApiResidue = true;
             } else {
                 unrecognized.add(arg);
             }
@@ -284,24 +377,64 @@ public class LeakTest extends AbstractLanguageLauncher {
             contextBuilder.engine(engine);
         }
         contextBuilder.allowExperimentalOptions(true).allowAllAccess(true);
+        if (nullStdout) {
+            contextBuilder.out(OutputStream.nullOutputStream());
+        }
+        source = Source.create(getLanguageId(), code);
 
         try (Context c = contextBuilder.build()) {
             try {
-                c.eval(getLanguageId(), code);
+                eval(c);
             } catch (PolyglotException e) {
-                if (e.isExit()) {
-                    if (e.getExitStatus() == 0) {
-                        throw new SystemExit();
-                    } else {
-                        exit(e.getExitStatus());
-                    }
-                } else {
-                    e.printStackTrace();
-                    exit(255);
-                }
+                handleException(e);
             }
         }
+
+        if (repeatAndCheckSize > 0) {
+            long initialSize = -1;
+            for (int i = 0; i < repeatAndCheckSize; i++) {
+                if (i == REPEAT_AND_CHECK_BASLINE_ITERATION) {
+                    // Give the system some time to stabilize, fill caches, etc.
+                    initialSize = getJavaHeapSize(keepDump);
+                    System.out.printf("Baseline heap size: %,d\n", initialSize);
+                }
+                try (Context c = contextBuilder.build()) {
+                    try {
+                        eval(c);
+                    } catch (PolyglotException e) {
+                        handleException(e);
+                    }
+                }
+            }
+            long currentSize = getJavaHeapSize(false);
+            System.out.printf("Heap size after all repetitions: %,d\n", currentSize);
+            if (currentSize > initialSize * 1.15) {
+                System.err.printf("Heap size grew too much after repeated context creations and invocations. From %,d bytes to %,d bytes.\n", initialSize, currentSize);
+                if (keepDump) {
+                    dumpHeap(ManagementFactory.getPlatformMBeanServer(), true);
+                }
+                System.exit(255);
+            }
+        }
+
         throw new SystemExit();
+    }
+
+    private void eval(Context context) {
+        context.eval(source);
+    }
+
+    private void handleException(PolyglotException e) {
+        if (e.isExit()) {
+            if (e.getExitStatus() == 0) {
+                throw new SystemExit();
+            } else {
+                exit(e.getExitStatus());
+            }
+        } else {
+            e.printStackTrace();
+            exit(255);
+        }
     }
 
     @Override
@@ -310,12 +443,8 @@ public class LeakTest extends AbstractLanguageLauncher {
     }
 
     @Override
-    protected String[] getDefaultLanguages() {
-        return new String[]{languageId};
-    }
-
-    @Override
     protected void printHelp(OptionCategory maxCategory) {
-        System.out.println("--lang ID --code CODE --forbidden-class FQN [--forbidden-class FQN]* [--shared-engine] [--keep-dump] [POLYGLOT-OPTIONS]");
+        System.out.println("--lang ID --code CODE --forbidden-class FQN [--forbidden-class FQN]* " +
+                        "[--forbid-capi-residue] [--shared-engine] [--keep-dump] [POLYGLOT-OPTIONS]");
     }
 }

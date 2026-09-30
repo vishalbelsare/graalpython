@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -42,11 +42,42 @@ import types
 
 from . import CPyExtTestCase, CPyExtFunction
 
-__dir__ = __file__.rpartition("/")[0]
+
+def example_generator():
+    # Some random code to make sure we excercise the bytecode index translation
+    a = 1
+    if a == 2:
+        yield 2
+    yield 1
+
+
+gen = example_generator()
+next(gen)
+example_generator_frame = gen.gi_frame
 
 
 def example_function():
     return 1
+
+
+def make_closure_function():
+    first = 1
+    second = 2
+
+    def closure_function():
+        return first + second
+
+    return closure_function
+
+
+closure_function = make_closure_function()
+
+
+def reference_PyCode_Addr2Line(args):
+    code, lasti = args
+    if lasti >= 0:
+        return list(code.co_positions())[lasti // 2][0]
+    return code.co_firstlineno
 
 
 class DummyClass():
@@ -59,11 +90,25 @@ DictInstance = {}
 
 
 class TestCodeobject(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super().compile_module(name)
 
     testmod = type(sys)("foo")
+
+    test_PyCode_GetNumFree = CPyExtFunction(
+        lambda args: len(args[0].co_freevars),
+        lambda: (
+            (example_function.__code__,),
+            (closure_function.__code__,),
+        ),
+        code="""
+            static Py_ssize_t wrap_PyCode_GetNumFree(PyObject *code) {
+                return PyCode_GetNumFree((PyCodeObject *)code);
+            }
+        """,
+        resultspec="n",
+        argspec="O",
+        arguments=["PyObject* code"],
+        callfunction="wrap_PyCode_GetNumFree",
+    )
 
     test_PyCode_NewEmpty = CPyExtFunction(
         lambda args: args,
@@ -85,24 +130,26 @@ class TestCodeobject(CPyExtTestCase):
                 3, 4, 0,
                 b"", tuple(), tuple(),
                 ("a", "b", "c"), tuple(), tuple(),
-                "filename", "name", 1,
-                b"",
+                "filename", "name", "module.name",
+                1,
+                b"", b"",
             ),
         ),
         resultspec="O",
         resulttype="PyCodeObject*",
-        argspec="iiiiiOOOOOOOOiO",
+        argspec="iiiiiOOOOOOOOOiOO",
         arguments=[
             "int argcount", "int kwonlyargcount",
             "int nlocals", "int stacksize", "int flags",
             "PyObject* code", "PyObject* consts", "PyObject* names",
             "PyObject* varnames", "PyObject* freevars", "PyObject* cellvars",
-            "PyObject* filename", "PyObject* name", "int firstlineno",
-            "PyObject* lnotab",
+            "PyObject* filename", "PyObject* name", "PyObject* qualname",
+            "int firstlineno",
+            "PyObject* linetable", "PyObject* exceptiontable",
         ],
         cmpfunc=lambda cr, pr: isinstance(cr, types.CodeType),
     )
-    
+
     test_PyCode_NewWithPosOnlyArgs = CPyExtFunction(
         lambda args: args,
         lambda: (
@@ -111,35 +158,117 @@ class TestCodeobject(CPyExtTestCase):
                 3, 4, 0,
                 b"", tuple(), tuple(),
                 ("a", "b", "c"), tuple(), tuple(),
-                "filename", "name", 1,
-                b"",
+                "filename", "name", "module.name",
+                1,
+                b"", b"",
             ),
         ),
         resultspec="O",
         resulttype="PyCodeObject*",
-        argspec="iiiiiiOOOOOOOOiO",
+        argspec="iiiiiiOOOOOOOOOiOO",
         arguments=[
             "int argcount", "int posonlyargcount", "int kwonlyargcount",
             "int nlocals", "int stacksize", "int flags",
             "PyObject* code", "PyObject* consts", "PyObject* names",
             "PyObject* varnames", "PyObject* freevars", "PyObject* cellvars",
-            "PyObject* filename", "PyObject* name", "int firstlineno",
-            "PyObject* lnotab",
+            "PyObject* filename", "PyObject* name", "PyObject* qualname",
+            "int firstlineno",
+            "PyObject* lnotab", "PyObject* exceptiontable",
         ],
         cmpfunc=lambda cr, pr: isinstance(cr, types.CodeType),
     )
 
-    test_PyCode_Addr2Line = CPyExtFunction(
-        lambda args: example_function.__code__.co_firstlineno + 1,
+    test_PyCode_NewWithPosOnlyArgs_native_tuples = CPyExtFunction(
+        lambda args: args,
         lambda: (
-            (example_function.__code__,),
+            tuple(),
         ),
-        code='''int wrap_PyCode_Addr2Line(PyObject* code) {
-                return PyCode_Addr2Line((PyCodeObject*)code, 0);
+        code="""
+        static PyObject* make_tuple(const char *a, const char *b, const char *c) {
+            PyObject *tuple = PyTuple_New(3);
+            if (tuple == NULL) {
+                return NULL;
+            }
+            PyObject *item0 = PyUnicode_FromString(a);
+            PyObject *item1 = PyUnicode_FromString(b);
+            PyObject *item2 = PyUnicode_FromString(c);
+            if (item0 == NULL || item1 == NULL || item2 == NULL) {
+                Py_XDECREF(item0);
+                Py_XDECREF(item1);
+                Py_XDECREF(item2);
+                Py_DECREF(tuple);
+                return NULL;
+            }
+            PyTuple_SET_ITEM(tuple, 0, item0);
+            PyTuple_SET_ITEM(tuple, 1, item1);
+            PyTuple_SET_ITEM(tuple, 2, item2);
+            return tuple;
+        }
+
+        static PyCodeObject* wrap_PyCode_NewWithPosOnlyArgs_native_tuples(PyObject* ignored) {
+            PyObject *code = PyBytes_FromStringAndSize("", 0);
+            PyObject *consts = PyTuple_New(0);
+            PyObject *names = PyTuple_New(0);
+            PyObject *varnames = make_tuple("a", "b", "c");
+            PyObject *freevars = PyTuple_New(0);
+            PyObject *cellvars = PyTuple_New(0);
+            PyObject *filename = PyUnicode_FromString("filename");
+            PyObject *name = PyUnicode_FromString("name");
+            PyObject *qualname = PyUnicode_FromString("module.name");
+            PyObject *linetable = PyBytes_FromStringAndSize("", 0);
+            PyObject *exceptiontable = PyBytes_FromStringAndSize("", 0);
+            PyCodeObject *result = NULL;
+
+            if (code == NULL || consts == NULL || names == NULL || varnames == NULL ||
+                freevars == NULL || cellvars == NULL || filename == NULL || name == NULL ||
+                qualname == NULL || linetable == NULL || exceptiontable == NULL) {
+                goto done;
+            }
+            result = PyUnstable_Code_NewWithPosOnlyArgs(
+                            2, 1, 1, 3, 4, 0,
+                            code, consts, names, varnames,
+                            freevars, cellvars,
+                            filename, name, qualname,
+                            1, linetable, exceptiontable);
+
+        done:
+            Py_XDECREF(code);
+            Py_XDECREF(consts);
+            Py_XDECREF(names);
+            Py_XDECREF(varnames);
+            Py_XDECREF(freevars);
+            Py_XDECREF(cellvars);
+            Py_XDECREF(filename);
+            Py_XDECREF(name);
+            Py_XDECREF(qualname);
+            Py_XDECREF(linetable);
+            Py_XDECREF(exceptiontable);
+            return result;
+        }
+        """,
+        resultspec="O",
+        resulttype="PyCodeObject*",
+        argspec="",
+        arguments=["PyObject* ignored"],
+        callfunction="wrap_PyCode_NewWithPosOnlyArgs_native_tuples",
+        cmpfunc=lambda cr, pr: isinstance(cr, types.CodeType),
+    )
+
+    test_PyCode_Addr2Line = CPyExtFunction(
+        reference_PyCode_Addr2Line,
+        lambda: (
+            (example_function.__code__, -1),
+            # CPython return firstlineno for 0, which doesn't make much sense
+            # (example_function.__code__, 0),
+            (example_generator.__code__, example_generator_frame.f_lasti),
+        ),
+        code='''
+            int wrap_PyCode_Addr2Line(PyObject* code, int lasti) {
+                return PyCode_Addr2Line((PyCodeObject*)code, lasti);
             }
             ''',
         resultspec="i",
-        argspec="O",
-        arguments=["PyObject* code"],
+        argspec="Oi",
+        arguments=["PyObject* code", "int bci"],
         callfunction="wrap_PyCode_Addr2Line",
     )

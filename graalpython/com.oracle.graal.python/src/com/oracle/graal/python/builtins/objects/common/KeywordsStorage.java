@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -68,7 +68,7 @@ public class KeywordsStorage extends HashingStorage {
 
     final PKeyword[] keywords;
 
-    protected KeywordsStorage(PKeyword[] keywords) {
+    public KeywordsStorage(PKeyword[] keywords) {
         this.keywords = keywords;
     }
 
@@ -117,36 +117,36 @@ public class KeywordsStorage extends HashingStorage {
         @Specialization(guards = {"self.length() == cachedLen", "cachedLen < 6"}, limit = "1")
         static Object cached(KeywordsStorage self, TruffleString key, @SuppressWarnings("unused") long hash,
                         @SuppressWarnings("unused") @Exclusive @Cached(value = "self.length()") int cachedLen,
-                        @Shared("tsEqual") @Cached(inline = false) TruffleString.EqualNode equalNode) {
+                        @Shared("tsEqual") @Cached TruffleString.EqualNode equalNode) {
             final int idx = self.findCachedStringKey(key, cachedLen, equalNode);
             return idx != -1 ? self.keywords[idx].getValue() : null;
         }
 
         @Specialization(replaces = "cached")
         static Object string(KeywordsStorage self, TruffleString key, @SuppressWarnings("unused") long hash,
-                        @Shared("tsEqual") @Cached(inline = false) TruffleString.EqualNode equalNode) {
+                        @Shared("tsEqual") @Cached TruffleString.EqualNode equalNode) {
             final int idx = self.findStringKey(key, equalNode);
             return idx != -1 ? self.keywords[idx].getValue() : null;
         }
 
         @Specialization(guards = "isBuiltinString.execute(inliningTarget, key)", limit = "1")
-        static Object pstring(@SuppressWarnings("unused") Node inliningTarget, KeywordsStorage self, PString key, @SuppressWarnings("unused") long hash,
+        static Object pstring(Node inliningTarget, KeywordsStorage self, PString key, @SuppressWarnings("unused") long hash,
                         @SuppressWarnings("unused") @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
                         @Cached CastToTruffleStringNode castToTruffleStringNode,
-                        @Shared("tsEqual") @Cached(inline = false) TruffleString.EqualNode equalNode) {
+                        @Shared("tsEqual") @Cached TruffleString.EqualNode equalNode) {
             return string(self, castToTruffleStringNode.execute(inliningTarget, key), -1, equalNode);
         }
 
         @Specialization(guards = "!isBuiltinString.execute(inliningTarget, key)", limit = "1")
-        static Object notString(Frame frame, @SuppressWarnings("unused") Node inliningTarget, KeywordsStorage self, Object key, long hashIn,
+        static Object notString(Frame frame, Node inliningTarget, KeywordsStorage self, Object key, long hashIn,
                         @SuppressWarnings("unused") @Exclusive @Cached PyUnicodeCheckExactNode isBuiltinString,
                         @Cached PyObjectHashNode hashNode,
-                        @Cached PyObjectRichCompareBool.EqNode eqNode) {
+                        @Cached PyObjectRichCompareBool eqNode) {
             long hash = hashIn == -1 ? hashNode.execute(frame, inliningTarget, key) : hashIn;
             for (int i = 0; i < self.keywords.length; i++) {
                 TruffleString currentKey = self.keywords[i].getName();
                 long keyHash = hashNode.execute(frame, inliningTarget, currentKey);
-                if (keyHash == hash && eqNode.compare(frame, inliningTarget, key, currentKey)) {
+                if (keyHash == hash && eqNode.executeEq(frame, inliningTarget, key, currentKey)) {
                     return self.keywords[i].getValue();
                 }
             }

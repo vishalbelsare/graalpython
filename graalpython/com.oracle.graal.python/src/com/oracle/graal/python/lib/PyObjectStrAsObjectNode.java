@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,22 +47,20 @@ import static com.oracle.graal.python.nodes.StringLiterals.T_TRUE;
 import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.assertNoJavaString;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotUnaryFunc.CallSlotUnaryNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
-import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodSlotNode;
-import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
+import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
@@ -81,7 +79,6 @@ import com.oracle.truffle.api.strings.TruffleString;
 @GenerateUncached
 @GenerateInline(inlineByDefault = true)
 @GenerateCached
-@ImportStatic(SpecialMethodSlot.class)
 public abstract class PyObjectStrAsObjectNode extends PNodeWithContext {
     public final Object executeCached(Frame frame, Object object) {
         return execute(frame, this, object);
@@ -91,6 +88,10 @@ public abstract class PyObjectStrAsObjectNode extends PNodeWithContext {
 
     public final Object execute(Node inliningTarget, Object object) {
         return execute(null, inliningTarget, object);
+    }
+
+    public static Object executeUncached(Object object) {
+        return getUncached().execute(null, null, object);
     }
 
     @Specialization
@@ -105,29 +106,39 @@ public abstract class PyObjectStrAsObjectNode extends PNodeWithContext {
 
     @Specialization
     TruffleString str(long object,
-                    @Cached(inline = false) TruffleString.FromLongNode fromLongNode) {
+                    @Cached TruffleString.FromLongNode fromLongNode) {
         return fromLongNode.execute(object, TS_ENCODING, false);
     }
 
     @Specialization(guards = "!isTruffleString(obj)")
     static Object str(VirtualFrame frame, Node inliningTarget, Object obj,
-                    @Cached GetClassNode getClassNode,
-                    @Cached(parameters = "Str", inline = false) LookupSpecialMethodSlotNode lookupStr,
-                    @Cached(inline = false) CallUnaryMethodNode callStr,
-                    @Cached GetClassNode getResultClassNode,
-                    @Cached(inline = false) IsSubtypeNode isSubtypeNode,
-                    @Cached PRaiseNode.Lazy raiseNode) {
-        Object type = getClassNode.execute(inliningTarget, obj);
-        Object strDescr = lookupStr.execute(frame, type, obj);
-        // All our objects should have __str__
-        assert strDescr != PNone.NO_VALUE;
-        Object result = callStr.executeObject(frame, strDescr, obj);
-        result = assertNoJavaString(result);
-        if (result instanceof TruffleString || isSubtypeNode.execute(getResultClassNode.execute(inliningTarget, result), PythonBuiltinClassType.PString)) {
-            return result;
-        } else {
-            throw raiseNode.get(inliningTarget).raise(TypeError, ErrorMessages.RETURNED_NON_STRING, T___STR__, result);
+                    @Cached GetObjectSlotsNode getSlots,
+                    @Cached CallSlotUnaryNode callSlot,
+                    @Cached PyObjectReprAsObjectNode repr,
+                    @Cached PyEnterRecursiveCallNode enterNode,
+                    @Cached PyUnicodeCheckNode checkNode,
+                    @Cached PRaiseNode raiseNode) {
+        TpSlots slots = getSlots.execute(inliningTarget, obj);
+        if (slots.tp_str() == null) {
+            return repr.execute(frame, inliningTarget, obj);
         }
+        PythonThreadState threadState = enterNode.enter(inliningTarget, ErrorMessages.MAXIMUM_RECURSION_DEPTH_EXCEEDED_WHILE_GETTING_STR_OF_AN_OBJECT);
+        try {
+            Object result = callSlot.execute(frame, inliningTarget, slots.tp_str(), obj);
+            assertNoJavaString(result);
+            if (checkNode.execute(inliningTarget, result)) {
+                return result;
+            } else {
+                throw raiseTypeError(inliningTarget, raiseNode, result);
+            }
+        } finally {
+            PyEnterRecursiveCallNode.leave(threadState);
+        }
+    }
+
+    @InliningCutoff
+    private static PException raiseTypeError(Node inliningTarget, PRaiseNode raiseNode, Object result) {
+        throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.RETURNED_NON_STRING, T___STR__, result);
     }
 
     @NeverDefault

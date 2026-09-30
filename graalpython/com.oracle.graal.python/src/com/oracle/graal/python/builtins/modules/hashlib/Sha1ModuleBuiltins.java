@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,14 @@
  */
 package com.oracle.graal.python.builtins.modules.hashlib;
 
+import static com.oracle.graal.python.nodes.BuiltinNames.J_SHA1;
+
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
@@ -58,32 +59,23 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 
-@CoreFunctions(defineModule = "_sha1")
+@CoreFunctions(defineModule = J_SHA1)
 public final class Sha1ModuleBuiltins extends PythonBuiltins {
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return Sha1ModuleBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = "sha1", minNumOfPositionalArgs = 0, parameterNames = {"string"}, keywordOnlyNames = {"usedforsecurity"})
+    @Builtin(name = "sha1", minNumOfPositionalArgs = 0, parameterNames = {"data"}, keywordOnlyNames = {"usedforsecurity", "string"})
     @GenerateNodeFactory
     abstract static class Sha1FunctionNode extends PythonBuiltinNode {
         @Specialization
-        static Object newDigest(VirtualFrame frame, Object buffer, @SuppressWarnings("unused") Object usedForSecurity,
-                        @Bind("this") Node inliningTarget,
-                        @Cached HashlibModuleBuiltins.CreateDigestNode createNode) {
-            return createNode.execute(frame, inliningTarget, PythonBuiltinClassType.SHA1Type, "sha1", "sha1", buffer);
-        }
-    }
-
-    @Builtin(name = "sha1", takesVarArgs = true, takesVarKeywordArgs = true, constructsClass = PythonBuiltinClassType.SHA1Type, isPublic = false)
-    @GenerateNodeFactory
-    abstract static class Sha1Node extends PythonBuiltinNode {
-        @Specialization
-        @SuppressWarnings("unused")
-        static Object sha1(Object args, Object kwargs,
+        static Object newDigest(VirtualFrame frame, Object data, @SuppressWarnings("unused") Object usedForSecurity, Object string,
+                        @Bind Node inliningTarget,
+                        @Cached HashlibModuleBuiltins.CreateDigestNode createNode,
                         @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(PythonBuiltinClassType.TypeError, ErrorMessages.CANNOT_CREATE_INSTANCES, "_sha1.sha1");
+            Object buffer = HashlibModuleBuiltins.resolveDataArgument(inliningTarget, data, string, raiseNode);
+            return createNode.execute(frame, inliningTarget, PythonBuiltinClassType.SHA1Type, "sha1", "sha1", buffer);
         }
     }
 }

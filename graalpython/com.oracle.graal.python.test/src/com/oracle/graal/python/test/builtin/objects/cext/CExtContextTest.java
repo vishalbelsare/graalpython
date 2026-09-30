@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,8 +46,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import com.oracle.graal.python.builtins.objects.cext.common.CExtContext;
-import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
 import com.oracle.graal.python.test.PythonTests;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -69,29 +68,13 @@ public class CExtContextTest {
 
     @Test
     public void testGetBaseName() {
-        assertEquals(ts(""), TestCExtContext.getBN(ts("")));
-        assertEquals(ts("a"), TestCExtContext.getBN(ts("a")));
-        assertEquals(ts("aa"), TestCExtContext.getBN(ts("aa")));
-        assertEquals(ts("aa"), TestCExtContext.getBN(ts("a.aa")));
-        assertEquals(ts("bb"), TestCExtContext.getBN(ts("a.aa.bb")));
-        assertEquals(ts(""), TestCExtContext.getBN(ts("a.aa.bb.")));
-        assertEquals(ts("b"), TestCExtContext.getBN(ts("a.b")));
-        assertEquals(ts(""), TestCExtContext.getBN(ts("a.b.")));
+        assertEquals(ts(""), CApiContext.getBaseName(ts("")));
+        assertEquals(ts("a"), CApiContext.getBaseName(ts("a")));
+        assertEquals(ts("aa"), CApiContext.getBaseName(ts("aa")));
+        assertEquals(ts("aa"), CApiContext.getBaseName(ts("a.aa")));
+        assertEquals(ts("bb"), CApiContext.getBaseName(ts("a.aa.bb")));
+        assertEquals(ts(""), CApiContext.getBaseName(ts("a.aa.bb.")));
+        assertEquals(ts("b"), CApiContext.getBaseName(ts("a.b")));
+        assertEquals(ts(""), CApiContext.getBaseName(ts("a.b.")));
     }
-
-    private static class TestCExtContext extends CExtContext {
-        public TestCExtContext(PythonContext context, Object llvmLibrary) {
-            super(context, llvmLibrary, false);
-        }
-
-        @Override
-        protected Store initializeSymbolCache() {
-            throw new RuntimeException("should not reach here");
-        }
-
-        public static TruffleString getBN(TruffleString s) {
-            return getBaseName(s);
-        }
-    }
-
 }

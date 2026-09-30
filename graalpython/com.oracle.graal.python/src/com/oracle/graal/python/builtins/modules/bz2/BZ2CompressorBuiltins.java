@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,13 +47,16 @@ import static com.oracle.graal.python.builtins.modules.bz2.Bz2Nodes.errorHandlin
 import static com.oracle.graal.python.nodes.ErrorMessages.COMPRESSLEVEL_MUST_BE_BETWEEN_1_AND_9;
 import static com.oracle.graal.python.nodes.ErrorMessages.COMPRESSOR_HAS_BEEN_FLUSHED;
 import static com.oracle.graal.python.nodes.ErrorMessages.REPEATED_CALL_TO_FLUSH;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -61,17 +64,18 @@ import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.runtime.GilNode;
-import com.oracle.graal.python.runtime.NFIBz2Support;
-import com.oracle.graal.python.runtime.NativeLibrary;
+import com.oracle.graal.python.runtime.NativeBz2Support;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -84,12 +88,28 @@ import com.oracle.truffle.api.nodes.Node;
 
 @CoreFunctions(extendClasses = BZ2Compressor)
 public final class BZ2CompressorBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = BZ2CompressorBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return BZ2CompressorBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self", "compresslevel"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "BZ2Compressor", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class BZ2CompressorNode extends PythonBuiltinNode {
+        @Specialization
+        static BZ2Object.BZ2Compressor doNew(@SuppressWarnings("unused") Object cls, @SuppressWarnings("unused") Object arg,
+                        @Bind PythonLanguage language) {
+            // data filled in subsequent __init__ call - see BZ2CompressorBuiltins.InitNode
+            return PFactory.createBZ2Compressor(language);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "BZ2Compressor", minNumOfPositionalArgs = 1, parameterNames = {"$self", "compresslevel"})
     @ArgumentClinic(name = "compresslevel", conversion = ClinicConversion.Int, defaultValue = "9", useDefaultForNone = true)
     @GenerateNodeFactory
     public abstract static class InitNode extends PythonBinaryClinicBuiltinNode {
@@ -101,18 +121,16 @@ public final class BZ2CompressorBuiltins extends PythonBuiltins {
 
         @Specialization(guards = {"compresslevel >= 1", "compresslevel <= 9"})
         PNone init(BZ2Object.BZ2Compressor self, int compresslevel,
-                        @Bind("this") Node inliningTarget,
-                        @Cached NativeLibrary.InvokeNativeFunction createStream,
-                        @Cached NativeLibrary.InvokeNativeFunction compressInit,
+                        @Bind Node inliningTarget,
                         @Cached GilNode gil,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             gil.release(true);
             try {
-                NFIBz2Support bz2Support = PythonContext.get(this).getNFIBz2Support();
-                Object bzst = bz2Support.createStream(createStream);
-                int err = bz2Support.compressInit(bzst, compresslevel, compressInit);
+                NativeBz2Support bz2Support = PythonContext.get(this).getNativeBz2Support();
+                long bzst = bz2Support.createStream();
+                int err = bz2Support.compressInit(bzst, compresslevel);
                 if (err != BZ_OK) {
-                    errorHandling(err, raiseNode.get(inliningTarget));
+                    errorHandling(inliningTarget, err, raiseNode);
                 }
                 self.init(bzst, bz2Support);
                 return PNone.NONE;
@@ -124,8 +142,8 @@ public final class BZ2CompressorBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Fallback
         static Object err(Object self, Object compresslevel,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, COMPRESSLEVEL_MUST_BE_BETWEEN_1_AND_9);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, COMPRESSLEVEL_MUST_BE_BETWEEN_1_AND_9);
         }
     }
 
@@ -134,31 +152,32 @@ public final class BZ2CompressorBuiltins extends PythonBuiltins {
     abstract static class CompressNode extends PythonBinaryBuiltinNode {
 
         @Specialization(guards = {"!self.isFlushed()"})
-        PBytes doNativeBytes(BZ2Object.BZ2Compressor self, PBytesLike data,
-                        @Bind("this") Node inliningTarget,
+        static PBytes doNativeBytes(BZ2Object.BZ2Compressor self, PBytesLike data,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached SequenceStorageNodes.GetInternalByteArrayNode toBytes,
-                        @Shared("c") @Cached Bz2Nodes.Bz2NativeCompress compress,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Shared("c") @Cached Bz2Nodes.Bz2NativeCompress compress) {
             byte[] bytes = toBytes.execute(inliningTarget, data.getSequenceStorage());
             int len = data.getSequenceStorage().length();
-            return factory.createBytes(compress.compress(self, PythonContext.get(this), bytes, len));
+            return PFactory.createBytes(context.getLanguage(inliningTarget), compress.compress(self, context, bytes, len));
         }
 
         @Specialization(guards = {"!self.isFlushed()"})
-        PBytes doNativeObject(VirtualFrame frame, BZ2Object.BZ2Compressor self, Object data,
+        static PBytes doNativeObject(VirtualFrame frame, BZ2Object.BZ2Compressor self, Object data,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached BytesNodes.ToBytesNode toBytes,
-                        @Shared("c") @Cached Bz2Nodes.Bz2NativeCompress compress,
-                        @Shared @Cached PythonObjectFactory factory) {
+                        @Shared("c") @Cached Bz2Nodes.Bz2NativeCompress compress) {
             byte[] bytes = toBytes.execute(frame, data);
             int len = bytes.length;
-            return factory.createBytes(compress.compress(self, PythonContext.get(this), bytes, len));
+            return PFactory.createBytes(context.getLanguage(inliningTarget), compress.compress(self, context, bytes, len));
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "self.isFlushed()")
         static PNone error(BZ2Object.BZ2Compressor self, Object data,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, COMPRESSOR_HAS_BEEN_FLUSHED);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, COMPRESSOR_HAS_BEEN_FLUSHED);
         }
     }
 
@@ -167,18 +186,19 @@ public final class BZ2CompressorBuiltins extends PythonBuiltins {
     abstract static class FlushNode extends PythonUnaryBuiltinNode {
 
         @Specialization(guards = {"!self.isFlushed()"})
-        PBytes doit(BZ2Object.BZ2Compressor self,
-                        @Cached Bz2Nodes.Bz2NativeCompress compress,
-                        @Cached PythonObjectFactory factory) {
+        static PBytes doit(BZ2Object.BZ2Compressor self,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached Bz2Nodes.Bz2NativeCompress compress) {
             self.setFlushed();
-            return factory.createBytes(compress.flush(self, PythonContext.get(this)));
+            return PFactory.createBytes(context.getLanguage(inliningTarget), compress.flush(self, context));
         }
 
         @SuppressWarnings("unused")
         @Specialization(guards = "self.isFlushed()")
         static PNone error(BZ2Object.BZ2Compressor self,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(ValueError, REPEATED_CALL_TO_FLUSH);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, ValueError, REPEATED_CALL_TO_FLUSH);
         }
     }
 }

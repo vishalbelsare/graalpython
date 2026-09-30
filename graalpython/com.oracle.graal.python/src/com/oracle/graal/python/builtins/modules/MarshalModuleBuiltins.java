@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,28 +25,48 @@
  */
 package com.oracle.graal.python.builtins.modules;
 
+import static com.oracle.graal.python.PythonLanguage.MAGIC_NUMBER_BYTES;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_READ;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_READINTO;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_VERSION;
 import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.isJavaString;
+import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR_LE;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_BOOLEAN_ARRAY;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_DOUBLE_ARRAY;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_INT_ARRAY;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_LONG_ARRAY;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_OBJECT_ARRAY;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_SHORT_ARRAY;
+import static com.oracle.graal.python.util.PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
+import java.io.DataInputStream;
+import java.io.DataOutput;
+import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
 import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
@@ -57,7 +77,6 @@ import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAccessLibrary;
 import com.oracle.graal.python.builtins.objects.buffer.PythonBufferAcquireLibrary;
 import com.oracle.graal.python.builtins.objects.bytes.PByteArray;
-import com.oracle.graal.python.builtins.objects.code.CodeNodes.CreateCodeNode;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
@@ -73,15 +92,14 @@ import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetObjectAr
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.GetInternalObjectArrayNode;
 import com.oracle.graal.python.builtins.objects.complex.PComplex;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
+import com.oracle.graal.python.builtins.objects.ellipsis.PEllipsis;
 import com.oracle.graal.python.builtins.objects.floats.PFloat;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.set.PBaseSet;
 import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.str.StringNodes;
 import com.oracle.graal.python.builtins.objects.str.StringNodes.IsInternedStringNode;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.IsSameTypeNode;
-import com.oracle.graal.python.compiler.CodeUnit;
-import com.oracle.graal.python.compiler.Compiler;
 import com.oracle.graal.python.lib.PyComplexCheckExactNode;
 import com.oracle.graal.python.lib.PyDictCheckExactNode;
 import com.oracle.graal.python.lib.PyFloatCheckExactNode;
@@ -95,22 +113,36 @@ import com.oracle.graal.python.lib.PyTupleCheckExactNode;
 import com.oracle.graal.python.lib.PyUnicodeCheckExactNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.StringLiterals;
+import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnit;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNodeGen;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallBinaryNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonQuaternaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.runtime.ExecutionContext.IndirectCallContext;
-import com.oracle.graal.python.runtime.IndirectCallData;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.IndirectCallData.InteropCallData;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.PythonOptions;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.runtime.sequence.storage.ByteSequenceStorage;
+import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.TruffleFile;
+import com.oracle.truffle.api.bytecode.BytecodeConfig;
+import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
+import com.oracle.truffle.api.bytecode.serialization.ByteBufferDataInput;
+import com.oracle.truffle.api.bytecode.serialization.BytecodeSerializer;
+import com.oracle.truffle.api.bytecode.serialization.SerializationUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -119,15 +151,16 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.memory.ByteArraySupport;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.InternalByteArray;
+import com.oracle.truffle.api.strings.TranscodingErrorHandler;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
 @CoreFunctions(defineModule = "marshal")
 public final class MarshalModuleBuiltins extends PythonBuiltins {
-    static final int CURRENT_VERSION = 4;
+    static final int CURRENT_VERSION = 5;
 
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
@@ -140,115 +173,135 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         addBuiltinConstant(T_VERSION, CURRENT_VERSION);
     }
 
-    @Builtin(name = "dump", minNumOfPositionalArgs = 2, parameterNames = {"value", "file", "version"})
+    @Builtin(name = "dump", minNumOfPositionalArgs = 2, numOfPositionalOnlyArgs = 3, parameterNames = {"value", "file", "version"}, keywordOnlyNames = "allow_code")
     @ArgumentClinic(name = "version", defaultValue = "CURRENT_VERSION", conversion = ClinicConversion.Int)
+    @ArgumentClinic(name = "allow_code", defaultValue = "true", conversion = ClinicConversion.Boolean)
     @GenerateNodeFactory
-    abstract static class DumpNode extends PythonTernaryClinicBuiltinNode {
+    abstract static class DumpNode extends PythonQuaternaryClinicBuiltinNode {
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
             return DumpNodeClinicProviderGen.INSTANCE;
         }
 
-        @NeverDefault
-        protected static LookupAndCallBinaryNode createCallWriteNode() {
-            return LookupAndCallBinaryNode.create(T_WRITE);
-        }
-
         @Specialization
-        static Object doit(VirtualFrame frame, Object value, Object file, int version,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
-                        @Cached("createCallWriteNode()") LookupAndCallBinaryNode callNode,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            Object savedState = IndirectCallContext.enter(frame, indirectCallData);
+        static Object doit(VirtualFrame frame, Object value, Object file, int version, boolean allowCode,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached PyObjectCallMethodObjArgs callMethod,
+                        @Cached PRaiseNode raiseNode) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
+            PythonContext.PythonThreadState threadState = context.getThreadState(language);
+            Object savedState = BoundaryCallContext.enter(frame, threadState, boundaryCallData);
+            byte[] data;
             try {
-                return callNode.executeObject(frame, file, factory.createBytes(Marshal.dump(value, version, PythonContext.get(inliningTarget))));
+                data = Marshal.dump(language, value, version, allowCode);
             } catch (IOException e) {
                 throw CompilerDirectives.shouldNotReachHere(e);
             } catch (Marshal.MarshalError me) {
-                throw raiseNode.get(inliningTarget).raise(me.type, me.message, me.arguments);
+                throw raiseNode.raise(inliningTarget, me.type, me.message, me.arguments);
             } finally {
-                IndirectCallContext.exit(frame, indirectCallData, savedState);
+                BoundaryCallContext.exit(frame, threadState, savedState);
             }
+            return callMethod.execute(frame, inliningTarget, file, T_WRITE, PFactory.createBytes(language, data));
         }
     }
 
-    @Builtin(name = "dumps", minNumOfPositionalArgs = 1, parameterNames = {"value", "version"})
+    @Builtin(name = "dumps", minNumOfPositionalArgs = 1, numOfPositionalOnlyArgs = 2, parameterNames = {"value", "version"}, keywordOnlyNames = "allow_code")
     @ArgumentClinic(name = "version", defaultValue = "CURRENT_VERSION", conversion = ClinicConversion.Int)
+    @ArgumentClinic(name = "allow_code", defaultValue = "true", conversion = ClinicConversion.Boolean)
     @GenerateNodeFactory
-    abstract static class DumpsNode extends PythonBinaryClinicBuiltinNode {
+    abstract static class DumpsNode extends PythonTernaryClinicBuiltinNode {
         @Override
         protected ArgumentClinicProvider getArgumentClinic() {
             return DumpsNodeClinicProviderGen.INSTANCE;
         }
 
         @Specialization
-        static Object doit(VirtualFrame frame, Object value, int version,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            Object savedState = IndirectCallContext.enter(frame, indirectCallData);
+        static Object doit(VirtualFrame frame, Object value, int version, boolean allowCode,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached PRaiseNode raiseNode) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
+            PythonContext.PythonThreadState threadState = context.getThreadState(language);
+            Object savedState = BoundaryCallContext.enter(frame, threadState, boundaryCallData);
             try {
-                return factory.createBytes(Marshal.dump(value, version, PythonContext.get(inliningTarget)));
+                return PFactory.createBytes(language, Marshal.dump(language, value, version, allowCode));
             } catch (IOException e) {
                 throw CompilerDirectives.shouldNotReachHere(e);
             } catch (Marshal.MarshalError me) {
-                throw raiseNode.get(inliningTarget).raise(me.type, me.message, me.arguments);
+                throw raiseNode.raise(inliningTarget, me.type, me.message, me.arguments);
             } finally {
-                IndirectCallContext.exit(frame, indirectCallData, savedState);
+                BoundaryCallContext.exit(frame, threadState, savedState);
             }
         }
     }
 
-    @Builtin(name = "load", minNumOfPositionalArgs = 1)
+    @Builtin(name = "load", minNumOfPositionalArgs = 1, numOfPositionalOnlyArgs = 1, parameterNames = "file", keywordOnlyNames = "allow_code")
+    @ArgumentClinic(name = "allow_code", defaultValue = "true", conversion = ClinicConversion.Boolean)
     @GenerateNodeFactory
-    abstract static class LoadNode extends PythonBuiltinNode {
+    abstract static class LoadNode extends PythonBinaryClinicBuiltinNode {
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return MarshalModuleBuiltinsClinicProviders.LoadNodeClinicProviderGen.INSTANCE;
+        }
+
         @NeverDefault
         protected static LookupAndCallBinaryNode createCallReadNode() {
             return LookupAndCallBinaryNode.create(T_READ);
         }
 
         @Specialization
-        static Object doit(VirtualFrame frame, Object file,
-                        @Bind("this") Node inliningTarget,
+        static Object doit(VirtualFrame frame, Object file, boolean allowCode,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
                         @Cached("createCallReadNode()") LookupAndCallBinaryNode callNode,
                         @CachedLibrary(limit = "3") PythonBufferAcquireLibrary bufferLib,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
             Object buffer = callNode.executeObject(frame, file, 0);
             if (!bufferLib.hasBuffer(buffer)) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.TypeError, ErrorMessages.READ_RETURNED_NOT_BYTES, buffer);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.READ_RETURNED_NOT_BYTES, buffer);
             }
             try {
-                return Marshal.loadFile(file);
+                return Marshal.loadFile(language, file, allowCode);
             } catch (NumberFormatException e) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
             } catch (Marshal.MarshalError me) {
-                throw raiseNode.get(inliningTarget).raise(me.type, me.message, me.arguments);
+                throw raiseNode.raise(inliningTarget, me.type, me.message, me.arguments);
             }
         }
     }
 
-    @Builtin(name = "loads", minNumOfPositionalArgs = 1, numOfPositionalOnlyArgs = 1, parameterNames = {"bytes"})
+    @Builtin(name = "loads", minNumOfPositionalArgs = 1, numOfPositionalOnlyArgs = 1, parameterNames = {"bytes"}, keywordOnlyNames = "allow_code")
     @ArgumentClinic(name = "bytes", conversion = ClinicConversion.ReadableBuffer)
+    @ArgumentClinic(name = "allow_code", defaultValue = "true", conversion = ClinicConversion.Boolean)
     @GenerateNodeFactory
-    abstract static class LoadsNode extends PythonUnaryClinicBuiltinNode {
+    abstract static class LoadsNode extends PythonBinaryClinicBuiltinNode {
 
         @Specialization
-        static Object doit(VirtualFrame frame, Object buffer,
-                        @Bind("this") Node inliningTarget,
-                        @Cached("createFor(this)") IndirectCallData indirectCallData,
+        static Object doit(VirtualFrame frame, Object buffer, boolean allowCode,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached("createFor($node)") InteropCallData callData,
                         @CachedLibrary(limit = "3") PythonBufferAccessLibrary bufferLib,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
             try {
-                return Marshal.load(bufferLib.getInternalOrCopiedByteArray(buffer), bufferLib.getBufferLength(buffer));
+                byte[] bytes = bufferLib.getInternalOrCopiedByteArray(buffer);
+                int length = bufferLib.getBufferLength(buffer);
+                long cacheKey = 0;
+                if (!language.isSingleContext()) {
+                    cacheKey = language.cacheKeyForBytecode(bytes, length);
+                }
+                return Marshal.load(language, bytes, length, cacheKey, allowCode);
             } catch (NumberFormatException e) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
+                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
             } catch (Marshal.MarshalError me) {
-                throw raiseNode.get(inliningTarget).raise(me.type, me.message, me.arguments);
+                throw raiseNode.raise(inliningTarget, me.type, me.message, me.arguments);
             } finally {
-                bufferLib.release(buffer, frame, indirectCallData);
+                bufferLib.release(buffer, frame, callData);
             }
         }
 
@@ -259,7 +312,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
     }
 
-    static final class Marshal {
+    public static final class Marshal {
         private static final char TYPE_NULL = '0';
         private static final char TYPE_NONE = 'N';
         private static final char TYPE_NOVALUE = 'n';
@@ -297,6 +350,10 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         private static final char TYPE_GRAALPYTHON_CODE_UNIT = 'U';
         private static final char TYPE_BIG_INTEGER = 'B';
         private static final char TYPE_ARRAY = ']';
+        // These are constants that show up in the Bytecode DSL interpreter.
+        private static final char TYPE_GRAALPYTHON_DSL_CODE_UNIT = 'D';
+        private static final char TYPE_DSL_SOURCE = '$';
+        private static final char TYPE_DSL_EMPTY_KEYWORDS = 'k';
 
         private static final char ARRAY_TYPE_OBJECT = 'o';
         private static final char ARRAY_TYPE_INT = 'i';
@@ -311,10 +368,6 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         // CPython enforces 15bits per digit when reading/writing large integers for portability
         private static final int MARSHAL_SHIFT = 15;
         private static final BigInteger MARSHAL_BASE = BigInteger.valueOf(1 << MARSHAL_SHIFT);
-
-        private static final int BYTES_PER_LONG = Long.SIZE / Byte.SIZE;
-        private static final int BYTES_PER_INT = Integer.SIZE / Byte.SIZE;
-        private static final int BYTES_PER_SHORT = Short.SIZE / Byte.SIZE;
 
         /**
          * This class exists to throw errors out of the (un)marshalling code, without having to
@@ -345,15 +398,20 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        static byte[] dump(Object value, int version, Python3Core core) throws IOException, MarshalError {
-            Marshal outMarshal = new Marshal(version, core.getTrue(), core.getFalse());
+        static byte[] dump(PythonLanguage language, Object value, int version, boolean allowCode) throws IOException, MarshalError {
+            Marshal outMarshal = new Marshal(language, version, allowCode);
             outMarshal.writeObject(value);
-            return outMarshal.out.toByteArray();
+            return outMarshal.outData.toByteArray();
         }
 
         @TruffleBoundary
-        static Object load(byte[] ary, int length) throws NumberFormatException, MarshalError {
-            Marshal inMarshal = new Marshal(ary, length);
+        static Object load(PythonLanguage language, byte[] ary, int length, long cacheKey) throws NumberFormatException, MarshalError {
+            return load(language, ary, length, cacheKey, true);
+        }
+
+        @TruffleBoundary
+        static Object load(PythonLanguage language, byte[] ary, int length, long cacheKey, boolean allowCode) throws NumberFormatException, MarshalError {
+            Marshal inMarshal = new Marshal(language, ary, length, cacheKey, allowCode);
             Object result = inMarshal.readObject();
             if (result == null) {
                 throw new MarshalError(PythonBuiltinClassType.TypeError, ErrorMessages.BAD_MARSHAL_DATA_NULL);
@@ -362,8 +420,8 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        static Object loadFile(Object file) throws NumberFormatException, MarshalError {
-            Marshal inMarshal = new Marshal(file);
+        static Object loadFile(PythonLanguage language, Object file, boolean allowCode) throws NumberFormatException, MarshalError {
+            Marshal inMarshal = new Marshal(language, file, allowCode);
             Object result = inMarshal.readObject();
             if (result == null) {
                 throw new MarshalError(PythonBuiltinClassType.TypeError, ErrorMessages.BAD_MARSHAL_DATA_NULL);
@@ -386,7 +444,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 this.fileLike = fileLike;
                 this.asSize = PyNumberAsSizeNode.getUncached();
                 this.singleByteStore = new ByteSequenceStorage(new byte[1]);
-                this.buffer = PythonObjectFactory.getUncached().createByteArray(singleByteStore);
+                this.buffer = PFactory.createByteArray(PythonLanguage.get(null), singleByteStore);
             }
 
             @Override
@@ -417,62 +475,119 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             }
         }
 
-        private static final PythonObjectFactory factory = PythonObjectFactory.getUncached();
+        private final PythonLanguage language;
         final HashMap<Object, Integer> refMap;
         final ArrayList<Object> refList;
-        final ByteArrayOutputStream out;
-        final InputStream in;
+        final ByteArrayOutputStream outData;
+        final DataOutput out;
+        final DataInput in;
         final int version;
-        final PInt pyTrue;
-        final PInt pyFalse;
-        // CPython's marshal code is little endian
-        final ByteArraySupport baSupport = ByteArraySupport.littleEndian();
-        byte[] buffer = new byte[Long.BYTES];
+        final boolean allowCode;
         int depth = 0;
+        long cacheKey;
+        TruffleFile bytecodeFile;
+        SourceReference sourceReference;
+        // Offset of the buffer in parent buffer in nested deserializations
+        int baseOffset;
 
-        Marshal(int version, PInt pyTrue, PInt pyFalse) {
+        /*
+         * A DSL node needs access to its Source during deserialization, but we do not wish to
+         * actually encode it in the serialized representation. Instead, we supply a Source to the
+         * Marshal object and return it when the source is needed.
+         */
+        Source source = null;
+
+        Marshal(PythonLanguage language, int version) {
+            this(language, version, true);
+        }
+
+        Marshal(PythonLanguage language, int version, boolean allowCode) {
+            this.language = language;
             this.version = version;
-            this.pyTrue = pyTrue;
-            this.pyFalse = pyFalse;
-            this.out = new ByteArrayOutputStream();
+            this.allowCode = allowCode;
+            this.outData = new ByteArrayOutputStream();
+            this.out = new DataOutputStream(outData);
             this.refMap = new HashMap<>();
             this.in = null;
             this.refList = null;
         }
 
-        Marshal(byte[] in, int length) {
-            this.in = new ByteArrayInputStream(in, 0, length);
-            this.refList = new ArrayList<>();
-            this.version = -1;
-            this.pyTrue = null;
-            this.pyFalse = null;
-            this.out = null;
-            this.refMap = null;
+        Marshal(PythonLanguage language, int version, DataOutput out) {
+            this.language = language;
+            this.version = version;
+            this.allowCode = true;
+            this.outData = null;
+            this.out = out;
+            this.refMap = new HashMap<>();
+            this.in = null;
+            this.refList = null;
         }
 
-        Marshal(Object in) {
-            this.in = new FileLikeInputStream(in);
+        Marshal(PythonLanguage language, byte[] in, int length, long cacheKey) {
+            this(language, in, length, cacheKey, true);
+        }
+
+        Marshal(PythonLanguage language, byte[] in, int length, long cacheKey, boolean allowCode) {
+            this(language, SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(in, 0, length)), null, 0, allowCode);
+            this.cacheKey = cacheKey;
+        }
+
+        Marshal(PythonLanguage language, byte[] in, int length, long cacheKey, TruffleFile bytecodeFile, int baseOffset) {
+            this(language, SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(in, 0, length)), bytecodeFile, baseOffset, true);
+            this.cacheKey = cacheKey;
+        }
+
+        Marshal(PythonLanguage language, Object in) {
+            this(language, in, true);
+        }
+
+        Marshal(PythonLanguage language, Object in, boolean allowCode) {
+            this(language, new DataInputStream(new FileLikeInputStream(in)), null, 0, allowCode);
+        }
+
+        Marshal(PythonLanguage language, DataInput in, TruffleFile bytecodeFile, int baseOffset) {
+            this(language, in, bytecodeFile, baseOffset, true);
+        }
+
+        Marshal(PythonLanguage language, DataInput in, TruffleFile bytecodeFile, int baseOffset, boolean allowCode) {
+            this.language = language;
+            this.in = in;
             this.refList = new ArrayList<>();
             this.version = -1;
-            this.pyTrue = null;
-            this.pyFalse = null;
+            this.allowCode = allowCode;
+            this.outData = null;
             this.out = null;
             this.refMap = null;
+            this.bytecodeFile = bytecodeFile;
+            this.baseOffset = baseOffset;
         }
 
         private void writeByte(int v) {
-            out.write(v);
+            try {
+                out.write(v);
+            } catch (IOException e) {
+                // The underlying output streams we use should not throw IOExceptions.
+                throw CompilerDirectives.shouldNotReachHere();
+            }
+        }
+
+        private void writeBytes(byte[] b, int off, int len) {
+            try {
+                out.write(b, off, len);
+            } catch (IOException e) {
+                // The underlying output streams we use should not throw IOExceptions.
+                throw CompilerDirectives.shouldNotReachHere();
+            }
         }
 
         private int readByte() {
             int nextByte;
             try {
-                nextByte = in.read();
+                nextByte = in.readUnsignedByte();
+            } catch (EOFException e) {
+                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
             } catch (IOException e) {
                 throw CompilerDirectives.shouldNotReachHere();
-            }
-            if (nextByte < 0) {
-                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
             }
             return nextByte;
         }
@@ -505,10 +620,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             if (sz == 0) {
                 return PythonUtils.EMPTY_BYTE_ARRAY;
             } else {
-                if (buffer.length < sz) {
-                    buffer = new byte[sz];
-                }
-                return readNBytes(sz, buffer);
+                return readNBytes(sz, new byte[sz]);
             }
         }
 
@@ -516,14 +628,12 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             if (sz == 0) {
                 return output;
             }
-            int read;
             try {
-                read = in.read(output, 0, sz);
+                in.readFully(output, 0, sz);
+            } catch (EOFException e) {
+                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
             } catch (IOException e) {
                 throw CompilerDirectives.shouldNotReachHere();
-            }
-            if (read < sz) {
-                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
             }
             return output;
         }
@@ -535,32 +645,53 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
         private void writeInt(int v) {
             for (int i = 0; i < Integer.SIZE; i += Byte.SIZE) {
-                out.write((v >> i) & 0xff);
+                writeByte((v >> i) & 0xff);
             }
         }
 
         private void writeShort(short v) {
             for (int i = 0; i < Short.SIZE; i += Byte.SIZE) {
-                out.write((v >> i) & 0xff);
+                writeByte((v >> i) & 0xff);
             }
         }
 
         private int readInt() {
-            return baSupport.getInt(readNBytes(BYTES_PER_INT), 0);
+            try {
+                int val = in.readInt();
+                return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN ? Integer.reverseBytes(val) : val;
+            } catch (EOFException e) {
+                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
+            } catch (IOException e) {
+                throw CompilerDirectives.shouldNotReachHere();
+            }
         }
 
         private short readShort() {
-            return baSupport.getShort(readNBytes(BYTES_PER_SHORT), 0);
+            try {
+                short val = in.readShort();
+                return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN ? Short.reverseBytes(val) : val;
+            } catch (EOFException e) {
+                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
+            } catch (IOException e) {
+                throw CompilerDirectives.shouldNotReachHere();
+            }
         }
 
         private void writeLong(long v) {
             for (int i = 0; i < Long.SIZE; i += Byte.SIZE) {
-                out.write((int) ((v >>> i) & 0xff));
+                writeByte((int) ((v >>> i) & 0xff));
             }
         }
 
         private long readLong() {
-            return baSupport.getLong(readNBytes(BYTES_PER_LONG), 0);
+            try {
+                long val = in.readLong();
+                return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN ? Long.reverseBytes(val) : val;
+            } catch (EOFException e) {
+                throw new MarshalError(PythonBuiltinClassType.EOFError, ErrorMessages.BAD_MARSHAL_DATA_EOF);
+            } catch (IOException e) {
+                throw CompilerDirectives.shouldNotReachHere();
+            }
         }
 
         private void writeBigInteger(BigInteger v) {
@@ -581,13 +712,14 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             }
             for (int digit : digits) {
                 for (int i = 0; i < Short.SIZE; i += Byte.SIZE) {
-                    out.write((digit >> i) & 0xff);
+                    writeByte((digit >> i) & 0xff);
                 }
             }
         }
 
         private BigInteger readBigInteger() {
             boolean negative;
+            // size is in shorts
             int sz = readInt();
             if (sz < 0) {
                 negative = true;
@@ -596,21 +728,11 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 negative = false;
             }
 
-            // size is in shorts
-            sz *= 2;
-
-            byte[] data = readNBytes(sz);
-
-            int i = 0;
-            int digit = baSupport.getShort(data, i);
-            i += 2;
+            int digit = readShort();
             BigInteger result = BigInteger.valueOf(digit);
-
-            while (i < sz) {
-                int power = i / 2;
-                digit = baSupport.getShort(data, i);
-                i += 2;
-                result = result.add(BigInteger.valueOf(digit).multiply(MARSHAL_BASE.pow(power)));
+            for (int i = 1; i < sz; i++) {
+                digit = readShort();
+                result = result.add(BigInteger.valueOf(digit).multiply(MARSHAL_BASE.pow(i)));
             }
             if (negative) {
                 return result.negate();
@@ -676,11 +798,11 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 writeByte(TYPE_NOVALUE);
             } else if (IsSameTypeNode.executeUncached(v, PythonBuiltinClassType.StopIteration)) {
                 writeByte(TYPE_STOPITER);
-            } else if (IsSameTypeNode.executeUncached(v, PythonBuiltinClassType.PEllipsis)) {
+            } else if (v == PEllipsis.INSTANCE) {
                 writeByte(TYPE_ELLIPSIS);
-            } else if (v == Boolean.TRUE || v == pyTrue) {
+            } else if (v == Boolean.TRUE || v instanceof PInt i && i.getPythonClass() == PythonBuiltinClassType.Boolean && i.isOne()) {
                 writeByte(TYPE_TRUE);
-            } else if (v == Boolean.FALSE || v == pyFalse) {
+            } else if (v == Boolean.FALSE || v instanceof PInt i && i.getPythonClass() == PythonBuiltinClassType.Boolean && i.isZero()) {
                 writeByte(TYPE_FALSE);
             } else if (v instanceof Integer) {
                 writeByte(TYPE_INT);
@@ -744,16 +866,17 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 } else if (isJavaString(v)) {
                     writeByte(TYPE_UNICODE | flag);
                     writeString(TruffleString.fromJavaStringUncached((String) v, TS_ENCODING));
-                } else if (v instanceof TruffleString) {
-                    writeByte(TYPE_UNICODE | flag);
-                    writeString((TruffleString) v);
                 } else if (PyUnicodeCheckExactNode.executeUncached(v)) {
-                    if (version >= 3 && IsInternedStringNode.executeUncached((PString) v)) {
+                    if (version >= 3 && IsInternedStringNode.executeUncached(v)) {
                         writeByte(TYPE_INTERNED | flag);
                     } else {
                         writeByte(TYPE_UNICODE | flag);
                     }
-                    writeString(((PString) v).getValueUncached());
+                    if (v instanceof PString pstring) {
+                        writeString(pstring.getValueUncached());
+                    } else {
+                        writeString((TruffleString) v);
+                    }
                 } else if (PyTupleCheckExactNode.executeUncached(v)) {
                     Object[] items = GetObjectArrayNode.executeUncached(v);
                     if (version >= 4 && items.length < 256) {
@@ -768,10 +891,11 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                     }
                 } else if (PyListCheckExactNode.executeUncached(v)) {
                     writeByte(TYPE_LIST | flag);
+                    SequenceStorage storage = SequenceNodes.GetSequenceStorageNode.executeUncached(v);
                     Object[] items = GetInternalObjectArrayNode.executeUncached(SequenceNodes.GetSequenceStorageNode.executeUncached(v));
-                    writeSize(items.length);
-                    for (Object item : items) {
-                        writeObject(item);
+                    writeSize(storage.length());
+                    for (int i = 0; i < storage.length(); i++) {
+                        writeObject(items[i]);
                     }
                 } else if (v instanceof PDict && PyDictCheckExactNode.executeUncached(v)) {
                     HashingStorage dictStorage = ((PDict) v).getDictStorage();
@@ -824,27 +948,35 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                     writeByte(TYPE_ARRAY | flag);
                     writeByte(ARRAY_TYPE_STRING);
                     writeStringArray((TruffleString[]) v);
+                } else if (v instanceof PKeyword[]) {
+                    assert v == PKeyword.EMPTY_KEYWORDS;
+                    writeByte(TYPE_DSL_EMPTY_KEYWORDS);
                 } else if (v instanceof Object[]) {
                     writeByte(TYPE_ARRAY | flag);
                     writeByte(ARRAY_TYPE_OBJECT);
                     writeObjectArray((Object[]) v);
-                } else if (v instanceof PCode) {
+                } else if (v instanceof PCode c) {
+                    if (!allowCode) {
+                        throw new MarshalError(ValueError, ErrorMessages.MARSHALLING_CODE_OBJECTS_DISALLOWED);
+                    }
                     // we always store code objects in our format, CPython will not read our
                     // marshalled data when that contains code objects
-                    PCode c = (PCode) v;
                     writeByte(TYPE_GRAALPYTHON_CODE | flag);
                     writeString(c.getFilename());
                     writeInt(c.getFlags());
-                    writeBytes(c.getCodestring());
+                    writeCodeUnit(c.getCodeUnit());
                     writeInt(c.getFirstLineNo());
                     byte[] lnotab = c.getLinetable();
                     if (lnotab == null) {
                         lnotab = PythonUtils.EMPTY_BYTE_ARRAY;
                     }
                     writeBytes(lnotab);
-                } else if (v instanceof CodeUnit) {
-                    writeByte(TYPE_GRAALPYTHON_CODE_UNIT | flag);
-                    writeCodeUnit((CodeUnit) v);
+                } else if (v instanceof BytecodeDSLCodeUnit) {
+                    writeByte(TYPE_GRAALPYTHON_DSL_CODE_UNIT | flag);
+                    writeBytecodeDSLCodeUnit((BytecodeDSLCodeUnit) v);
+                } else if (v instanceof Source s) {
+                    writeByte(TYPE_DSL_SOURCE | flag);
+                    writeSource(s);
                 } else {
                     PythonBufferAcquireLibrary acquireLib = PythonBufferAcquireLibrary.getFactory().getUncached(v);
                     if (acquireLib.hasBuffer(v)) {
@@ -965,7 +1097,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 case TYPE_STOPITER:
                     return PythonBuiltinClassType.StopIteration;
                 case TYPE_ELLIPSIS:
-                    return PythonBuiltinClassType.PEllipsis;
+                    return PEllipsis.INSTANCE;
                 case TYPE_FALSE:
                     return false;
                 case TYPE_TRUE:
@@ -977,17 +1109,17 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 case TYPE_BIG_INTEGER:
                     return readBigInteger();
                 case TYPE_LONG:
-                    return addRef.run(factory.createInt(readBigInteger()));
+                    return addRef.run(PFactory.createInt(language, readBigInteger()));
                 case TYPE_FLOAT:
                     return addRef.run(readDoubleString());
                 case TYPE_BINARY_FLOAT:
                     return addRef.run(readDouble());
                 case TYPE_COMPLEX:
-                    return addRef.run(factory.createComplex(readDoubleString(), readDoubleString()));
+                    return addRef.run(PFactory.createComplex(language, readDoubleString(), readDoubleString()));
                 case TYPE_BINARY_COMPLEX:
-                    return addRef.run(factory.createComplex(readDouble(), readDouble()));
+                    return addRef.run(PFactory.createComplex(language, readDouble(), readDouble()));
                 case TYPE_STRING:
-                    return addRef.run(factory.createBytes(readBytes()));
+                    return addRef.run(PFactory.createBytes(language, readBytes()));
                 case TYPE_ASCII_INTERNED:
                     return addRef.run(readAscii(readSize(), true));
                 case TYPE_ASCII:
@@ -997,30 +1129,30 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 case TYPE_SHORT_ASCII:
                     return addRef.run(readAscii(readByteSize(), false));
                 case TYPE_INTERNED:
-                    return addRef.run(StringNodes.InternStringNode.executeUncached(readString()));
+                    return addRef.run(readString(true));
                 case TYPE_UNICODE:
-                    return addRef.run(readString());
+                    return addRef.run(readString(false));
                 case TYPE_SMALL_TUPLE:
                     int smallTupleSize = readByteSize();
                     Object[] smallTupleItems = new Object[smallTupleSize];
-                    Object smallTuple = addRef.run(factory.createTuple(smallTupleItems));
+                    Object smallTuple = addRef.run(PFactory.createTuple(language, smallTupleItems));
                     readArray(smallTupleItems);
                     return smallTuple;
                 case TYPE_TUPLE:
                     int tupleSize = readSize();
                     Object[] tupleItems = new Object[tupleSize];
-                    Object tuple = addRef.run(factory.createTuple(tupleItems));
+                    Object tuple = addRef.run(PFactory.createTuple(language, tupleItems));
                     readArray(tupleItems);
                     return tuple;
                 case TYPE_LIST:
                     int listSize = readSize();
                     Object[] listItems = new Object[listSize];
-                    Object list = addRef.run(factory.createList(listItems));
+                    Object list = addRef.run(PFactory.createList(language, listItems));
                     readArray(listItems);
                     return list;
                 case TYPE_DICT:
                     HashingStorage store = PDict.createNewStorage(0);
-                    PDict dict = factory.createDict(store);
+                    PDict dict = PFactory.createDict(language, store);
                     addRef.run(dict);
                     while (true) {
                         Object key = readObject();
@@ -1040,9 +1172,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                     HashingStorage setStore = EconomicMapStorage.create(setSz);
                     PBaseSet set;
                     if (type == TYPE_FROZENSET) {
-                        set = factory.createFrozenSet(setStore);
+                        set = PFactory.createFrozenSet(language, setStore);
                     } else {
-                        set = factory.createSet(setStore);
+                        set = PFactory.createSet(language, setStore);
                     }
                     addRef.run(set);
                     for (int i = 0; i < setSz; i++) {
@@ -1055,42 +1187,61 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                     set.setDictStorage(setStore);
                     return set;
                 case TYPE_GRAALPYTHON_CODE:
+                    if (!allowCode) {
+                        throw new MarshalError(ValueError, ErrorMessages.UNMARSHALLING_CODE_OBJECTS_DISALLOWED);
+                    }
                     return addRef.run(readCode());
                 case TYPE_GRAALPYTHON_CODE_UNIT:
-                    return addRef.run(readCodeUnit());
-                case TYPE_ARRAY: {
+                    if (!allowCode) {
+                        throw new MarshalError(ValueError, ErrorMessages.UNMARSHALLING_CODE_OBJECTS_DISALLOWED);
+                    }
+                    return addRef.run(readRemovedCodeUnitPayload());
+                case TYPE_GRAALPYTHON_DSL_CODE_UNIT:
+                    if (!allowCode) {
+                        throw new MarshalError(ValueError, ErrorMessages.UNMARSHALLING_CODE_OBJECTS_DISALLOWED);
+                    }
+                    return addRef.run(readBytecodeDSLCodeUnit());
+                case TYPE_DSL_SOURCE:
+                    return addRef.run(readSource());
+                case TYPE_DSL_EMPTY_KEYWORDS:
+                    return PKeyword.EMPTY_KEYWORDS;
+                case TYPE_ARRAY:
                     return addRef.run(readJavaArray());
-                }
                 default:
                     throw new MarshalError(ValueError, ErrorMessages.BAD_MARSHAL_DATA);
             }
         }
 
         private void writeString(TruffleString v) {
-            /*
-             * Ugly workaround for GR-39571 - TruffleString UTF-8 doesn't support surrogate
-             * passthrough. If the string contains surrogates, we mark it and emit it as UTF-32.
-             */
-            Encoding encoding;
-            if (v.isValidUncached(TS_ENCODING)) {
-                encoding = Encoding.UTF_8;
-            } else {
-                encoding = Encoding.UTF_32LE;
-                writeInt(-1);
-            }
-            InternalByteArray ba = v.switchEncodingUncached(encoding).getInternalByteArrayUncached(encoding);
+            InternalByteArray ba = v.switchEncodingUncached(Encoding.UTF_8, TranscodingErrorHandler.DEFAULT_KEEP_SURROGATES_IN_UTF8).getInternalByteArrayUncached(Encoding.UTF_8);
             writeSize(ba.getLength());
-            out.write(ba.getArray(), ba.getOffset(), ba.getLength());
+            writeBytes(ba.getArray(), ba.getOffset(), ba.getLength());
         }
 
-        private TruffleString readString() {
-            Encoding encoding = Encoding.UTF_8;
-            int sz = readInt();
-            if (sz < 0) {
-                encoding = Encoding.UTF_32LE;
-                sz = readSize();
+        private void writeSource(Source source) {
+            writeString(TruffleString.fromJavaStringUncached(source.getName(), TS_ENCODING));
+        }
+
+        private Source readSource() {
+            String name = readString(false).toJavaStringUncached();
+            if (sourceReference == null) {
+                sourceReference = new SourceReference(name);
             }
-            return TruffleString.fromByteArrayUncached(readNBytes(sz), 0, sz, encoding, true).switchEncodingUncached(TS_ENCODING);
+            return sourceReference.getSource(language);
+        }
+
+        private TruffleString readString(boolean intern) {
+            int sz = readInt();
+            if (sz == 0) {
+                return StringLiterals.T_EMPTY_STRING;
+            }
+            var utf8String = TruffleString.fromByteArrayUncached(readNBytes(sz), 0, sz, Encoding.UTF_8, false);
+            var value = utf8String.switchEncodingUncached(TS_ENCODING, TranscodingErrorHandler.DEFAULT_KEEP_SURROGATES_IN_UTF8);
+            if (intern) {
+                return PythonUtils.internString(value);
+            } else {
+                return value;
+            }
         }
 
         private void writeShortString(String v) throws IOException {
@@ -1100,17 +1251,18 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             out.write(bytes);
         }
 
+        // Only used by readDoubleString() so no interning
         private TruffleString readShortString() {
             int sz = readByteSize();
             byte[] bytes = readNBytes(sz);
-            return TruffleString.fromByteArrayUncached(bytes, 0, sz, Encoding.ISO_8859_1, true).switchEncodingUncached(TS_ENCODING);
+            return TruffleString.fromByteArrayWithCompactionUTF32Uncached(bytes, 0, sz, TruffleString.CompactionLevel.S1, false);
         }
 
-        private Object readAscii(long sz, boolean intern) {
-            byte[] bytes = readNBytes((int) sz);
-            TruffleString value = TruffleString.fromByteArrayUncached(bytes, 0, (int) sz, Encoding.US_ASCII, true).switchEncodingUncached(TS_ENCODING);
+        private Object readAscii(int sz, boolean intern) {
+            byte[] bytes = readNBytes(sz);
+            TruffleString value = TruffleString.fromByteArrayWithCompactionUTF32Uncached(bytes, 0, sz, TruffleString.CompactionLevel.S1, false);
             if (intern) {
-                return StringNodes.InternStringNode.executeUncached(value);
+                return PythonUtils.internString(value);
             } else {
                 return value;
             }
@@ -1142,7 +1294,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 case ARRAY_TYPE_BOOLEAN:
                     return readBooleanArray();
                 case ARRAY_TYPE_STRING:
-                    return readStringArray();
+                    return readStringArray(false);
                 case ARRAY_TYPE_OBJECT:
                     return readObjectArray();
                 default:
@@ -1152,6 +1304,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
         private int[] readIntArray() {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_INT_ARRAY;
+            }
             int[] a = new int[length];
             for (int i = 0; i < length; i++) {
                 a[i] = readInt();
@@ -1161,6 +1316,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
         private long[] readLongArray() {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_LONG_ARRAY;
+            }
             long[] a = new long[length];
             for (int i = 0; i < length; i++) {
                 a[i] = readLong();
@@ -1170,6 +1328,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
         private double[] readDoubleArray() {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_DOUBLE_ARRAY;
+            }
             double[] a = new double[length];
             for (int i = 0; i < length; i++) {
                 a[i] = readDouble();
@@ -1179,6 +1340,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
         private short[] readShortArray() {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_SHORT_ARRAY;
+            }
             short[] a = new short[length];
             for (int i = 0; i < length; i++) {
                 a[i] = readShort();
@@ -1188,6 +1352,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
         private boolean[] readBooleanArray() {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_BOOLEAN_ARRAY;
+            }
             boolean[] a = new boolean[length];
             for (int i = 0; i < length; i++) {
                 a[i] = readByte() != 0;
@@ -1195,17 +1362,23 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             return a;
         }
 
-        private TruffleString[] readStringArray() {
+        private TruffleString[] readStringArray(boolean intern) {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_TRUFFLESTRING_ARRAY;
+            }
             TruffleString[] a = new TruffleString[length];
             for (int i = 0; i < length; i++) {
-                a[i] = readString();
+                a[i] = readString(intern);
             }
             return a;
         }
 
         private Object[] readObjectArray() {
             int length = readInt();
+            if (length == 0) {
+                return EMPTY_OBJECT_ARRAY;
+            }
             Object[] a = new Object[length];
             for (int i = 0; i < length; i++) {
                 a[i] = readObject();
@@ -1213,147 +1386,292 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             return a;
         }
 
-        private void writeSparseTable(int[][] table) {
-            writeInt(table.length);
-            for (int i = 0; i < table.length; i++) {
-                if (table[i] != null && table[i].length > 0) {
-                    writeInt(i);
-                    writeIntArray(table[i]);
-                }
-            }
-            writeInt(-1);
+        private BytecodeDSLCodeUnit readCodeUnit() {
+            int codeUnitType = readByte();
+            return switch (codeUnitType) {
+                case TYPE_GRAALPYTHON_CODE_UNIT -> readRemovedCodeUnitPayload();
+                case TYPE_GRAALPYTHON_DSL_CODE_UNIT -> readBytecodeDSLCodeUnit();
+                default -> throw CompilerDirectives.shouldNotReachHere();
+            };
         }
 
-        private int[][] readSparseTable() {
-            int length = readInt();
-            int[][] table = new int[length][];
-            while (true) {
-                int i = readInt();
-                if (i == -1) {
-                    return table;
-                }
-                table[i] = readIntArray();
-            }
+        private BytecodeDSLCodeUnit readRemovedCodeUnitPayload() {
+            throw new MarshalError(ValueError,
+                            PythonUtils.tsLiteral(
+                                            "Attempted to deserialize a code object from the removed legacy bytecode interpreter. Consider clearing or setting a different pycache folder."));
         }
 
-        private CodeUnit readCodeUnit() {
-            int fileVersion = readByte();
-            if (fileVersion != Compiler.BYTECODE_VERSION) {
-                throw new MarshalError(ValueError, ErrorMessages.BYTECODE_VERSION_MISMATCH, Compiler.BYTECODE_VERSION, fileVersion);
+        private BytecodeDSLCodeUnit readBytecodeDSLCodeUnit() {
+            int bytecodeSize = readSize();
+            int bytecodeOffset = -1;
+            if (in instanceof ByteBufferDataInput bufferIn) {
+                bytecodeOffset = baseOffset + bufferIn.position();
             }
-            TruffleString name = readString();
-            TruffleString qualname = readString();
+            byte[] serialized = readNBytes(bytecodeSize, new byte[bytecodeSize]);
+            TruffleString name = readString(true);
+            TruffleString qualname = readString(true);
             int argCount = readInt();
             int kwOnlyArgCount = readInt();
             int positionalOnlyArgCount = readInt();
-            int stacksize = readInt();
-            byte[] code = readBytes();
-            byte[] srcOffsetTable = readBytes();
             int flags = readInt();
-            TruffleString[] names = readStringArray();
-            TruffleString[] varnames = readStringArray();
-            TruffleString[] cellvars = readStringArray();
-            TruffleString[] freevars = readStringArray();
-            int[] cell2arg = readIntArray();
-            if (cell2arg.length == 0) {
-                cell2arg = null;
-            }
+            TruffleString[] names = readStringArray(true);
+            TruffleString[] varnames = readStringArray(true);
+            TruffleString[] cellvars = readStringArray(true);
+            TruffleString[] freevars = readStringArray(true);
             Object[] constants = readObjectArray();
-            long[] primitiveConstants = readLongArray();
-            int[] exceptionHandlerRanges = readIntArray();
-            int conditionProfileCount = readInt();
             int startLine = readInt();
             int startColumn = readInt();
             int endLine = readInt();
             int endColumn = readInt();
-            byte[] outputCanQuicken = readBytes();
-            byte[] variableShouldUnbox = readBytes();
-            int[][] generalizeInputsMap = readSparseTable();
-            int[][] generalizeVarsMap = readSparseTable();
-            return new CodeUnit(name, qualname, argCount, kwOnlyArgCount, positionalOnlyArgCount, stacksize, code, srcOffsetTable,
-                            flags, names, varnames, cellvars, freevars, cell2arg, constants, primitiveConstants, exceptionHandlerRanges, conditionProfileCount,
-                            startLine, startColumn, endLine, endColumn,
-                            outputCanQuicken, variableShouldUnbox, generalizeInputsMap, generalizeVarsMap);
+            int classcellIndex = readInt();
+            int selfIndex = readInt();
+            int yieldFromGeneratorIndex = readInt();
+            int instrumentationDataIndex = readInt();
+            int maxProfileCEventStackSize = readInt();
+
+            BytecodeSupplier provider = new BytecodeSupplier(serialized, bytecodeFile, sourceReference, bytecodeOffset, bytecodeSize, cacheKey);
+            return new BytecodeDSLCodeUnit(name, qualname, argCount, kwOnlyArgCount, positionalOnlyArgCount, flags, names, varnames, cellvars, freevars, constants,
+                            startLine, startColumn, endLine, endColumn, classcellIndex, selfIndex, yieldFromGeneratorIndex, instrumentationDataIndex, maxProfileCEventStackSize, provider);
         }
 
-        private void writeCodeUnit(CodeUnit code) throws IOException {
-            writeByte(Compiler.BYTECODE_VERSION);
+        private void writeCodeUnit(BytecodeDSLCodeUnit code) throws IOException {
+            writeByte(TYPE_GRAALPYTHON_DSL_CODE_UNIT);
+            writeBytecodeDSLCodeUnit(code);
+        }
+
+        private void writeBytecodeDSLCodeUnit(BytecodeDSLCodeUnit code) throws IOException {
+            /*
+             * Nested code units referenced by MakeFunction are stored in co_consts; the
+             * MakeFunction instruction itself carries only the integer index into this constants
+             * array.
+             */
+            byte[] serialized = code.getSerialized(language);
+            writeBytes(serialized);
             writeString(code.name);
             writeString(code.qualname);
             writeInt(code.argCount);
             writeInt(code.kwOnlyArgCount);
             writeInt(code.positionalOnlyArgCount);
-            writeInt(code.stacksize);
-            writeBytes(code.code);
-            writeBytes(code.srcOffsetTable);
             writeInt(code.flags);
             writeStringArray(code.names);
             writeStringArray(code.varnames);
             writeStringArray(code.cellvars);
             writeStringArray(code.freevars);
-            if (code.cell2arg != null) {
-                writeIntArray(code.cell2arg);
-            } else {
-                writeIntArray(PythonUtils.EMPTY_INT_ARRAY);
-            }
             writeObjectArray(code.constants);
-            writeLongArray(code.primitiveConstants);
-            writeIntArray(code.exceptionHandlerRanges);
-            writeInt(code.conditionProfileCount);
             writeInt(code.startLine);
             writeInt(code.startColumn);
             writeInt(code.endLine);
             writeInt(code.endColumn);
-            writeBytes(code.outputCanQuicken);
-            writeBytes(code.variableShouldUnbox);
-            writeSparseTable(code.generalizeInputsMap);
-            writeSparseTable(code.generalizeVarsMap);
+            writeInt(code.classcellIndex);
+            writeInt(code.selfIndex);
+            writeInt(code.yieldFromGeneratorIndex);
+            writeInt(code.instrumentationDataIndex);
+            writeInt(code.maxProfileCEventStackSize);
         }
 
         private PCode readCode() {
-            TruffleString fileName = readString();
+            TruffleString fileName = readString(true);
             int flags = readInt();
-
-            int codeLen = readSize();
-            byte[] codeString = new byte[codeLen + Long.BYTES];
-            try {
-                in.read(codeString, 0, codeLen);
-            } catch (IOException e) {
-                throw CompilerDirectives.shouldNotReachHere();
-            }
-            // get a new ID every time we deserialize the same filename in the same context. We use
-            // slow-path context lookup, since this code is likely dominated by the deserialization
-            // time
-            PythonContext context = PythonContext.get(null);
-            ByteBuffer.wrap(codeString).putLong(codeLen, context.getDeserializationId(fileName));
+            BytecodeDSLCodeUnit code = readCodeUnit();
             int firstLineNo = readInt();
             byte[] lnoTab = readBytes();
-            return CreateCodeNode.createCode(context, flags, codeString, fileName, firstLineNo, lnoTab);
+            com.oracle.graal.python.util.Supplier<CallTarget> supplier = () -> {
+                String jName = code.qualname.toJavaStringUncached();
+                Source source = Source.newBuilder(PythonLanguage.ID, "", jName).content(Source.CONTENT_NONE).build();
+                PythonLanguage language = this.language;
+                if (sourceReference != null && sourceReference.sourceFile != null) {
+                    language.registerOriginalFile(source, sourceReference.sourceFile);
+                }
+                return language.callTargetFromBytecode(source, code);
+            };
+            CallTarget callTarget;
+            if (language.isSingleContext() || cacheKey == 0) {
+                callTarget = supplier.get();
+            } else {
+                callTarget = language.cacheBytecodeTarget(fileName, cacheKey, supplier);
+            }
+            return PFactory.createCode(language, (RootCallTarget) callTarget, flags, firstLineNo, lnoTab, fileName);
         }
     }
 
     @TruffleBoundary
-    public static byte[] serializeCodeUnit(CodeUnit code) {
+    public static byte[] serializeCodeUnit(Node locationForRaise, PythonLanguage language, BytecodeDSLCodeUnit code) {
         try {
-            Marshal marshal = new Marshal(CURRENT_VERSION, null, null);
+            Marshal marshal = new Marshal(language, CURRENT_VERSION);
             marshal.writeCodeUnit(code);
-            return marshal.out.toByteArray();
+            return marshal.outData.toByteArray();
         } catch (IOException e) {
             throw CompilerDirectives.shouldNotReachHere(e);
         } catch (Marshal.MarshalError me) {
-            throw PRaiseNode.getUncached().raise(me.type, me.message, me.arguments);
+            throw PRaiseNode.raiseStatic(locationForRaise, me.type, me.message, me.arguments);
+        } catch (ReparseError e) {
+            throw PRaiseNode.raiseStatic(locationForRaise, SystemError, ErrorMessages.FAILED_TO_REPARSE_BYTECODE_FILE);
         }
     }
 
     @TruffleBoundary
-    public static CodeUnit deserializeCodeUnit(byte[] bytes) {
+    public static BytecodeDSLCodeUnit deserializeCodeUnit(Node node, PythonLanguage language, byte[] bytes) {
         try {
-            Marshal marshal = new Marshal(bytes, bytes.length);
+            Marshal marshal = new Marshal(language, bytes, bytes.length, 0);
             return marshal.readCodeUnit();
         } catch (Marshal.MarshalError me) {
-            throw PRaiseNode.getUncached().raise(me.type, me.message, me.arguments);
+            throw PRaiseNode.raiseStatic(node, me.type, me.message, me.arguments);
         } catch (NumberFormatException e) {
-            throw PRaiseNode.getUncached().raise(ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
+            throw PRaiseNode.raiseStatic(node, ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
         }
+    }
+
+    private static final class SourceReference {
+        private String name;
+        private final TruffleFile sourceFile;
+        private Source source;
+
+        SourceReference(String name) {
+            this.name = name;
+            this.sourceFile = null;
+        }
+
+        SourceReference(TruffleFile sourceFile) {
+            this.sourceFile = sourceFile;
+        }
+
+        synchronized Source getSource(PythonLanguage language) {
+            if (source == null) {
+                String sourceName = sourceFile != null ? sourceFile.getPath() : name;
+                source = Source.newBuilder(PythonLanguage.ID, "", sourceName).content(Source.CONTENT_NONE).build();
+                if (sourceFile != null) {
+                    language.registerOriginalFile(source, sourceFile);
+                }
+            }
+            return source;
+        }
+    }
+
+    public static class BytecodeSupplier extends BytecodeDSLCodeUnit.BytecodeSupplier {
+        private byte[] serialized;
+        // Original file for reparsing
+        private final TruffleFile bytecodeFile;
+        private final SourceReference sourceReference;
+        // Offset within the bytecode file, points directly at the start of serialized bytecode
+        private final int bytecodeOffset;
+        private final int bytecodeSize;
+        private final long cacheKey;
+
+        public BytecodeSupplier(byte[] serialized, TruffleFile bytecodeFile, SourceReference sourceReference, int bytecodeOffset, int bytecodeSize, long cacheKey) {
+            this.serialized = serialized;
+            this.bytecodeFile = bytecodeFile;
+            this.sourceReference = sourceReference;
+            this.bytecodeOffset = bytecodeOffset;
+            this.bytecodeSize = bytecodeSize;
+            this.cacheKey = cacheKey;
+        }
+
+        @Override
+        public PBytecodeDSLRootNode createRootNode(PythonLanguage language) {
+            BytecodeRootNodes<PBytecodeDSLRootNode> deserialized;
+            try {
+                deserialized = PBytecodeDSLRootNodeGen.deserialize(language, BytecodeConfig.WITH_SOURCE,
+                                () -> SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(getBytecode())),
+                                /*
+                                 * NB: Since a DSL node may reparse multiple times, we cannot reuse
+                                 * a common Marshal object across calls (each call may take a
+                                 * different buffer).
+                                 */
+                                (deserializerContext, buffer) -> {
+                                    Marshal marshal = new Marshal(language, buffer, bytecodeFile, bytecodeOffset);
+                                    marshal.sourceReference = sourceReference;
+                                    marshal.cacheKey = cacheKey;
+                                    return marshal.readObject();
+                                });
+            } catch (IOException e) {
+                throw CompilerDirectives.shouldNotReachHere("Deserialization error.");
+            }
+            if (bytecodeFile != null && bytecodeOffset >= 0 && cacheKey != 0 && !language.getEngineOption(PythonOptions.KeepBytecodeInMemory)) {
+                // Free the serialized bytecode, we will fetch it from the file if needed again
+                serialized = null;
+            }
+            assert deserialized.count() == 1;
+            return deserialized.getNode(0);
+        }
+
+        byte[] getBytecodeFromFile() {
+            try (SeekableByteChannel channel = bytecodeFile.newByteChannel(Set.of(StandardOpenOption.READ))) {
+                ByteBuffer buffer = ByteBuffer.allocate(16);
+                boolean headerRead = readFully(channel, buffer);
+                byte[] header = buffer.array();
+                if (!headerRead) {
+                    throw new ReparseError("EOF when reparsing: " + bytecodeFile);
+                }
+                if (!Arrays.equals(header, 0, 4, MAGIC_NUMBER_BYTES, 0, 4)) {
+                    throw new ReparseError("Invalid bytecode file: " + bytecodeFile);
+                }
+                if (ARRAY_ACCESSOR_LE.getLong(header, 8) != cacheKey) {
+                    throw new ReparseError("Bytecode file was modified (header mismatch): " + bytecodeFile);
+                }
+                buffer = ByteBuffer.allocate(bytecodeSize);
+                channel.position(bytecodeOffset);
+                if (!readFully(channel, buffer)) {
+                    throw new ReparseError("EOF when reparsing: " + bytecodeFile);
+                }
+                return buffer.array();
+            } catch (IOException e) {
+                throw new ReparseError("IOError when reparsing: " + bytecodeFile);
+            }
+        }
+
+        private static boolean readFully(SeekableByteChannel channel, ByteBuffer buffer) throws IOException {
+            while (buffer.hasRemaining()) {
+                if (channel.read(buffer) < 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private byte[] getBytecode() {
+            if (serialized != null) {
+                return serialized;
+            }
+            return getBytecodeFromFile();
+        }
+
+        @Override
+        public byte[] createSerializedBytecode(PythonLanguage language) {
+            return getBytecode();
+        }
+    }
+
+    public static class PBytecodeDSLSerializer implements BytecodeSerializer {
+        private final PythonLanguage language;
+
+        public PBytecodeDSLSerializer(PythonLanguage language) {
+            this.language = language;
+        }
+
+        @TruffleBoundary
+        public void serialize(SerializerContext context, DataOutput buffer, Object object) throws IOException {
+            /*
+             * NB: Since the deserializer uses a fresh Marshal instance for each object (see below)
+             * we must also do the same here. Otherwise, the encoding may be different (e.g., a
+             * reference for an already-emitted object).
+             */
+            new Marshal(language, CURRENT_VERSION, buffer).writeObject(object);
+        }
+    }
+
+    public static final class ReparseError extends RuntimeException {
+        static final long serialVersionUID = 5323687983726237119L;
+
+        public ReparseError(String message) {
+            super(message);
+        }
+    }
+
+    @TruffleBoundary
+    public static Object fromBytecodeFile(PythonLanguage language, TruffleFile bytecodeFile, TruffleFile sourceFile, byte[] bytes, int offset, int length, long cacheKey) throws IOException {
+        MarshalModuleBuiltins.Marshal marshal = new MarshalModuleBuiltins.Marshal(language, bytes, length + offset, cacheKey, bytecodeFile, 0);
+        marshal.sourceReference = sourceFile == null ? null : new SourceReference(sourceFile);
+        marshal.in.skipBytes(offset);
+        return marshal.readObject();
     }
 }

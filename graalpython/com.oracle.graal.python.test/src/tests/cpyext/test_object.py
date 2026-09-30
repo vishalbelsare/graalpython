@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,11 +38,25 @@
 # SOFTWARE.
 
 import sys
+import typing
+import unittest
+from unittest import skipIf
 
-from . import CPyExtType, CPyExtTestCase, CPyExtFunction, GRAALPYTHON, unhandled_error_compare, assert_raises
+from . import CPyExtType, CPyExtTestCase, CPyExtFunction, compile_module_from_string, unhandled_error_compare, assert_raises
 
-__dir__ = __file__.rpartition("/")[0]
+is_windows = sys.platform == "win32"
 
+def to_lv_tag(x):
+    SIGN_ZERO = 1
+    SIGN_NEGATIVE = 2
+    NON_SIZE_BITS = 3
+    sign = 0
+    if x == 0:
+        return SIGN_ZERO
+    if x < 0:
+        sign = SIGN_NEGATIVE
+        x = -x
+    return x << NON_SIZE_BITS | sign
 
 def _reference_bytes(args):
     obj = args[0]
@@ -61,6 +75,14 @@ def _reference_hash(args):
     return hash(args[0])
 
 
+def check_managed_subtype_basicsize(subtype):
+    # CPython added optimizations for storing __dict__ in the GC header, so let's leave some flexibility in the tests
+    base = subtype.__base__
+    expected_basicsize = base.__basicsize__
+    assert subtype.__basicsize__ == expected_basicsize, \
+        f"Type {subtype} should have basicsize {expected_basicsize}, got {subtype.__basicsize__}"
+
+
 class AttroClass(object):
     def __getattribute__(self, key):
         if key == "foo":
@@ -69,7 +91,56 @@ class AttroClass(object):
             return object.__getattribute__(self, key)
 
 
-class TestObject(object):
+class TestObject(unittest.TestCase):
+    def test_iter_dict_before_getattr_property(self):
+        module = compile_module_from_string(
+            """
+            #include <Python.h>
+
+            static PyObject* iter_dict_then_get_attr(PyObject* self, PyObject* obj) {
+                PyObject* dict = PyObject_GetAttrString(obj, "__dict__");
+                if (dict == NULL) {
+                    return NULL;
+                }
+
+                Py_ssize_t pos = 0;
+                PyObject *key, *value;
+                while (PyDict_Next(dict, &pos, &key, &value)) {
+                    Py_INCREF(value);
+                    Py_DECREF(value);
+                }
+
+                Py_DECREF(dict);
+                return PyObject_GetAttrString(obj, "area");
+            }
+
+            static PyMethodDef methods[] = {
+                {"iter_dict_then_get_attr", (PyCFunction)iter_dict_then_get_attr, METH_O, NULL},
+                {NULL, NULL, 0, NULL}
+            };
+
+            static struct PyModuleDef module = {
+                PyModuleDef_HEAD_INIT, "test_iter_dict_before_getattr_property", NULL, -1, methods
+            };
+
+            PyMODINIT_FUNC PyInit_test_iter_dict_before_getattr_property(void) {
+                return PyModule_Create(&module);
+            }
+            """,
+            "test_iter_dict_before_getattr_property",
+        )
+
+        class Model:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+
+            @property
+            def area(self):
+                return b"%d" % (self.width * self.height)
+
+        self.assertEqual(module.iter_dict_then_get_attr(Model(width=3, height=4)), b"12")
+
     def test_add(self):
         TestAdd = CPyExtType("TestAdd",
                              """
@@ -120,8 +191,12 @@ class TestObject(object):
             static PyObject* testslots_tp_alloc(PyObject* self, PyObject *cls) {
                 return ((PyTypeObject *)cls)->tp_alloc((PyTypeObject *) cls, 0);
             }
+            static int test_traverse(PyObject *self, visitproc visit, void *arg) {
+                return 0;
+            }
             """,
             tp_alloc="test_alloc",
+            tp_traverse="test_traverse",
             tp_methods='{"call_tp_alloc", (PyCFunction)testslots_tp_alloc, METH_O | METH_STATIC, ""}',
             tp_flags='Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HEAPTYPE | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC',
             tp_free='PyObject_GC_Del',
@@ -134,7 +209,7 @@ class TestObject(object):
         assert ClassWithTpAlloc.call_tp_alloc(ManagedSubclass)
         assert type(ManagedSubclass()) is ManagedSubclass
         assert type(object.__new__(ManagedSubclass)) is ManagedSubclass
-        
+
 
     def test_float_binops(self):
         TestFloatBinop = CPyExtType("TestFloatBinop",
@@ -202,7 +277,7 @@ class TestObject(object):
         assert [4, 2] * TestSlotsBinop() == 42
 
     def test_inheret_numbers_slots(self):
-        X = CPyExtType("X_", 
+        X = CPyExtType("X_",
                             '''
                             PyObject* test_add_impl(PyObject* a, PyObject* b) {
                                 return PyLong_FromLong(42);
@@ -225,7 +300,7 @@ class TestObject(object):
                                 .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
                                 .tp_base = &A_Type,
                             };
-                            
+
                             static PyObject* create_B(PyObject* cls) {
                                 return (&B_Type)->tp_alloc(&B_Type, 0);
                             }
@@ -245,8 +320,8 @@ class TestObject(object):
                                    return NULL;
                                ''',
                             )
-        
-        Y = CPyExtType("Y_", 
+
+        Y = CPyExtType("Y_",
                             '''
                             PyObject* test_C_add_impl(PyObject* a, PyObject* b) {
                                 return PyLong_FromLong(4242);
@@ -293,7 +368,7 @@ class TestObject(object):
 
                                if (PyType_Ready(&D_Type) < 0)
                                    return NULL;
-                                   
+
                                if (PyType_Ready(&E_Type) < 0)
                                    return NULL;
                                ''',
@@ -309,13 +384,12 @@ class TestObject(object):
         assert sorted(list(B.__dir__())) == dir(B)
 
     def test_managed_class_with_native_base(self):
-        NativeModule = CPyExtType("NativeModule_", 
+        NativeModule = CPyExtType("NativeModule_",
                             '''
                             PyTypeObject NativeBase_Type = {
-                                PyVarObject_HEAD_INIT(&PyType_Type, 0)
+                                .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
                                 .tp_name = "NativeModule_.NativeBase",
                                 .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-                                .tp_base = &PyModule_Type,
                             };
 
                             static PyObject* get_NativeBase_type(PyObject* cls) {
@@ -326,6 +400,8 @@ class TestObject(object):
                             tp_methods='''{"get_NativeBase_type", (PyCFunction)get_NativeBase_type, METH_NOARGS | METH_CLASS, ""}''',
                             ready_code='''
                                /* testing lazy type initialization */
+                               NativeBase_Type.tp_base = &PyModule_Type; // because of MSVC..
+                               NativeBase_Type.ob_base.ob_base.ob_type = &PyType_Type;
                                // if (PyType_Ready(&NativeBase_Type) < 0)
                                //     return NULL;
                                ''',
@@ -394,7 +470,7 @@ class TestObject(object):
         def validate(cls, has_getattro, has_getattr):
             foo = cls()
             if has_getattro:
-                assert foo.asdf == 'asdf'
+                assert foo.asdf == 'asdf', foo.asdf
                 assert TestWithGetattro.call_getattro_slot(foo, 'asdf') == 'asdf'
             elif has_getattr:
                 assert foo.asdf == 3
@@ -465,7 +541,7 @@ class TestObject(object):
         assert True
 
     def test_base_type(self):
-        AcceptableBaseType = CPyExtType("AcceptableBaseType", 
+        AcceptableBaseType = CPyExtType("AcceptableBaseType",
                             '''
                             PyTypeObject TestBase_Type = {
                                 PyVarObject_HEAD_INIT(NULL, 0)
@@ -493,8 +569,8 @@ class TestObject(object):
                                 TestBase_Type.tp_base = &PyType_Type;
                                 if (PyType_Ready(&TestBase_Type) < 0)
                                     return NULL;
-                                    
-                                Py_SET_TYPE(&AcceptableBaseTypeType, &TestBase_Type); 
+
+                                Py_SET_TYPE(&AcceptableBaseTypeType, &TestBase_Type);
                                 AcceptableBaseTypeType.tp_base = &PyType_Type;''',
                              )
         class Foo(AcceptableBaseType):
@@ -502,12 +578,12 @@ class TestObject(object):
             pass
 
     def test_new(self):
-        TestNew = CPyExtType("TestNew", 
+        TestNew = CPyExtType("TestNew",
                              '''static PyObject* testnew_new(PyTypeObject* cls, PyObject* a, PyObject* b) {
                                  PyObject* obj;
                                  TestNewObject* typedObj;
                                  obj = PyBaseObject_Type.tp_new(cls, a, b);
-                                 
+
                                  typedObj = ((TestNewObject*)obj);
                                  typedObj->none = Py_None;
                                  Py_INCREF(Py_None);
@@ -525,8 +601,21 @@ class TestObject(object):
         tester = TestNew()
         assert tester.get_none() is None
 
+    def test_object_new_m_ml(self):
+        ObjectNew = CPyExtType("ObjectNew_",
+                            '''
+                            static PyObject* get_flags(PyObject* cls, PyObject* func) {
+                                return PyLong_FromLong(PyCFunction_GetFlags(func));
+                            }
+
+                            ''',
+                            tp_methods='''{"get_flags", (PyCFunction)get_flags, METH_O | METH_CLASS, ""}''',
+                            )
+        f = ObjectNew.get_flags(object.__new__)
+        assert f == 3, "PyCFunction_GetFlags(object.__new__) 3 != %d" % f
+
     def test_init(self):
-        TestInit = CPyExtType("TestInit", 
+        TestInit = CPyExtType("TestInit",
                              '''static PyObject* testnew_new(PyTypeObject* cls, PyObject* a, PyObject* b) {
                                  PyObject* obj;
                                  TestInitObject* typedObj;
@@ -536,7 +625,7 @@ class TestObject(object):
                                  typedObj->dict = (PyDictObject*) PyDict_Type.tp_new(&PyDict_Type, a, b);
                                  PyDict_Type.tp_init((PyObject*) typedObj->dict, a, b);
                                  PyDict_SetItemString((PyObject*) typedObj->dict, "test", PyLong_FromLong(42));
-                                 
+
                                  Py_XINCREF(obj);
                                  return obj;
                             }
@@ -554,7 +643,7 @@ class TestObject(object):
         assert tester.get_dict_item() == 42
 
     def test_slots(self):
-        TestSlots = CPyExtType("TestSlots", 
+        TestSlots = CPyExtType("TestSlots",
                                '''
                                static PyObject* testslots_bincomp(PyObject* cls) {
                                    return Py_NewRef(((PyTypeObject*)cls)->tp_basicsize == sizeof(TestSlotsObject) ? Py_True : Py_False);
@@ -620,23 +709,76 @@ class TestObject(object):
         assert tester.get_tp_name(int) == 'int'
         assert tester.get_tp_name(type(tester)) == 'TestTpName.TestTpName'
 
+    def test_new_exception_with_qualified_name(self):
+        module = compile_module_from_string("""
+            #include "Python.h"
+
+            static PyModuleDef testmodule = {
+                PyModuleDef_HEAD_INIT,
+                "test_new_exception_with_qualified_name",
+                NULL,
+                -1,
+                NULL,
+            };
+
+            PyMODINIT_FUNC PyInit_test_new_exception_with_qualified_name(void)
+            {
+                PyObject *exception = PyErr_NewException("pkg.sub.CustomError", NULL, NULL);
+                if (exception == NULL) {
+                    return NULL;
+                }
+                PyObject *module = PyModule_Create(&testmodule);
+                if (module == NULL) {
+                    Py_DECREF(exception);
+                    return NULL;
+                }
+                PyObject *name = PyObject_GetAttrString(exception, "__name__");
+                if (name == NULL) {
+                    Py_DECREF(exception);
+                    Py_DECREF(module);
+                    return NULL;
+                }
+                const char *name_str = PyUnicode_AsUTF8(name);
+                if (name_str == NULL || PyModule_AddObject(module, name_str, exception) < 0) {
+                    Py_DECREF(name);
+                    Py_DECREF(exception);
+                    Py_DECREF(module);
+                    return NULL;
+                }
+                Py_DECREF(name);
+                return module;
+            }
+        """, "test_new_exception_with_qualified_name")
+        assert module.CustomError.__name__ == "CustomError"
+        assert module.CustomError.__qualname__ == "CustomError"
+        assert module.CustomError.__module__ == "pkg.sub"
+        assert not hasattr(module, "pkg.sub.CustomError")
+
     def test_tp_alloc(self):
         TestTpAlloc = CPyExtType("TestTpAlloc",
                                 '''
-                                static PyObject* testslots_tp_alloc(PyObject* self) {
-                                    return (PyObject*) PyType_Type.tp_alloc(&PyType_Type, 0);
+                                #include "objimpl.h"
+
+                                static PyObject* testslots_has_tp_alloc_and_size(PyObject* self) {
+                                    if (!PyType_Type.tp_alloc) {
+                                        Py_RETURN_FALSE;
+                                    }
+                                    if (!_PyObject_VAR_SIZE(&PyType_Type, 0)) {
+                                        Py_RETURN_FALSE;
+                                    }
+                                    Py_RETURN_TRUE;
                                 }
                                 ''',
-                                tp_methods='{"get_tp_alloc", (PyCFunction)testslots_tp_alloc, METH_NOARGS, ""}',
+                                tp_methods='{"has_tp_alloc_and_size", (PyCFunction)testslots_has_tp_alloc_and_size, METH_NOARGS, ""}',
                                 )
         tester = TestTpAlloc()
-        assert tester.get_tp_alloc() != None
+        assert tester.has_tp_alloc_and_size()
 
     def test_slots_initialized(self):
-        TestSlotsInitialized = CPyExtType("TestSlotsInitialized", 
+        TestSlotsInitialized = CPyExtType("TestSlotsInitialized",
                               '''
                               static PyTypeObject* datetime_type = NULL;
-                                
+
                               PyObject* TestSlotsInitialized_new(PyTypeObject* self, PyObject* args, PyObject* kwargs) {
                                   return Py_XNewRef(datetime_type->tp_new(self, args, kwargs));
                               }
@@ -655,12 +797,12 @@ class TestObject(object):
 
     def test_no_dictoffset(self):
         TestNoDictoffset = CPyExtType("TestNoDictoffset", "")
-        
+
         class TestNoDictoffsetSubclass(TestNoDictoffset):
             pass
-        
+
         obj = TestNoDictoffsetSubclass()
-        
+
         obj.__dict__["newAttr"] = 123
         assert obj.newAttr == 123, "invalid attr"
 
@@ -716,18 +858,18 @@ class TestObject(object):
         assert hash(tester) != 0
 
     def test_float_subclass2(self):
-        NativeFloatSubclass = CPyExtType(
-            "NativeFloatSubclass",
+        NativeFloatSubclass2 = CPyExtType(
+            "NativeFloatSubclass2",
             """
             static PyObject* fp_tp_new(PyTypeObject* type, PyObject* args, PyObject* kwds) {
                 PyObject *result = PyFloat_Type.tp_new(type, args, kwds);
-                NativeFloatSubclassObject *nfs = (NativeFloatSubclassObject *)result;
+                NativeFloatSubclass2Object *nfs = (NativeFloatSubclass2Object *)result;
                 nfs->myobval = PyFloat_AsDouble(result);
                 return result;
             }
 
             static PyObject* fp_tp_repr(PyObject* self) {
-                NativeFloatSubclassObject *nfs = (NativeFloatSubclassObject *)self;
+                NativeFloatSubclass2Object *nfs = (NativeFloatSubclass2Object *)self;
                 return PyUnicode_FromFormat("native %S", PyFloat_FromDouble(nfs->myobval));
             }
             """,
@@ -737,7 +879,7 @@ class TestObject(object):
             tp_new="fp_tp_new",
             tp_repr="fp_tp_repr"
         )
-        class MyFloat(NativeFloatSubclass):
+        class MyFloat(NativeFloatSubclass2):
             pass
         assert MyFloat() == 0.0
         assert MyFloat(123.0) == 123.0
@@ -745,28 +887,25 @@ class TestObject(object):
         assert repr(MyFloat(123.0)) == "native 123.0"
 
     def test_custom_basicsize(self):
-        TestCustomBasicsize = CPyExtType("TestCustomBasicsize", 
+        TestCustomBasicsize = CPyExtType("TestCustomBasicsize",
                                       '''
                                           Py_ssize_t global_basicsize = -1;
 
                                           static PyObject* get_basicsize(PyObject* self, PyObject* ignored) {
-                                              return PyLong_FromSsize_t(global_basicsize + 2 * sizeof(PyObject*));
+                                              return PyLong_FromSsize_t(global_basicsize);
                                           }
                                       ''',
                                       cmembers='''long long field0;
                                       int field1;
                                       ''',
-                                      tp_methods='{"get_basicsize", (PyCFunction)get_basicsize, METH_NOARGS, ""}',
+                                      tp_methods='{"get_basicsize", (PyCFunction)get_basicsize, METH_NOARGS | METH_STATIC, ""}',
                                       post_ready_code="global_basicsize = TestCustomBasicsizeType.tp_basicsize;"
                                       )
         class TestCustomBasicsizeSubclass(TestCustomBasicsize):
             pass
-        
-        obj = TestCustomBasicsizeSubclass()
 
-        expected_basicsize = obj.get_basicsize()
-        actual_basicsize = TestCustomBasicsizeSubclass.__basicsize__
-        assert expected_basicsize == actual_basicsize, "expected = %s, actual = %s" % (expected_basicsize, actual_basicsize)
+        assert TestCustomBasicsize.get_basicsize() == TestCustomBasicsize.__basicsize__
+        check_managed_subtype_basicsize(TestCustomBasicsizeSubclass)
 
     def test_tp_basicsize(self):
         TpBasicsize1Type = CPyExtType("TpBasicsize1",
@@ -814,13 +953,13 @@ class TestObject(object):
                             ''',
                             cmembers='Py_ssize_t f[10];',
         )
-        
+
         TpBasicsize3Type = CPyExtType("TpBasicsize3",
                             '''
                             ''',
                             cmembers='',
         )
-        
+
         try:
             class Foo(TpBasicsize2Type, TpBasicsize1Type):
                 pass
@@ -833,7 +972,7 @@ class TestObject(object):
             pass
 
         assert Foo.__base__ == TpBasicsize1Type
-        assert Foo.__basicsize__ == 192, "Foo.__basicsize__ %d != 192" % Foo.__basicsize__
+        check_managed_subtype_basicsize(Foo)
         objs = [Foo() for i in range(5)]
         for foo in objs:
             foo.set_values()
@@ -847,7 +986,7 @@ class TestObject(object):
             pass
 
         assert Foo.__base__ == TpBasicsize2Type
-        assert Foo.__basicsize__ == 112, "Foo.__basicsize__ %d != 112" % Foo.__basicsize__
+        check_managed_subtype_basicsize(Foo)
         objs = [Foo() for i in range(5)]
         for foo in objs:
             foo.set_values()
@@ -857,7 +996,33 @@ class TestObject(object):
                 assert foo.get_value(i) == vvv, "Failed"
                 vvv += 1
 
-    def test_new_inherited_from_dominant_base(self):
+    def test_tp_new_bug_to_bug_compatibility(self):
+        # msimacek: `update_one_slot` in CPython has a bug regarding unwrappping `tp_new` slots from wrapper methods.
+        # See the comments in `TpSlots.updateSlots` method for the mechanism.
+        # This test checks various corner cases arising from that. They don't all use C ext, but I'd like to keep
+        # all the cases in one place
+        class X:
+            pass
+
+        class Y(int):
+            def __new__(cls, value):
+                raise AssertionError
+
+        class Z(Y):
+            pass
+
+        X.__new__ = int.__new__
+        Z.__new__ = int.__new__
+
+        # X() runs object.__new__, ignoring the reassignment
+        x = X()
+        assert isinstance(x, X)
+        # Z() runs int.__new__. It also ignored the reassignment, but since tp_new was and still is set to slot_tp_new,
+        # it will do the call through dict, which ends up doing the right thing in this case
+        z = Z(1)
+        assert isinstance(z, int)
+
+        # The bug can also manifest in multiple-inheritance. A variant of this case appears in pandas
         DominantBase = CPyExtType(
             'DominantBase',
             '''
@@ -875,8 +1040,8 @@ class TestObject(object):
         class Subclass(WeakBase, DominantBase):
             pass
 
-        # In CPython 3.10, Subclass.__new__ is WeakBase.__new__, but Subclass.tp_new is DominantBase.tp_new
-
+        # In CPython, Subclass.__new__ is WeakBase.__new__, but Subclass.tp_new is DominantBase.tp_new
+        assert Subclass.__new__.__self__ is WeakBase
         assert Subclass() is Ellipsis
 
     def test_descrget(self):
@@ -927,10 +1092,10 @@ class TestObject(object):
                              tp_descr_set="(descrsetfunc) testdescr_set",
                              tp_descr_get="(descrgetfunc) testdescr_get",
         )
-        
+
         class Uff:
             hello = TestDescrSet()
-        
+
         obj = Uff()
         obj.hello = "world"
         assert obj.hello == "world", 'expected "world" but was %s' % obj.hello
@@ -969,9 +1134,9 @@ class TestObject(object):
         TestStrSubclass = CPyExtType("TestStrSubclass",
                                        r"""
                                        static PyTypeObject* testStrSubclassPtr = NULL;
-                                    
+
                                         #define MAX_UNICODE 0x10ffff
-                                    
+
                                         #define _PyUnicode_UTF8(op)                             \
                                             (((PyCompactUnicodeObject*)(op))->utf8)
                                         #define PyUnicode_UTF8(op)                              \
@@ -988,10 +1153,6 @@ class TestObject(object):
                                              PyUnicode_IS_COMPACT_ASCII(op) ?                   \
                                                  ((PyASCIIObject*)(op))->length :               \
                                                  _PyUnicode_UTF8_LENGTH(op))
-                                        #define _PyUnicode_WSTR(op)                             \
-                                            (((PyASCIIObject*)(op))->wstr)
-                                        #define _PyUnicode_WSTR_LENGTH(op)                      \
-                                            (((PyCompactUnicodeObject*)(op))->wstr_length)
                                         #define _PyUnicode_LENGTH(op)                           \
                                             (((PyASCIIObject *)(op))->length)
                                         #define _PyUnicode_STATE(op)                            \
@@ -1006,7 +1167,7 @@ class TestObject(object):
                                              ((PyASCIIObject *)(op))->length)
                                         #define _PyUnicode_DATA_ANY(op)                         \
                                             (((PyUnicodeObject*)(op))->data.any)
-    
+
                                         // that's taken from CPython's 'PyUnicode_New'
                                         static PyUnicodeObject * new_empty_unicode(Py_ssize_t size, Py_UCS4 maxchar) {
                                             PyUnicodeObject *obj;
@@ -1016,7 +1177,7 @@ class TestObject(object):
                                             int is_sharing, is_ascii;
                                             Py_ssize_t char_size;
                                             Py_ssize_t struct_size;
-                                        
+
                                             is_ascii = 0;
                                             is_sharing = 0;
                                             struct_size = sizeof(PyCompactUnicodeObject);
@@ -1047,7 +1208,7 @@ class TestObject(object):
                                                 if (sizeof(wchar_t) == 4)
                                                     is_sharing = 1;
                                             }
-                                        
+
                                             /* Ensure we won't overflow the size. */
                                             if (size < 0) {
                                                 PyErr_SetString(PyExc_SystemError,
@@ -1056,7 +1217,7 @@ class TestObject(object):
                                             }
                                             if (size > ((PY_SSIZE_T_MAX - struct_size) / char_size - 1))
                                                 return NULL;
-                                        
+
                                             /* Duplicated allocation code from _PyObject_New() instead of a call to
                                              * PyObject_New() so we are able to allocate space for the object and
                                              * it's data buffer.
@@ -1067,7 +1228,7 @@ class TestObject(object):
                                             obj = (PyUnicodeObject *) PyObject_INIT(obj, testStrSubclassPtr);
                                             if (obj == NULL)
                                                 return NULL;
-                                        
+
                                             unicode = (PyCompactUnicodeObject *)obj;
                                             if (is_ascii)
                                                 data = ((PyASCIIObject*)obj) + 1;
@@ -1082,12 +1243,9 @@ class TestObject(object):
                                             _PyUnicode_STATE(unicode).ascii = is_ascii;
                                             if (is_ascii) {
                                                 ((char*)data)[size] = 0;
-                                                _PyUnicode_WSTR(unicode) = NULL;
                                             }
                                             else if (kind == PyUnicode_1BYTE_KIND) {
                                                 ((char*)data)[size] = 0;
-                                                _PyUnicode_WSTR(unicode) = NULL;
-                                                _PyUnicode_WSTR_LENGTH(unicode) = 0;
                                                 unicode->utf8 = NULL;
                                                 unicode->utf8_length = 0;
                                             }
@@ -1098,18 +1256,10 @@ class TestObject(object):
                                                     ((Py_UCS2*)data)[size] = 0;
                                                 else /* kind == PyUnicode_4BYTE_KIND */
                                                     ((Py_UCS4*)data)[size] = 0;
-                                                if (is_sharing) {
-                                                    _PyUnicode_WSTR_LENGTH(unicode) = size;
-                                                    _PyUnicode_WSTR(unicode) = (wchar_t *)data;
-                                                }
-                                                else {
-                                                    _PyUnicode_WSTR_LENGTH(unicode) = 0;
-                                                    _PyUnicode_WSTR(unicode) = NULL;
-                                                }
                                             }
                                             return obj;
                                         }
-                                        
+
                                        static PyObject* nstr_tpnew(PyTypeObject* type, PyObject* args, PyObject* kwargs) {
                                             char *ascii_data = NULL;
                                             Py_XINCREF(args);
@@ -1147,8 +1297,6 @@ class TestObject(object):
     def test_doc(self):
         TestDoc = CPyExtType("TestDoc",
                                          '''
-                                             Py_ssize_t global_basicsize = -1;
-   
                                              static PyObject* some_member(PyObject* self) {
                                                  return PyLong_FromLong(42);
                                              }
@@ -1162,11 +1310,11 @@ class TestObject(object):
         assert obj.some_member.__doc__ == expected_doc
 
     def test_multiple_inheritance_with_native(self):
-        _A = CPyExtType("_A","")
+        _AA = CPyExtType("_AA","")
         class B:
             def __getattr__(self, name):
                 return name
-        class X(_A, B):
+        class X(_AA, B):
             b = 2
         x = X()
         assert x.foo == "foo"
@@ -1214,6 +1362,9 @@ class TestObject(object):
         assert obj.foo == 'set'
         del obj.foo
         assert obj.foo == 'unset'
+
+        obj = TestSetter()
+        assert TestSetter.foo.__set__(obj, 42) is None
 
     def test_member_kind_precedence(self):
         TestWithConflictingMember1 = CPyExtType(
@@ -1282,25 +1433,184 @@ class TestObject(object):
         # Note: len(obj) uses 'PyObject_Lenght' which does not use the attribute but first tries
         # 'sq_length' and falls back to 'mp_length'. Therefore, we just look at '__len__' here.
         assert obj.__len__() == 222
-        assert obj['hello'] == 'mp_subscript'
+        assert len(obj) == 111
+        assert obj['hello'] == 'mp_subscript', obj['hello']
         assert obj + 'hello' == 'mas_nb_add'
 
+    def test_take_ownership(self):
+        import gc
+        ValueType = CPyExtType(
+            "Value",
+            '''
+            static PyObject* set_value(PyObject* self, PyObject *arg) {
+                ValueObject *value_obj = (ValueObject *) self;
+                Py_INCREF(arg);
+                Py_XSETREF(value_obj->value, arg);
+                Py_RETURN_NONE;
+            }
 
-class CBytes: 
+            static PyObject* from_tuple(PyObject* self, PyObject *arg) {
+                if (!PyTuple_CheckExact(arg)) {
+                    PyErr_SetString(PyExc_TypeError, "arg must be a tuple");
+                    return NULL;
+                }
+                // returns a borrowed ref
+                PyObject *value = PyTuple_GetItem(arg, 0);
+                return set_value(self, value);
+            }
+
+            static PyObject* from_args_tuple(PyObject* self, PyObject *args) {
+                PyObject *result;
+                if (Py_SIZE(args) > 0) {
+                    result = PyTuple_GET_ITEM(args, 0);
+                } else {
+                    result = Py_None;
+                }
+                Py_INCREF(result);
+                (void) set_value(self, args);
+                return result;
+            }
+
+            static PyObject* get_value(PyObject* self) {
+                ValueObject *value_obj = (ValueObject *) self;
+                PyObject *res = value_obj->value;
+                Py_INCREF(res);
+                return res;
+            }
+
+            static PyObject* clear_value(PyObject* self) {
+                ValueObject *value_obj = (ValueObject *) self;
+                Py_XSETREF(value_obj->value, NULL);
+                Py_RETURN_NONE;
+            }
+
+            static PyObject* own_a_lot(PyObject* self, PyObject *arg) {
+                PyObject *dummy;
+                int i;
+                for (i=0; i < 64; i++) {
+                    Py_INCREF(arg);
+                    Py_DECREF(arg);
+                    dummy = PyUnicode_FromString("abc");
+                    Py_DECREF(dummy);
+                    Py_INCREF(arg);
+                    Py_DECREF(arg);
+                }
+                Py_RETURN_NONE;
+            }
+
+           ''',
+           tp_methods='''
+           {"set_value", (PyCFunction)set_value, METH_O, NULL},
+           {"from_tuple", (PyCFunction)from_tuple, METH_O, NULL},
+           {"from_args_tuple", (PyCFunction)from_args_tuple, METH_VARARGS, NULL},
+           {"get_value", (PyCFunction)get_value, METH_NOARGS, NULL},
+           {"clear_value", (PyCFunction)clear_value, METH_NOARGS, NULL},
+           {"own_a_lot", (PyCFunction)own_a_lot, METH_O, NULL}
+           ''',
+            cmembers='PyObject *value;',
+        )
+
+        dummy = object()
+        obj = ValueType()
+        obj.set_value(dummy)
+
+        # dummy is also kept alive by Python code
+        assert obj.get_value() is dummy
+
+        # delete dummy here; should still be available from native
+        r = repr(dummy)
+        del dummy
+
+        # no guarantee but increases chances that ref will be collected
+        for _ in range(3):
+            gc.collect()
+
+        assert repr(obj.get_value()) == r
+        obj.clear_value()
+
+        # same as before but getting borrowed value from tuple
+        dummy = object()
+        obj.from_tuple((dummy, ))
+        assert obj.get_value() is dummy
+        r = repr(dummy)
+        del dummy
+        for _ in range(3):
+            gc.collect()
+        assert repr(obj.get_value()) == r
+        obj.clear_value()
+
+        dummy = object()
+        obj.own_a_lot(dummy)
+
+        obj = ValueType()
+        dummy = object()
+        obj.from_args_tuple(1, 2, 3)
+        # do it a second time; this time we will eagerly create a native storage
+        obj.from_args_tuple(1, 2, 3, "hello", "world", dummy)
+        value = obj.get_value()
+        assert value == (1, 2, 3, "hello", "world", dummy)
+        obj.clear_value()
+        assert value == (1, 2, 3, "hello", "world", dummy)
+
+    def test_async_slots(self):
+        import asyncio, types, functools
+        TestTpAsync = CPyExtType("TestTpAsync",
+                                '''
+                                static PyObject* testslots_tp_async(PyObject* self, PyObject *obj) {
+                                    PyAsyncMethods *tp_as_async = Py_TYPE(obj)->tp_as_async;
+                                    if (!tp_as_async) {
+                                        PyErr_SetString(PyExc_RuntimeError, "tp_as_async was not populated!");
+                                        return NULL;
+                                    }
+                                    if (!tp_as_async->am_await) {
+                                        PyErr_SetString(PyExc_RuntimeError, "tp_as_async->am_await was not populated!");
+                                        return NULL;
+                                    }
+                                    return tp_as_async->am_await(obj);
+                                }
+                                ''',
+                                tp_methods='{"get_tp_async_await", (PyCFunction)testslots_tp_async, METH_O, ""}',
+                                )
+        tester = TestTpAsync()
+        async def func(x, y):
+            await asyncio.sleep(0)
+
+        func = types.coroutine(functools.partial(func, 1))
+        loop = asyncio.new_event_loop()
+        p = loop.create_task(func(2))
+        # p._coro <coroutine object at 0x21c7415e>
+        native_coro = tester.get_tp_async_await(p._coro)
+        assert native_coro != None
+
+
+
+class CBytes:
     def __bytes__(self):
         return b'abc'
-    
-class CBytesWrongReturn: 
+
+class CBytesWrongReturn:
     def __bytes__(self):
         return 'abc'
-    
-class DummyBytes(bytes): 
-    pass     
+
+class DummyBytes(bytes):
+    pass
 
 class TestObjectFunctions(CPyExtTestCase):
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super().compile_module(name)
+
+    test_abstract_object_constants_native_roundtrip = CPyExtFunction(
+        lambda args: args[0],
+        lambda: (
+            (None,),
+            (Ellipsis,),
+            (NotImplemented,),
+            (typing.NoDefault,),
+        ),
+        arguments=["PyObject* obj"],
+        resultspec="N",
+        argspec="O",
+        callfunction="Py_NewRef",
+        cmpfunc=lambda actual, expected: actual is expected,
+    )
 
     test_PyCallable_Check = CPyExtFunction(
         lambda args: callable(args[0]),
@@ -1336,31 +1646,46 @@ class TestObjectFunctions(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
-    test_Py_SIZE = CPyExtFunction(
+    test_lv_tag = CPyExtFunction(
         lambda args: args[1],
         lambda: (
-            (0, 0),
-            (1, 1),
-            (False, 0),
-            (True, 1),
-            (-1, -1),
-            (1, 1),
-            (1<<29, 1),
-            ((1<<30) - 1, 1),
-            (1<<30, 2),
-            (-1073741824, -2),
-            ((1<<60) - 1, 2),
-            (1<<60, 3),
-            (-1152921504606846976, -3)
+            (0, to_lv_tag(0)),
+            (1, to_lv_tag(1)),
+            (False, to_lv_tag(0)),
+            (True, to_lv_tag(1)),
+            (-1,  to_lv_tag(-1)),
+            (1, to_lv_tag(1)),
+            (1<<29, to_lv_tag(1)),
+            ((1<<30) - 1, to_lv_tag(1)),
+            (1<<30, to_lv_tag(2)),
+            (-1073741824,  to_lv_tag(-2)),
+            ((1<<60) - 1, to_lv_tag(2)),
+            (1<<60, to_lv_tag(3)),
+            (-1152921504606846976, to_lv_tag(-3))
         ),
-        code='''static Py_ssize_t wrap_Py_SIZE(PyObject* object, PyObject* unused) {
-            return Py_SIZE(object);
+        code='''
+        #ifdef GRAALVM_PYTHON
+            #include <graalpy/testcapi.h>
+            #define GET_LV_TAG(val) GraalPyTestCAPI->LongLvTag((PyLongObject*)val)
+        #else
+            #define GET_LV_TAG(val) ((PyLongObject*)val)->long_value.lv_tag
+        #endif
+
+        static Py_ssize_t wrap_lv_tag(PyObject* object, PyObject* unused) {
+        #ifdef GRAALVM_PYTHON
+            if (GraalPyTestCAPI == NULL) {
+                if (GraalPyTestCAPI_Import() < 0) {
+                    return -1;
+                }
+            }
+        #endif
+            return GET_LV_TAG(object);
         }
         ''',
         arguments=["PyObject* object", "PyObject* unused"],
         resultspec="n",
         argspec="OO",
-        callfunction="wrap_Py_SIZE",
+        callfunction="wrap_lv_tag",
         cmpfunc=unhandled_error_compare
     )
 
@@ -1374,17 +1699,17 @@ class TestObjectFunctions(CPyExtTestCase):
             // returns a tuple with refcnt == 1
             PyObject* object = PyTuple_New(1);
             PyTuple_SetItem(object, 0, element);
-            
+
             // seal tuple; refcnt == 2
             Py_INCREF(object);
-            
+
             // this will force the object to native
             native_storage[0] = object;
-            
+
             Py_DECREF(object);
             // this will free the tuple
             Py_DECREF(object);
-            
+
             Py_RETURN_NONE;
         }
         ''',
@@ -1421,8 +1746,28 @@ class TestObjectFunctions(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
 
+    object_with_attributes = MyObject()
+    object_with_attributes.foo = 1
 
-class TestPickleNative:
+    test_PyObject_GenericGetDict = CPyExtFunction(
+        lambda args: args[0].__dict__,
+        lambda: (
+            (TestObjectFunctions.object_with_attributes,),
+        ),
+        code='''
+        static PyObject* wrap_PyObject_GenericGetDict(PyObject* obj) {
+            return PyObject_GenericGetDict(obj, NULL);
+        }
+        ''',
+        arguments=["PyObject* obj"],
+        resultspec="O",
+        argspec="O",
+        callfunction="wrap_PyObject_GenericGetDict",
+        cmpfunc=unhandled_error_compare
+    )
+
+
+class TestPickleNative(unittest.TestCase):
     def test_pickle_native(self):
         import pickle
         TestPicklable = CPyExtType("TestPicklable", "")
@@ -1434,3 +1779,70 @@ class TestPickleNative:
             pass
         else:
             assert False, "Expected TypeError"
+
+    def test_pickle_native_getnewargs(self):
+        import pickle
+
+        TestPicklableWithNewArgs = CPyExtType(
+            "TestPicklableWithNewArgs",
+            """
+            static PyObject* test_pickle_new(PyTypeObject* cls, PyObject* args, PyObject* kwargs) {
+                return PyType_GenericNew(cls, NULL, NULL);
+            }
+
+            static PyObject* test_getnewargs(PyObject* self) {
+                PyObject* value = PyLong_FromLong(42);
+                if (value == NULL)
+                    return NULL;
+                PyObject* result = PyTuple_Pack(1, value);
+                Py_DECREF(value);
+                return result;
+            }
+            """,
+            tp_new="test_pickle_new",
+            tp_methods='{"__getnewargs__", (PyCFunction)test_getnewargs, METH_NOARGS, ""}',
+        )
+
+        obj = TestPicklableWithNewArgs()
+        data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+        assert type(pickle.loads(data)) == TestPicklableWithNewArgs
+
+    def test_pickle_native_getnewargs_ex(self):
+        import pickle
+
+        TestPicklableWithNewArgsEx = CPyExtType(
+            "TestPicklableWithNewArgsEx",
+            """
+            static PyObject* test_pickle_new(PyTypeObject* cls, PyObject* args, PyObject* kwargs) {
+                return PyType_GenericNew(cls, NULL, NULL);
+            }
+
+            static PyObject* test_getnewargs_ex(PyObject* self) {
+                PyObject* value = PyLong_FromLong(42);
+                if (value == NULL)
+                    return NULL;
+                PyObject* args = PyTuple_Pack(1, value);
+                if (args == NULL) {
+                    Py_DECREF(value);
+                    return NULL;
+                }
+                PyObject* kwargs = PyDict_New();
+                if (kwargs == NULL) {
+                    Py_DECREF(value);
+                    Py_DECREF(args);
+                    return NULL;
+                }
+                PyObject* result = PyTuple_Pack(2, args, kwargs);
+                Py_DECREF(value);
+                Py_DECREF(args);
+                Py_DECREF(kwargs);
+                return result;
+            }
+            """,
+            tp_new="test_pickle_new",
+            tp_methods='{"__getnewargs_ex__", (PyCFunction)test_getnewargs_ex, METH_NOARGS, ""}',
+        )
+
+        obj = TestPicklableWithNewArgsEx()
+        data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+        assert type(pickle.loads(data)) == TestPicklableWithNewArgsEx

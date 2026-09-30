@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -82,19 +82,16 @@ import com.oracle.graal.python.processor.CodeWriter.Block;
 
 public class ArgumentClinicProcessor extends AbstractProcessor {
     private static final boolean LOGGING = false;
-    private static final String BuiltinAnnotationClass = "com.oracle.graal.python.builtins.Builtin";
-    private static final String BuiltinsAnnotationClass = "com.oracle.graal.python.builtins.Builtins";
+    private static final String BuiltinAnnotationClass = "com.oracle.graal.python.annotations.Builtin";
+    private static final String SlotSignatureAnnotationClass = "com.oracle.graal.python.annotations.Slot.SlotSignature";
+    private static final String BuiltinsAnnotationClass = "com.oracle.graal.python.annotations.Builtins";
     private static final String BUILTINS_BASE_CLASSES_PACKAGE = "com.oracle.graal.python.nodes.function.builtins";
 
     private Element[] clinicBuiltinBaseClasses;
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
-        HashSet<String> vals = new HashSet<>();
-        vals.add(ArgumentClinic.class.getName());
-        vals.add(ArgumentsClinic.class.getName());
-        vals.add(ClinicConverterFactory.class.getName());
-        return vals;
+        return Set.of(ArgumentClinic.class.getName(), ArgumentsClinic.class.getName(), ClinicConverterFactory.class.getName());
     }
 
     @Override
@@ -105,7 +102,7 @@ public class ArgumentClinicProcessor extends AbstractProcessor {
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         if (roundEnv.processingOver()) {
-            return false;
+            return true;
         }
         try {
             ConverterFactory.initBuiltins(processingEnv.getElementUtils());
@@ -362,7 +359,11 @@ public class ArgumentClinicProcessor extends AbstractProcessor {
         Stream<?> parameterNames = null;
         Stream<?> keywordOnlyNames = null;
         int minNumOfPositionalArgs = -1;
+        boolean takesVarArgs = false;
         AnnotationMirror annot = findAnnotationMirror(type, BuiltinAnnotationClass);
+        if (annot == null) {
+            annot = findAnnotationMirror(type, SlotSignatureAnnotationClass);
+        }
         if (annot == null) {
             annot = findAnnotationMirror(type, BuiltinsAnnotationClass);
             if (annot != null) {
@@ -396,18 +397,22 @@ public class ArgumentClinicProcessor extends AbstractProcessor {
                     builtinName = (String) item.getValue().getValue();
                 } else if (item.getKey().getSimpleName().toString().equals("minNumOfPositionalArgs")) {
                     minNumOfPositionalArgs = (int) item.getValue().getValue();
+                } else if (item.getKey().getSimpleName().toString().equals("takesVarArgs")) {
+                    takesVarArgs = (boolean) item.getValue().getValue();
                 }
             }
         }
         if ((parameterNames == null && keywordOnlyNames == null) || builtinName == null) {
             throw error(type, "In order to use Argument Clinic, the Builtin annotation must contain 'name' and 'parameterNames' and/or 'keywordOnlyNames' fields.");
         }
+        if (parameterNames == null) {
+            parameterNames = Stream.of();
+        }
+        if (takesVarArgs) {
+            parameterNames = Stream.concat(parameterNames, Stream.of("*args"));
+        }
         if (keywordOnlyNames != null) {
-            if (parameterNames == null) {
-                parameterNames = keywordOnlyNames;
-            } else {
-                parameterNames = Stream.concat(parameterNames, keywordOnlyNames);
-            }
+            parameterNames = Stream.concat(parameterNames, keywordOnlyNames);
         }
         return new BuiltinAnnotation(builtinName, parameterNames.toArray(String[]::new), minNumOfPositionalArgs);
     }

@@ -23,13 +23,11 @@ except ImportError:
 
 from io import BytesIO, StringIO
 from fileinput import FileInput, hook_encoded
-from pathlib import Path
 
 from test.support import verbose
-from test.support.os_helper import TESTFN
+from test.support.os_helper import TESTFN, FakePath
 from test.support.os_helper import unlink as safe_unlink
 from test.support import os_helper
-from test.support import warnings_helper
 from test import support
 from unittest import mock
 
@@ -152,7 +150,7 @@ class BufferSizesTests(BaseTests, unittest.TestCase):
             print('6. Inplace')
         savestdout = sys.stdout
         try:
-            fi = FileInput(files=(t1, t2, t3, t4), inplace=1, encoding="utf-8")
+            fi = FileInput(files=(t1, t2, t3, t4), inplace=True, encoding="utf-8")
             for line in fi:
                 line = line[:-1].upper()
                 print(line)
@@ -230,20 +228,11 @@ class FileInputTests(BaseTests, unittest.TestCase):
         line = list(fi)
         self.assertEqual(fi.fileno(), -1)
 
-    def test_opening_mode(self):
-        try:
-            # invalid mode, should raise ValueError
-            fi = FileInput(mode="w", encoding="utf-8")
-            self.fail("FileInput should reject invalid mode argument")
-        except ValueError:
-            pass
-        # try opening in universal newline mode
-        t1 = self.writeTmp(b"A\nB\r\nC\rD", mode="wb")
-        with warnings_helper.check_warnings(('', DeprecationWarning)):
-            fi = FileInput(files=t1, mode="U", encoding="utf-8")
-        with warnings_helper.check_warnings(('', DeprecationWarning)):
-            lines = list(fi)
-        self.assertEqual(lines, ["A\n", "B\n", "C\n", "D"])
+    def test_invalid_opening_mode(self):
+        for mode in ('w', 'rU', 'U'):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ValueError):
+                    FileInput(mode=mode)
 
     def test_stdin_binary_mode(self):
         with mock.patch('sys.stdin') as m_stdin:
@@ -266,7 +255,7 @@ class FileInputTests(BaseTests, unittest.TestCase):
     def test_file_opening_hook(self):
         try:
             # cannot use openhook and inplace mode
-            fi = FileInput(inplace=1, openhook=lambda f, m: None)
+            fi = FileInput(inplace=True, openhook=lambda f, m: None)
             self.fail("FileInput should raise if both inplace "
                              "and openhook arguments are given")
         except ValueError:
@@ -375,44 +364,6 @@ class FileInputTests(BaseTests, unittest.TestCase):
     def test_empty_files_list_specified_to_constructor(self):
         with FileInput(files=[], encoding="utf-8") as fi:
             self.assertEqual(fi._files, ('-',))
-
-    @warnings_helper.ignore_warnings(category=DeprecationWarning)
-    def test__getitem__(self):
-        """Tests invoking FileInput.__getitem__() with the current
-           line number"""
-        t = self.writeTmp("line1\nline2\n")
-        with FileInput(files=[t], encoding="utf-8") as fi:
-            retval1 = fi[0]
-            self.assertEqual(retval1, "line1\n")
-            retval2 = fi[1]
-            self.assertEqual(retval2, "line2\n")
-
-    def test__getitem___deprecation(self):
-        t = self.writeTmp("line1\nline2\n")
-        with self.assertWarnsRegex(DeprecationWarning,
-                                   r'Use iterator protocol instead'):
-            with FileInput(files=[t]) as fi:
-                self.assertEqual(fi[0], "line1\n")
-
-    @warnings_helper.ignore_warnings(category=DeprecationWarning)
-    def test__getitem__invalid_key(self):
-        """Tests invoking FileInput.__getitem__() with an index unequal to
-           the line number"""
-        t = self.writeTmp("line1\nline2\n")
-        with FileInput(files=[t], encoding="utf-8") as fi:
-            with self.assertRaises(RuntimeError) as cm:
-                fi[1]
-        self.assertEqual(cm.exception.args, ("accessing lines out of order",))
-
-    @warnings_helper.ignore_warnings(category=DeprecationWarning)
-    def test__getitem__eof(self):
-        """Tests invoking FileInput.__getitem__() with the line number but at
-           end-of-input"""
-        t = self.writeTmp('')
-        with FileInput(files=[t], encoding="utf-8") as fi:
-            with self.assertRaises(IndexError) as cm:
-                fi[0]
-        self.assertEqual(cm.exception.args, ("end of input reached",))
 
     def test_nextfile_oserror_deleting_backup(self):
         """Tests invoking FileInput.nextfile() when the attempt to delete
@@ -526,23 +477,23 @@ class FileInputTests(BaseTests, unittest.TestCase):
             self.assertRaises(StopIteration, next, fi)
             self.assertEqual(src.linesread, [])
 
-    def test_pathlib_file(self):
-        t1 = Path(self.writeTmp("Pathlib file."))
+    def test_pathlike_file(self):
+        t1 = FakePath(self.writeTmp("Path-like file."))
         with FileInput(t1, encoding="utf-8") as fi:
             line = fi.readline()
-            self.assertEqual(line, 'Pathlib file.')
+            self.assertEqual(line, 'Path-like file.')
             self.assertEqual(fi.lineno(), 1)
             self.assertEqual(fi.filelineno(), 1)
             self.assertEqual(fi.filename(), os.fspath(t1))
 
-    def test_pathlib_file_inplace(self):
-        t1 = Path(self.writeTmp('Pathlib file.'))
+    def test_pathlike_file_inplace(self):
+        t1 = FakePath(self.writeTmp('Path-like file.'))
         with FileInput(t1, inplace=True, encoding="utf-8") as fi:
             line = fi.readline()
-            self.assertEqual(line, 'Pathlib file.')
+            self.assertEqual(line, 'Path-like file.')
             print('Modified %s' % line)
         with open(t1, encoding="utf-8") as f:
-            self.assertEqual(f.read(), 'Modified Pathlib file.\n')
+            self.assertEqual(f.read(), 'Modified Path-like file.\n')
 
 
 class MockFileInput:
@@ -1042,10 +993,6 @@ class Test_hook_encoded(unittest.TestCase):
             self.assertEqual(lines, expected_lines)
 
         check('r', ['A\n', 'B\n', 'C\n', 'D\u20ac'])
-        with self.assertWarns(DeprecationWarning):
-            check('rU', ['A\n', 'B\n', 'C\n', 'D\u20ac'])
-        with self.assertWarns(DeprecationWarning):
-            check('U', ['A\n', 'B\n', 'C\n', 'D\u20ac'])
         with self.assertRaises(ValueError):
             check('rb', ['A\n', 'B\r\n', 'C\r', 'D\u20ac'])
 

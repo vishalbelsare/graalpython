@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -43,6 +43,10 @@ import unittest
 
 
 class SignalTests(unittest.TestCase):
+    def test_getsignal_rejects_invalid_number(self):
+        with self.assertRaisesRegex(ValueError, "signal number out of range"):
+            signal.getsignal(0)
+
     def test_args_validation(self):
         try:
             import _signal
@@ -82,16 +86,96 @@ def test_alarm2():
         assert False, "Signal handler didn't trigger or propagate exception"
 
 
+def test_itimer():
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    try:
+        old = signal.setitimer(signal.ITIMER_REAL, 1.0, 0.25)
+        assert old == (0.0, 0.0), old
+        current = signal.getitimer(signal.ITIMER_REAL)
+        assert 0.0 <= current[0] <= 1.0, current
+        assert current[1] == 0.25, current
+        old = signal.setitimer(signal.ITIMER_REAL, 0)
+        assert 0.0 <= old[0] <= 1.0, old
+        assert old[1] == 0.25, old
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+    for func, args in (
+        (signal.getitimer, (-1,)),
+        (signal.setitimer, (-1, 0)),
+        (signal.setitimer, (signal.ITIMER_REAL, -1)),
+    ):
+        try:
+            func(*args)
+        except signal.ItimerError as e:
+            assert e.errno == 22, e
+        else:
+            raise AssertionError(f"{func.__name__}{args} did not raise ItimerError")
+
+
+def test_emulated_timers_use_current_handler():
+    if sys.implementation.name != 'graalpy' or __graalpython__.posix_module_backend() != 'java':
+        return
+
+    import time
+
+    calls = []
+
+    def first(signum, frame):
+        calls.append(("first", signum, frame))
+
+    def second(signum, frame):
+        calls.append(("second", signum, frame))
+
+    def wait_for_call(timeout=2.5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if calls:
+                return True
+            time.sleep(0.01)
+        return False
+
+    old_handler = signal.signal(signal.SIGALRM, first)
+    try:
+        signal.alarm(1)
+        signal.signal(signal.SIGALRM, second)
+        assert wait_for_call(), "alarm did not trigger handler"
+        assert calls[0][0] == "second", calls
+        assert calls[0][1] == signal.SIGALRM, calls
+        assert calls[0][2].f_code.co_name
+
+        calls.clear()
+        signal.signal(signal.SIGALRM, first)
+        signal.setitimer(signal.ITIMER_REAL, 0.05)
+        signal.signal(signal.SIGALRM, second)
+        assert wait_for_call(), "setitimer did not trigger handler"
+        assert calls[0][0] == "second", calls
+        assert calls[0][1] == signal.SIGALRM, calls
+        assert calls[0][2].f_code.co_name
+
+        calls.clear()
+        signal.signal(signal.SIGALRM, signal.SIG_IGN)
+        signal.setitimer(signal.ITIMER_REAL, 0.05)
+        time.sleep(0.2)
+        assert calls == []
+    finally:
+        signal.alarm(0)
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
 def test_interrupt():
-    if sys.implementation.name == 'graalpy' and __graalpython__.is_managed_launcher():
-        # The keyboard interrupt handling works under managed, but sending SIGINT does not
+    if sys.implementation.name == 'graalpy' and __graalpython__.posix_module_backend() == 'java':
+        # Sending SIGINT does not work when using the Java backend for posix
         return
     proc = subprocess.Popen(
         [sys.executable, '-c', 'import time; print("s", flush=True); time.sleep(60)'],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    assert proc.stdout.read(2) == b's\n'
+    actual_out = proc.stdout.read(2)
+    assert actual_out == b's\n', f"{actual_out=}, {proc.stderr.read()=}"
+
     proc.send_signal(signal.SIGINT)
     _, stderr = proc.communicate()
     # TODO we should properly make the process exit indicate the signal, but it might not be feasible under JVM/SVM

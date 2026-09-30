@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,7 +51,6 @@ import com.oracle.graal.python.lib.PyNumberIndexNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
@@ -59,10 +58,8 @@ import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.nodes.Node;
 
-@TypeSystemReference(PythonArithmeticTypes.class)
 @GenerateUncached
 @GenerateInline(inlineByDefault = true)
 @GenerateCached
@@ -75,6 +72,10 @@ public abstract class CastToJavaBigIntegerNode extends Node {
     public abstract BigInteger execute(Node inliningTarget, long x);
 
     public abstract BigInteger execute(Node inliningTarget, Object x);
+
+    public static BigInteger executeUncached(Object x) {
+        return CastToJavaBigIntegerNodeGen.getUncached().execute(null, x);
+    }
 
     @Specialization
     @TruffleBoundary
@@ -101,7 +102,7 @@ public abstract class CastToJavaBigIntegerNode extends Node {
 
     @Specialization
     protected static BigInteger generic(Node inliningTarget, Object x,
-                    @Cached PRaiseNode.Lazy raise,
+                    @Cached PRaiseNode raise,
                     @Cached(inline = false) CastToJavaBigIntegerNode rec,
                     @Cached GetClassNode getClassNode,
                     @Cached PyIndexCheckNode indexCheckNode,
@@ -109,6 +110,6 @@ public abstract class CastToJavaBigIntegerNode extends Node {
         if (indexCheckNode.execute(inliningTarget, x)) {
             return rec.execute(null, indexNode.execute(null, inliningTarget, x));
         }
-        throw raise.get(inliningTarget).raise(TypeError, ErrorMessages.OBJ_CANNOT_BE_INTERPRETED_AS_INTEGER, getClassNode.execute(inliningTarget, x));
+        throw raise.raise(inliningTarget, TypeError, ErrorMessages.OBJ_CANNOT_BE_INTERPRETED_AS_INTEGER, getClassNode.execute(inliningTarget, x));
     }
 }

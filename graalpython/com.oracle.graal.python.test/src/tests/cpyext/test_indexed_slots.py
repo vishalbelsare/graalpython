@@ -1,0 +1,208 @@
+# Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# The Universal Permissive License (UPL), Version 1.0
+#
+# Subject to the condition set forth below, permission is hereby granted to any
+# person obtaining a copy of this software, associated documentation and/or
+# data (collectively the "Software"), free of charge and under any and all
+# copyright rights in the Software, and any and all patent rights owned or
+# freely licensable by each licensor hereunder covering either (i) the
+# unmodified Software as contributed to or provided by such licensor, or (ii)
+# the Larger Works (as defined below), to deal in both
+#
+# (a) the Software, and
+#
+# (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+# one is included with the Software each a "Larger Work" to which the Software
+# is contributed by such licensors),
+#
+# without restriction, including without limitation the rights to copy, create
+# derivative works of, display, perform, and distribute the Software and make,
+# use, sell, offer for sale, import, export, have made, and have sold the
+# Software and the Larger Work(s), and to sublicense the foregoing rights on
+# either these or other terms.
+#
+# This license is subject to the following condition:
+#
+# The above copyright notice and either this complete permission notice or at a
+# minimum a reference to the UPL must be included in all copies or substantial
+# portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+import gc
+import weakref
+from ctypes import c_void_p, sizeof
+
+from . import CPyExtTestCase, CPyExtHeapType, CPyExtType
+
+
+class BaseWithSlots:
+    __slots__ = ('a', 'b')
+
+class AnotherBaseWithSlots:
+    __slots__ = ('b',)
+
+class EmptyBase:
+    pass
+
+class EmptyBaseWithEmptySlots:
+    __slots__ = ()
+
+# This is used to increase tp_basicsize in CPyExtHeapType which needs to be grater that the basic size of the
+# base class. We do not use the C struct in any way - in fact in CPython, the `space` member declared here
+# overlaps with __slots__ of the base class.
+def cmembers(i):
+    return f"long space[{i}];"
+
+class TestIndexedSlots(CPyExtTestCase):
+    def test_slots_in_base(self):
+        N1 = CPyExtHeapType('Na1', bases=(BaseWithSlots,), cmembers=cmembers(4))
+        N2 = CPyExtHeapType('Na2', bases=(N1,), cmembers=cmembers(8))
+
+        class M1(EmptyBase, N2):
+            pass
+
+        class M2(N2, EmptyBase):
+            pass
+
+        for C in (N1, N2, M1, M2):
+            x = C()
+            x.a, x.b = 12, 13
+            self.assertEqual((12, 13), (x.a, x.b))
+
+    def test_slots_in_subclass(self):
+        N1 = CPyExtHeapType('Nb1', bases=(EmptyBase,), cmembers=cmembers(4))
+
+        class M1(N1):
+            __slots__ = ('a', 'b')
+
+        class M2(N1):
+            __slots__ = ('a', 'b')
+
+        class M3(M1):
+            __slots__ = ('c',)
+
+        for C in (M1, M2):
+            x = C()
+            x.a, x.b = 12, 13
+            self.assertEqual((12, 13), (x.a, x.b))
+
+        x = M3()
+        x.a, x.b, x.c = 22, 23, 24
+        self.assertEqual((22, 23, 24), (x.a, x.b, x.c))
+
+    def test_weaklistoffset_in_subclass(self):
+        NativeWeakref = CPyExtType(
+            'NativeWeakref',
+            '''
+            static PyObject* get_native_layout(PyObject* cls) {
+                PyTypeObject* type = (PyTypeObject*)cls;
+                return Py_BuildValue("(nn)", type->tp_basicsize, type->tp_weaklistoffset);
+            }
+            ''',
+            cmembers='''long value;
+            PyObject *link;
+            PyObject *weakrefs;
+            ''',
+            tp_methods='{"get_native_layout", (PyCFunction)get_native_layout, METH_NOARGS | METH_CLASS, ""}',
+            ready_code='NativeWeakrefType.tp_weaklistoffset = offsetof(NativeWeakrefObject, weakrefs);',
+        )
+
+        class ManagedSubclass(NativeWeakref):
+            __slots__ = ('extra',)
+
+        self.assertEqual(
+            (ManagedSubclass.__basicsize__, ManagedSubclass.__weakrefoffset__),
+            ManagedSubclass.get_native_layout(),
+        )
+
+    def test_weaklistoffset_added_to_native_subclass(self):
+        NativeLayoutReader = CPyExtType(
+            'NativeLayoutReader',
+            '''
+            static PyObject* get_native_layout(PyObject* unused, PyObject* cls) {
+                PyTypeObject* type = (PyTypeObject*)cls;
+                return Py_BuildValue("(nn)", type->tp_basicsize, type->tp_weaklistoffset);
+            }
+            ''',
+            tp_methods='{"get_native_layout", (PyCFunction)get_native_layout, METH_O | METH_CLASS, ""}',
+        )
+        self.assertEqual(NativeLayoutReader.__weakrefoffset__, 0)
+
+        class NativeSubclass(NativeLayoutReader):
+            pass
+
+        class ManagedSubclass(c_void_p):
+            pass
+
+        class SlottedSubclass(ManagedSubclass):
+            __slots__ = ('extra',)
+
+        for cls in (NativeSubclass, c_void_p, ManagedSubclass, SlottedSubclass):
+            with self.subTest(cls=cls):
+                weakrefoffset = cls.__weakrefoffset__
+                self.assertNotEqual(weakrefoffset, 0)
+                self.assertEqual((cls.__basicsize__, weakrefoffset), NativeLayoutReader.get_native_layout(cls))
+                if weakrefoffset > 0:
+                    self.assertLessEqual(weakrefoffset + sizeof(c_void_p), cls.__basicsize__)
+                else:
+                    self.assertEqual(weakrefoffset, -4 * sizeof(c_void_p))
+                    self.assertTrue(cls.__flags__ & (1 << 3))  # Py_TPFLAGS_MANAGED_WEAKREF
+
+        self.assertEqual(NativeSubclass.__weakrefoffset__, -4 * sizeof(c_void_p))
+        self.assertEqual(NativeSubclass.__basicsize__, NativeLayoutReader.__basicsize__)
+
+        obj = SlottedSubclass()
+        obj.extra = obj
+        ref = weakref.ref(obj)
+        self.assertIs(ref(), obj)
+        del obj
+        gc.collect()
+        self.assertIsNone(ref())
+
+    def test_slots_in_base_and_subclass(self):
+        N1 = CPyExtHeapType('Nd1', bases=(BaseWithSlots,), cmembers=cmembers(4))
+
+        class M1(N1):
+            __slots__ = ('c', 'd')
+
+        class M2(N1):
+            __slots__ = ('c', 'd', 'a')
+
+        class M3(M1):
+            __slots__ = ('b', 'a')
+
+        for C in (M1, M2, M3):
+            x = C()
+            x.a, x.b, x.c, x.d = 12, 13, 14, 15
+            self.assertEqual((12, 13, 14, 15), (x.a, x.b, x.c, x.d))
+
+    def test_multi_bases(self):
+        # We are using `EmptyBaseWithEmptySlots`` instead of `EmptyBase` to avoid setting
+        # `type->tp_dictoffset`, which will fail some assertions or sigfaults otherwise.
+        N1 = CPyExtHeapType('Ne1', bases=(BaseWithSlots, EmptyBaseWithEmptySlots), cmembers=cmembers(6))
+        N2 = CPyExtHeapType('Ne2', bases=(EmptyBaseWithEmptySlots, BaseWithSlots), cmembers=cmembers(6))
+
+        class M1(N1):
+            pass
+
+        class M2(N1):
+            __slots__ = ('b',)
+
+        for C in (N1, N2, M1, M2):
+            x = C()
+            x.a, x.b = 12, 13
+            self.assertEqual((12, 13), (x.a, x.b))
+
+    def test_layout_conflict(self):
+        N1 = CPyExtHeapType('Nf1', bases=(BaseWithSlots,), cmembers=cmembers(4))
+        self.assertRaises(TypeError, CPyExtHeapType, 'Nf2', bases=(AnotherBaseWithSlots, BaseWithSlots))
+        self.assertRaises(TypeError, CPyExtHeapType, 'Nf3', bases=(AnotherBaseWithSlots, N1))

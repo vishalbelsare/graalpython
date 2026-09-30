@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,6 +49,7 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueErr
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.buffer.BufferFlags;
@@ -59,16 +60,16 @@ import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.ToByteArrayNode;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins;
 import com.oracle.graal.python.lib.PyMappingCheckNode;
-import com.oracle.graal.python.lib.PyObjectAsciiNode;
+import com.oracle.graal.python.lib.PyObjectAsciiAsTruffleStringNode;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.formatting.FormattingBuffer.BytesFormattingBuffer;
 import com.oracle.graal.python.runtime.formatting.InternalFormat.Formatter;
 import com.oracle.graal.python.runtime.formatting.InternalFormat.Spec;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -76,8 +77,8 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
     private final byte[] formatBytes;
     private final int bytesLength;
 
-    public BytesFormatProcessor(Python3Core core, TupleBuiltins.GetItemNode getTupleItemNode, byte[] formatBytes, int bytesLength, Node raisingNode) {
-        super(core, getTupleItemNode, new BytesFormattingBuffer(), raisingNode);
+    public BytesFormatProcessor(Python3Core core, byte[] formatBytes, int bytesLength, Node raisingNode) {
+        super(core, new BytesFormattingBuffer(), raisingNode);
         this.formatBytes = formatBytes;
         this.bytesLength = bytesLength;
     }
@@ -85,6 +86,11 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
     @Override
     protected String getFormatType() {
         return "bytes";
+    }
+
+    @Override
+    protected char normalizeIntegerFormatType(char type) {
+        return type == 'i' ? 'd' : type;
     }
 
     @Override
@@ -98,7 +104,7 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
         try {
             return (char) formatBytes[index++];
         } catch (ArrayIndexOutOfBoundsException e) {
-            throw PRaiseNode.raiseUncached(raisingNode, ValueError, ErrorMessages.INCOMPLETE_FORMAT);
+            throw PRaiseNode.raiseStatic(raisingNode, ValueError, ErrorMessages.INCOMPLETE_FORMAT);
         }
     }
 
@@ -115,13 +121,14 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
 
     @Override
     Object parseMappingKey(int start, int end) {
-        return core.factory().createBytes(Arrays.copyOfRange(formatBytes, start, end));
+        return PFactory.createBytes(PythonLanguage.get(null), Arrays.copyOfRange(formatBytes, start, end));
     }
 
     @Override
     protected boolean isMapping(Object obj) {
         // bytesobject.c _PyBytes_FormatEx()
-        return !(obj instanceof PTuple || obj instanceof PBytesLike || obj instanceof PString || obj instanceof TruffleString || isJavaString(obj)) && PyMappingCheckNode.executeUncached(obj);
+        return !(PyTupleCheckNode.executeUncached(obj) || obj instanceof PBytesLike || obj instanceof PString || obj instanceof TruffleString || isJavaString(obj)) &&
+                        PyMappingCheckNode.executeUncached(obj);
     }
 
     @Override
@@ -130,7 +137,7 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
             return super.asFloat(arg);
         } catch (PException ex) {
             // exactly like in CPython, all errors are translated to this
-            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.FLOAT_ARG_REQUIRED, arg);
+            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.FLOAT_ARG_REQUIRED, arg);
         }
     }
 
@@ -180,7 +187,7 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
         }
 
         if (!foundByte) {
-            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.C_REQUIRES_INT_IN_BYTE_RANGE_OR_SINGLE_BYTE);
+            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.C_REQUIRES_INT_IN_BYTE_RANGE_OR_SINGLE_BYTE);
         }
 
         BytesFormatter f = new BytesFormatter(buffer, spec, raisingNode);
@@ -189,7 +196,7 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
     }
 
     private PException raiseOverflow() {
-        throw PRaiseNode.raiseUncached(raisingNode, OverflowError, ErrorMessages.C_ARG_NOT_IN_RANGE256_DECIMAL);
+        throw PRaiseNode.raiseStatic(raisingNode, OverflowError, ErrorMessages.C_ARG_NOT_IN_RANGE256_DECIMAL);
     }
 
     @Override
@@ -207,7 +214,7 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
 
             case 'r':
             case 'a': // ascii
-                String result = PyObjectAsciiNode.executeUncached(getArg()).toJavaStringUncached();
+                String result = PyObjectAsciiAsTruffleStringNode.executeUncached(getArg()).toJavaStringUncached();
                 fb = new BytesFormatter(buffer, spec, raisingNode);
                 fb.formatAsciiString(result);
                 return fb;
@@ -226,14 +233,14 @@ public class BytesFormatProcessor extends FormatProcessor<byte[]> {
         if (attribute != PNone.NO_VALUE) {
             Object bytesResult = call(attribute, arg);
             if (!(bytesResult instanceof PBytes)) {
-                throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.RETURNED_NONBYTES, T___BYTES__, arg);
+                throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.RETURNED_NONBYTES, T___BYTES__, arg);
             }
             return toBytes((PBytes) bytesResult);
         }
         // otherwise: use the buffer protocol
         byte[] result = byteBufferAsBytesOrNull(arg);
         if (result == null) {
-            throw PRaiseNode.raiseUncached(raisingNode, TypeError, ErrorMessages.B_REQUIRES_BYTES_OR_OBJ_THAT_IMPLEMENTS_S_NOT_P, T___BYTES__, arg);
+            throw PRaiseNode.raiseStatic(raisingNode, TypeError, ErrorMessages.B_REQUIRES_BYTES_OR_OBJ_THAT_IMPLEMENTS_S_NOT_P, T___BYTES__, arg);
         }
         return result;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,72 +43,49 @@ package com.oracle.graal.python.builtins.modules.cext;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
-import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.assertNoJavaString;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
-import com.oracle.graal.python.builtins.objects.common.HashingStorage.InitNode;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIterator;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorKey;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorNext;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageIteratorValue;
+import com.oracle.graal.python.builtins.objects.dict.DictNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
-import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.namespace.PSimpleNamespace;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
+import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.object.DynamicObject;
 
 public final class PythonCextNamespaceBuiltins {
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject}, call = Direct)
-    abstract static class _PyNamespace_New extends CApiUnaryBuiltinNode {
-        @Specialization
-        static Object impDict(PDict dict,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("getIt") @Cached HashingStorageGetIterator getIterator,
-                        @Shared("itNext") @Cached HashingStorageIteratorNext itNext,
-                        @Shared("itKey") @Cached HashingStorageIteratorKey itKey,
-                        @Shared("itVal") @Cached HashingStorageIteratorValue itValue,
-                        @Shared("dylib") @CachedLibrary(limit = "1") DynamicObjectLibrary dyLib,
-                        @Shared @Cached PythonObjectFactory factory) {
-            HashingStorage storage = dict.getDictStorage();
-            return impl(inliningTarget, storage, getIterator, itNext, itKey, itValue, dyLib, factory);
-        }
-
-        private static Object impl(Node inliningTarget, HashingStorage storage, HashingStorageGetIterator getIterator, HashingStorageIteratorNext itNext,
-                        HashingStorageIteratorKey itKey, HashingStorageIteratorValue itValue,
-                        DynamicObjectLibrary dyLib, PythonObjectFactory factory) {
-            PSimpleNamespace ns = factory.createSimpleNamespace();
-            HashingStorageNodes.HashingStorageIterator it = getIterator.execute(inliningTarget, storage);
-            while (itNext.execute(inliningTarget, storage, it)) {
-                Object key = itKey.execute(inliningTarget, storage, it);
-                Object value = itValue.execute(inliningTarget, storage, it);
-                dyLib.put(ns, assertNoJavaString(key), value);
+    static long _PyNamespace_New(long dictPtr) {
+        PythonLanguage language = PythonLanguage.get(null);
+        PSimpleNamespace namespace = PFactory.createSimpleNamespace(language);
+        if (dictPtr != NULLPTR) {
+            Object mapping = NativeToPythonInternalNode.executeUncached(dictPtr, false);
+            PDict dict;
+            if (mapping instanceof PDict dictArg && PGuards.isBuiltinDict(dictArg)) {
+                dict = dictArg;
+            } else {
+                dict = PFactory.createDict(language);
+                DictNodes.UpdateNode.executeUncached(null, dict, mapping);
             }
-            return ns;
+            HashingStorage storage = dict.getDictStorage();
+            HashingStorageIterator iterator = HashingStorageGetIterator.executeUncached(storage);
+            while (HashingStorageIteratorNext.executeUncached(storage, iterator)) {
+                Object key = HashingStorageIteratorKey.executeUncached(storage, iterator);
+                Object value = HashingStorageIteratorValue.executeUncached(storage, iterator);
+                DynamicObject.PutNode.getUncached().execute(namespace, key, value);
+            }
         }
-
-        @Specialization(guards = "!isDict(dict)")
-        static Object impGeneric(Object dict,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InitNode initNode,
-                        @Shared("getIt") @Cached HashingStorageGetIterator getIterator,
-                        @Shared("itNext") @Cached HashingStorageIteratorNext itNext,
-                        @Shared("itKey") @Cached HashingStorageIteratorKey itKey,
-                        @Shared("itVal") @Cached HashingStorageIteratorValue itValue,
-                        @Shared("dylib") @CachedLibrary(limit = "1") DynamicObjectLibrary dyLib,
-                        @Shared @Cached PythonObjectFactory factory) {
-            HashingStorage hs = initNode.execute(null, dict, PKeyword.EMPTY_KEYWORDS);
-            return impl(inliningTarget, hs, getIterator, itNext, itKey, itValue, dyLib, factory);
-        }
+        return PythonToNativeInternalNode.executeNewRefUncached(namespace);
     }
 
 }

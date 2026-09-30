@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -99,14 +99,14 @@ static PyTypeObject NativeCustomType = {
 
 static PyModuleDef c_classmethod_module = {
     PyModuleDef_HEAD_INIT,
-    "c_classmethod_module",
+    "c_call_classmethod",
     "",
     -1,
     NULL, NULL, NULL, NULL, NULL
 };
 
 PyMODINIT_FUNC
-PyInit_c_classmethod(void)
+PyInit_c_call_classmethod(void)
 {
     PyObject* m;
 
@@ -125,8 +125,14 @@ PyInit_c_classmethod(void)
 """
 
 
-ccompile("c_classmethod", code)
-from c_classmethod import NativeCustomType
+import sys
+import os
+# Add benchmark directory to path to allow import of harness.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harness import ccompile
+
+ccompile("c_call_classmethod", code)
+from c_call_classmethod import NativeCustomType
 
 # ~igv~: function_root_count_at
 def count(num):
@@ -138,8 +144,33 @@ def count(num):
 
 def measure(num):
     result = count(num)
-    print("result = " + str(result))
+    return result
 
 
 def __benchmark__(num=1000000):
-    measure(num)
+    return measure(num)
+
+
+def run():
+    __benchmark__(num=10000)
+
+
+def warmupIterations():
+    return 50
+
+
+def iterations():
+    return 40
+
+
+def summary():
+    return {
+        "name": "OutlierRemovalAverageSummary",
+        "lower-threshold": 0.0,
+        "upper-threshold": 0.4,
+    }
+
+
+def dependencies():
+    # Required to run `ccompile`
+    return ["harness.py", "tests/__init__.py"]

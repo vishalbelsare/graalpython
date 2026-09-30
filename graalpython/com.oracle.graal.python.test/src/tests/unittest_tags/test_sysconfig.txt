@@ -1,24 +1,27 @@
-*graalpython.lib-python.3.test.test_sysconfig.MakefileTests.test_get_makefile_filename
-*graalpython.lib-python.3.test.test_sysconfig.MakefileTests.test_parse_makefile
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_EXT_SUFFIX_in_vars
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_SO_deprecation
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_SO_in_vars
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_SO_value
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_config_h_filename
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_config_vars
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_default_scheme
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_path
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_path_names
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_paths
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_platform
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_preferred_schemes
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_get_scheme_names
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_ldshared_value
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_main
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_osx_ext_suffix
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_platform_in_subprocess
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_srcdir
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_srcdir_independent_of_cwd
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_symlink
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_triplet_in_ext_suffix
-*graalpython.lib-python.3.test.test_sysconfig.TestSysConfig.test_user_similar
+test.test_sysconfig.DeprecationTests.test_is_python_build_check_home @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.MakefileTests.test_parse_makefile @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_EXT_SUFFIX_in_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_config_vars_depend_on_site_initialization @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_sysconfig.TestSysConfig.test_config_vars_recalculation_after_site_initialization @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_sysconfig.TestSysConfig.test_get_config_h_filename @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_config_vars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_default_scheme @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_path @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_path_names @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_paths @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_platform @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_preferred_schemes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_get_scheme_names @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_ldshared_value @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_sysconfig.TestSysConfig.test_library @ win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_main @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_nt_venv_scheme @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_osx_ext_suffix @ darwin-arm64
+test.test_sysconfig.TestSysConfig.test_paths_depend_on_site_initialization @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_sysconfig.TestSysConfig.test_platform_in_subprocess @ darwin-arm64
+test.test_sysconfig.TestSysConfig.test_posix_venv_scheme @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_soabi @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_srcdir_independent_of_cwd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_symlink @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_sysconfig.TestSysConfig.test_user_similar @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_sysconfig.TestSysConfig.test_venv_scheme @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

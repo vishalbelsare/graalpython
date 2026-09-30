@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,15 +40,20 @@
  */
 package com.oracle.graal.python.lib;
 
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
+import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
 
 @GenerateInline
 @GenerateCached(false)
+@GenerateUncached
 public abstract class PyDictCheckNode extends Node {
     public abstract boolean execute(Node inliningTarget, Object object);
 
@@ -60,7 +65,8 @@ public abstract class PyDictCheckNode extends Node {
     // We don't support native dicts atm
 
     @Fallback
-    static boolean other(@SuppressWarnings("unused") Object object) {
-        return false;
+    static boolean other(Object object,
+                    @Cached(inline = false) IsBuiltinObjectProfile isDictNode) {
+        return isDictNode.profileObjectCached(object, PythonBuiltinClassType.PDict);
     }
 }

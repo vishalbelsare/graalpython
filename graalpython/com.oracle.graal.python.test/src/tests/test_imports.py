@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,9 +38,10 @@
 # SOFTWARE.
 
 import sys
-from posix import *
+import os
+import re
 
-sys.path.append(sys._getframe().f_code.co_filename.rpartition("/")[0])
+sys.path.insert(0, os.path.dirname(__file__))
 
 
 def test_relative_import():
@@ -56,6 +57,17 @@ def test_module_docstring():
     assert package.__doc__ == "PACKAGE DOC"
     from package import moduleA
     assert moduleA.__doc__ == "MODULE A DOC"
+
+
+def test_imp_override_multi_interp_extensions_check_is_rejected_in_main_interpreter():
+    import _imp
+
+    try:
+        _imp._override_multi_interp_extensions_check(1)
+    except RuntimeError as e:
+        assert str(e) == "_imp._override_multi_interp_extensions_check() cannot be used in the main interpreter"
+    else:
+        raise AssertionError("expected RuntimeError in the main interpreter")
 
 
 def test_dotted_import():
@@ -93,6 +105,21 @@ def test_import_star_has_to_be_module():
         assert False
 
 
+def test_import_star_no_all():
+    g = {}
+    exec("from package.moduleA import *", g)
+    assert 'publicProperty' in g
+    assert '_privateProperty' not in g
+
+
+def test_import_star_all():
+    g = {}
+    exec("from package.moduleY import *", g)
+    assert 'publicProperty' in g
+    assert '_privateProperty' in g
+    assert 'unlistedProperty' not in g
+
+
 def test_import_as_local():
     from sys import path
     from sys import path as mypath
@@ -114,8 +141,9 @@ def test_import_error():
 
 
 def test_import_some_star():
-    import posix
-    assert stat == posix.stat
+    g = {}
+    exec("from os import *", g)
+    assert g['stat'] is os.stat
 
 
 def test_imp_fix_co_filename():
@@ -128,6 +156,11 @@ def test_imp_fix_co_filename():
     old_name = code.co_filename
     _imp._fix_co_filename(code, old_name + '_more_path')
     assert code.co_filename == old_name + '_more_path'
+
+
+def test_imp_source_hash():
+    import _imp
+    assert _imp.source_hash(123456789, b'hello!').hex() == '04e61e229a23a446'
 
 
 def test_recursive_import_from():
@@ -150,7 +183,11 @@ def test_circular_import():
         try:
             import circularimport.source
         except AttributeError as ae:
-            assert str(ae) == "partially initialized module 'circularimport.source' has no attribute 'spam' (most likely due to a circular import)"
+            assert re.match(
+                r"partially initialized module 'circularimport\.source' from '.*' has no attribute 'spam' "
+                r"\(most likely due to a circular import\)",
+                str(ae),
+            )
         else:
             assert False
 
@@ -160,16 +197,13 @@ def test_circular_import_valid():
 
 import time as package25274  #has to be in global space for the next test
 def test_local_property_25274():
-    
+
     def mytest():
         assert len(locals()) == 0
         import package25274.sub25274
         assert 'package25274' in locals()
         assert package25274.top_property == 10
         assert package25274.sub25274.sub_property == 20
-        
+
     mytest()
     assert hasattr(package25274, 'tzname')
-
-
-    

@@ -44,7 +44,7 @@ class ExceptionClassTests(unittest.TestCase):
             last_depth = 0
             for exc_line in inheritance_tree:
                 exc_line = exc_line.rstrip()
-                depth = exc_line.rindex('-')
+                depth = exc_line.rindex('─')
                 exc_name = exc_line[depth+2:]  # Slice past space
                 if '(' in exc_name:
                     paren_index = exc_name.index('(')
@@ -78,6 +78,9 @@ class ExceptionClassTests(unittest.TestCase):
                 last_depth = depth
         finally:
             inheritance_tree.close()
+
+        # Underscore-prefixed (private) exceptions don't need to be documented
+        exc_set = set(e for e in exc_set if not e.startswith('_'))
         self.assertEqual(len(exc_set), 0, "%s not accounted for" % exc_set)
 
     interface_tests = ("length", "args", "str", "repr")
@@ -129,7 +132,7 @@ class ExceptionClassTests(unittest.TestCase):
 
         d[HashThisKeyWillClearTheDict()] = Value()  # refcount of Value() is 1 now
 
-        # Exception.__setstate__ should aquire a strong reference of key and
+        # Exception.__setstate__ should acquire a strong reference of key and
         # value in the dict. Otherwise, Value()'s refcount would go below
         # zero in the tp_hash call in PyObject_SetAttr(), and it would cause
         # crash in GC.

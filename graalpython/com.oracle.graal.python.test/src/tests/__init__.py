@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,5 +36,284 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import sys
+import os
+import shutil
+import sysconfig
 
-# dummy file
+from importlib import invalidate_caches
+from pathlib import Path
+
+
+compiled_registry = set()
+_venv_site_packages_cache = {}
+
+
+def find_rootdir():
+    cur_dir = Path(__file__).parent
+    while cur_dir.name != 'graalpython':
+        cur_dir = cur_dir.parent
+    if (cur_dir / "mx.graalpython").exists():
+        rootdir = cur_dir / "mxbuild" / "cpyexts"
+    else:
+        rootdir = cur_dir.parent / "mxbuild" / "cpyexts"
+    rootdir.mkdir(parents=True, exist_ok=True)
+    return rootdir
+
+
+DIR = find_rootdir()
+
+
+def _venv_python(venv_dir: Path) -> Path:
+    if sys.platform.startswith('win32'):
+        return venv_dir / 'Scripts' / 'python.exe'
+    return venv_dir / 'bin' / 'python3'
+
+
+def _venv_site_packages(venv_dir: Path, py_executable: Path = None) -> Path:
+    # the python creating the venv may be different, so we need to figure out
+    # the correct path using that python. this is used in polybenchmarks, where
+    # the executable is not graalpy and thus a different CI-env Python is used.
+    if py_executable and py_executable.exists():
+        cache_key = venv_dir.absolute()
+        cached_path = _venv_site_packages_cache.get(cache_key)
+        if cached_path and cached_path.exists():
+            return cached_path
+        import subprocess
+        try:
+            path = subprocess.check_output([
+                py_executable,
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+            ], text=True).strip()
+        except (OSError, subprocess.CalledProcessError):
+            pass
+        else:
+            if path:
+                site_packages = Path(path)
+                _venv_site_packages_cache[cache_key] = site_packages
+                return site_packages
+    existing_site_packages = list(venv_dir.glob("lib*/python*/site-packages"))
+    if len(existing_site_packages) == 1:
+        return existing_site_packages[0]
+    non_empty_site_packages = [path for path in existing_site_packages if any(path.iterdir())]
+    if len(non_empty_site_packages) == 1:
+        return non_empty_site_packages[0]
+    if sys.platform.startswith('win32'):
+        return venv_dir / 'Lib' / 'site-packages'
+    version_dir = f'python{sys.version_info.major}.{sys.version_info.minor}'
+    lib64_path = venv_dir / 'lib64' / version_dir / 'site-packages'
+    if lib64_path.exists():
+        return lib64_path
+    return venv_dir / 'lib' / version_dir / 'site-packages'
+
+
+def _package_present(site_packages_dir: Path, package: str, version: str) -> bool:
+    if os.path.isdir(site_packages_dir / f'{package}-{version}.dist-info'):
+        return True
+    normalized = package.replace('-', '_')
+    return os.path.isdir(site_packages_dir / normalized)
+
+
+def ensure_packages(*, use_current_python=False, **package_specs):
+    import site
+    package_names = "-".join(package_specs.keys())
+    venv_dir = find_rootdir() / f'{sys.implementation.name}-{package_names}-venv'
+    py_executable = _venv_python(venv_dir)
+    site_packages_dir = _venv_site_packages(venv_dir, py_executable)
+    if any(not _package_present(site_packages_dir, p, v) for p, v in package_specs.items()):
+        import subprocess
+        package_specs = [f'{p}=={v}' for p, v in package_specs.items()]
+        print(f'installing {package_specs} in {venv_dir}')
+        install_venv(venv_dir, use_current_python=use_current_python)
+        site_packages_dir = _venv_site_packages(venv_dir, py_executable)
+        subprocess.run([py_executable, "-m", "pip", "install", *package_specs], check=True)
+        print(f'{package_specs} installed in {venv_dir}')
+
+    pyvenv_site = str(site_packages_dir)
+    if os.path.normcase(os.path.normpath(pyvenv_site)) not in {os.path.normcase(os.path.normpath(entry)) for entry in sys.path}:
+        site.addsitedir(pyvenv_site)
+    return venv_dir
+
+
+def get_setuptools(setuptools='67.6.1'):
+    """
+    distutils is not part of std library since python 3.12
+    we rely on distutils to pick the toolchain for the underlying system
+    and build the c extension tests.
+    """
+    ensure_packages(setuptools=setuptools)
+
+
+def _system_python_for_venv():
+    python = os.environ.get("MX_PYTHON") or "python"
+    resolved = shutil.which(python)
+    if resolved and (not sys.platform.startswith('win32') or Path(resolved).suffix.lower() == ".exe"):
+        return resolved
+    if sys.platform.startswith('win32'):
+        version = os.environ.get("MX_PYTHON_VERSION")
+        if not version and python.startswith("python") and len(python) > len("python"):
+            version = python[len("python"):]
+        if version:
+            version_dir = version.replace(".", "")
+            for candidate in (
+                f"C:/Python{version_dir}/python.exe",
+                f"C:/Python{version_dir}/python3.exe",
+                f"C:/Python{version_dir}/{python}.exe",
+            ):
+                if Path(candidate).is_file():
+                    return candidate
+        for executable in ("python.exe", "python3.exe", "python"):
+            fallback = shutil.which(executable)
+            if fallback and Path(fallback).suffix.lower() == ".exe":
+                return fallback
+    return python
+
+
+def install_venv(venv_path: Path, use_current_python=False) -> bool:
+    """Installs a virtual environment at the given path."""
+    if use_current_python:
+        import subprocess
+        subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
+        return False
+    elif not sys.executable or (sys.platform.startswith('win32') and sys.implementation.name == "graalpy"):
+        # When running in a PolyBench benchmark context sys.executable is unset
+        # And thus we must defer to the system's python
+        # Deferring to the system's python is fine as it will only be used to install setuptools
+        import subprocess
+        subprocess.run([_system_python_for_venv(), "-m", "venv", str(venv_path)], check=True)
+        return True
+    else:
+        import venv
+        venv.create(venv_path, with_pip=True)
+        return False
+
+
+def compile_module_from_string(c_source: str, name: str):
+    install_dir = compile_module_from_string_no_import(c_source, name)
+    sys.path.insert(0, install_dir)
+    try:
+        cmodule = __import__(name)
+    finally:
+        sys.path.pop(0)
+    return cmodule
+
+
+def compile_module_from_string_no_import(c_source: str, name: str):
+    source_file = DIR / f'{name}.c'
+    with open(source_file, "wb", buffering=0) as f:
+        f.write(bytes(c_source, 'utf-8'))
+    return ccompile(None, name)
+
+
+def compile_module_from_file(module_name: str, sibling_to=None):
+    if sibling_to:
+        compile_name = str(Path(sibling_to).absolute().parent / module_name)
+    else:
+        compile_name = module_name
+    install_dir = ccompile(None, compile_name)
+    sys.path.insert(0, install_dir)
+    try:
+        cmodule = __import__(module_name)
+    finally:
+        sys.path.pop(0)
+    return cmodule
+
+
+def ccompile(self, name, check_duplicate_name=True):
+    get_setuptools()
+    from setuptools import setup, Extension
+    from hashlib import sha256
+    EXT_SUFFIX = sysconfig.get_config_var("EXT_SUFFIX")
+
+    source_file = DIR / f'{name}.c'
+    filename = Path(name).name
+    file_not_empty(source_file)
+
+    # compute checksum of source file
+    m = sha256()
+    with open(source_file,"rb") as f:
+        # read 4K blocks
+        for block in iter(lambda: f.read(4096),b""):
+            m.update(block)
+    cur_checksum = m.hexdigest()
+
+    build_dir = DIR / 'build' / filename
+
+    # see if there is already a checksum file
+    checksum_file = build_dir / f'{filename}{EXT_SUFFIX}.sha256'
+    available_checksum = ""
+    if checksum_file.exists():
+        # read checksum file
+        with open(checksum_file, "r") as f:
+            available_checksum = f.readline()
+
+    # note, the suffix is already a string like '.so'
+    lib_file = build_dir / f'{filename}{EXT_SUFFIX}'
+
+    if check_duplicate_name and available_checksum != cur_checksum and name in compiled_registry:
+        raise RuntimeError(f"\n\nModule with name '{name}' was already compiled, but with different source code. "
+              "Have you accidentally used the same name for two different CPyExtType, CPyExtHeapType, "
+              "or similar helper calls? Modules with same name can sometimes confuse the import machinery "
+              "and cause all sorts of trouble.\n")
+
+    compiled_registry.add(name)
+
+    # Compare checksums and only re-compile if different.
+    # Note: It could be that the C source file's checksum didn't change but someone
+    # manually deleted the shared library file.
+    if available_checksum != cur_checksum or not lib_file.exists():
+        shutil.rmtree(build_dir, ignore_errors=True)
+        os.makedirs(build_dir)
+        # MSVC linker doesn't like absolute paths in some parameters, so just run from the build dir
+        old_cwd = os.getcwd()
+        os.chdir(build_dir)
+        try:
+            shutil.copy(source_file, '.')
+            module = Extension(
+                filename,
+                sources=[source_file.name],
+                define_macros=[("GRAALPY_ENABLE_TESTING_CAPI", "1")],
+                extra_compile_args=[] if sys.platform.startswith('win32') else ["-Wno-deprecated-declarations"],
+            )
+            args = [
+                '--verbose' if sys.flags.verbose else '--quiet',
+                'build', '--build-temp=t', '--build-base=b', '--build-purelib=l', '--build-platlib=l',
+                'install_lib', '-f', '--install-dir=.',
+            ]
+            setup(
+                script_name='setup',
+                script_args=args,
+                name=filename,
+                version='1.0',
+                description='',
+                ext_modules=[module]
+            )
+        finally:
+            os.chdir(old_cwd)
+
+        # write new checksum
+        with open(checksum_file, "w") as f:
+            f.write(cur_checksum)
+
+        # IMPORTANT:
+        # Invalidate caches after creating the native module.
+        # FileFinder caches directory contents, and the check for directory
+        # changes has whole-second precision, so it can miss quick updates.
+        invalidate_caches()
+
+    # ensure file was really written
+    file_not_empty(lib_file)
+
+    return str(build_dir)
+
+
+def file_not_empty(path):
+    for i in range(3):
+        try:
+            stat_result = os.stat(path)
+            if stat_result[6] != 0:
+                return
+        except FileNotFoundError:
+            pass
+    raise SystemError("file %s not available" % path)

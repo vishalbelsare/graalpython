@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,11 +40,15 @@
  */
 package com.oracle.graal.python.nodes;
 
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
-
+import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public abstract class BuiltinNames {
+
+    private static TruffleString tsLiteral(String s) {
+        return PythonUtils.tsInternedLiteral(s);
+    }
+
     // special strings
     public static final String J_LAMBDA_NAME = "<lambda>";
     public static final TruffleString T_LAMBDA_NAME = tsLiteral(J_LAMBDA_NAME);
@@ -70,7 +74,12 @@ public abstract class BuiltinNames {
     public static final String J___DEBUG__ = "__debug__";
     public static final TruffleString T___DEBUG__ = tsLiteral(J___DEBUG__);
 
-    public static final String J___FUTURE__ = "__future__";
+    public static final String J___NOTES__ = "__notes__";
+    public static final TruffleString T___NOTES__ = tsLiteral(J___NOTES__);
+
+    // os
+    public static final TruffleString T_OS = tsLiteral("os");
+    public static final TruffleString T_ENVIRON = tsLiteral("environ");
 
     // sys
     public static final TruffleString T_TRACEBACKLIMIT = tsLiteral("tracebacklimit");
@@ -119,6 +128,16 @@ public abstract class BuiltinNames {
 
     public static final TruffleString T_MODULES = tsLiteral("modules");
 
+    // time
+    public static final TruffleString T_TIME = tsLiteral("time");
+
+    // datetime
+    public static final TruffleString T_UTC = tsLiteral("UTC");
+    public static final TruffleString T__DATETIME = tsLiteral("_datetime");
+    public static final TruffleString T_TIMEZONE = tsLiteral("timezone");
+    public static final TruffleString T_MAX = tsLiteral("max");
+    public static final TruffleString T_RESOLUTION = tsLiteral("resolution");
+
     // built-in functions
     public static final String J_ABS = "abs";
     public static final TruffleString T_ABS = tsLiteral(J_ABS);
@@ -156,6 +175,7 @@ public abstract class BuiltinNames {
     public static final String J_HEX = "hex";
 
     public static final String J_NEXT = "next";
+    public static final TruffleString T_NEXT = tsLiteral(J_NEXT);
 
     public static final String J_ANY = "any";
 
@@ -164,8 +184,6 @@ public abstract class BuiltinNames {
     public static final String J_ID = "id";
 
     public static final String J_OBJECT = "object";
-
-    public static final String J_FOREIGN = "foreign";
 
     public static final String J_SORTED = "sorted";
 
@@ -189,11 +207,13 @@ public abstract class BuiltinNames {
     public static final TruffleString T_INT = tsLiteral(J_INT);
 
     public static final String J_OPEN = "open";
+    public static final TruffleString T_OPEN = tsLiteral(J_OPEN);
 
     public static final String J_STR = "str";
     public static final TruffleString T_STR = tsLiteral(J_STR);
 
     public static final String J_BOOL = "bool";
+    public static final TruffleString T_BOOL = tsLiteral(J_BOOL);
 
     public static final String J_EXEC = "exec";
     public static final TruffleString T_EXEC = StringLiterals.T_EXEC;
@@ -259,6 +279,8 @@ public abstract class BuiltinNames {
 
     public static final String J_TYPES = "types";
 
+    public static final String J__TYPING = "_typing";
+
     public static final String J_TYPING = "typing";
     public static final TruffleString T_TYPING = tsLiteral(J_TYPING);
 
@@ -296,9 +318,13 @@ public abstract class BuiltinNames {
 
     public static final String J_MAP = "map";
 
+    public static final String J_FILTER = "filter";
+
     public static final String J_REVERSED = "reversed";
 
     public static final TruffleString T___IMPORT__ = tsLiteral("__import__");
+
+    public static final TruffleString T_ZIPIMPORT = tsLiteral("zipimport");
 
     public static final String J_COMPLEX = "complex";
 
@@ -307,6 +333,7 @@ public abstract class BuiltinNames {
     public static final String J_MAX = "max";
 
     public static final String J_ROUND = "round";
+    public static final TruffleString T_ROUND = tsLiteral(J_ROUND);
 
     public static final String J_DELATTR = "delattr";
 
@@ -323,8 +350,6 @@ public abstract class BuiltinNames {
 
     public static final String J___GRAALPYTHON__ = "__graalpython__";
     public static final TruffleString T___GRAALPYTHON__ = tsLiteral(J___GRAALPYTHON__);
-
-    public static final String J_REGISTER_INTEROP_BEHAVIOR = "register_interop_behavior";
 
     public static final String J_GET_REGISTERED_INTEROP_BEHAVIOR = "get_registered_interop_behavior";
 
@@ -370,10 +395,16 @@ public abstract class BuiltinNames {
 
     public static final TruffleString T_SYS = tsLiteral("sys");
 
-    public static final TruffleString T__SIGNAL = tsLiteral("_signal");
+    public static final String J_SIGNAL = "signal";
+    public static final TruffleString T_SIGNAL = tsLiteral(J_SIGNAL);
+
+    public static final String J__SIGNAL = "_signal";
+    public static final TruffleString T__SIGNAL = tsLiteral(J__SIGNAL);
 
     public static final String J__WEAKREF = "_weakref";
     public static final TruffleString T__WEAKREF = tsLiteral(J__WEAKREF);
+    public static final TruffleString T_PROXY_TYPE = tsLiteral("ProxyType");
+    public static final TruffleString T_CALLABLE_PROXY_TYPE = tsLiteral("CallableProxyType");
 
     public static final String J__WARNINGS = "_warnings";
     public static final TruffleString T__WARNINGS = tsLiteral(J__WARNINGS);
@@ -384,14 +415,14 @@ public abstract class BuiltinNames {
     public static final String J_POSIX = "posix";
     public static final TruffleString T_POSIX = tsLiteral(J_POSIX);
 
+    public static final String J_POLYGLOT = "polyglot";
+    public static final TruffleString T_POLYGLOT = tsLiteral(J_POLYGLOT);
+
     public static final String J_NT = "nt";
     public static final TruffleString T_NT = tsLiteral(J_NT);
 
     public static final String J_ARRAY = "array";
     public static final TruffleString T_ARRAY = tsLiteral(J_ARRAY);
-
-    public static final String J__CTYPES = "_ctypes";
-    public static final TruffleString T__CTYPES = tsLiteral(J__CTYPES);
 
     public static final String J__SOCKET = "_socket";
     public static final TruffleString T__SOCKET = tsLiteral(J__SOCKET);
@@ -402,7 +433,8 @@ public abstract class BuiltinNames {
     public static final String J__SSL = "_ssl";
     public static final TruffleString T__SSL = tsLiteral(J__SSL);
 
-    public static final TruffleString T__SYSCONFIG = tsLiteral("_sysconfig");
+    public static final String J__SYSCONFIG = "_sysconfig";
+    public static final TruffleString T__SYSCONFIG = tsLiteral(J__SYSCONFIG);
 
     public static final String J_READLINE = "readline";
     public static final TruffleString T_READLINE = tsLiteral(J_READLINE);
@@ -422,6 +454,29 @@ public abstract class BuiltinNames {
     public static final String J_TYPE_VAR = "TypeVar";
     public static final TruffleString T_TYPE_VAR = tsLiteral(J_TYPE_VAR);
 
+    public static final String J_TYPE_VAR_TUPLE = "TypeVarTuple";
+    public static final TruffleString T_TYPE_VAR_TUPLE = tsLiteral(J_TYPE_VAR_TUPLE);
+
+    public static final String J_PARAM_SPEC = "ParamSpec";
+    public static final TruffleString T_PARAM_SPEC = tsLiteral(J_PARAM_SPEC);
+
+    public static final String J_PARAM_SPEC_ARGS = "ParamSpecArgs";
+    public static final TruffleString T_PARAM_SPEC_ARGS = tsLiteral(J_PARAM_SPEC_ARGS);
+
+    public static final String J_PARAM_SPEC_KWARGS = "ParamSpecKwargs";
+    public static final TruffleString T_PARAM_SPEC_KWARGS = tsLiteral(J_PARAM_SPEC_KWARGS);
+
+    public static final String J_NO_DEFAULT = "NoDefault";
+    public static final TruffleString T_NO_DEFAULT = tsLiteral(J_NO_DEFAULT);
+    public static final String J_NO_DEFAULT_TYPE = "NoDefaultType";
+    public static final TruffleString T_NO_DEFAULT_TYPE = tsLiteral(J_NO_DEFAULT_TYPE);
+
+    public static final String J_TYPE_ALIAS_TYPE = "TypeAliasType";
+    public static final TruffleString T_TYPE_ALIAS_TYPE = tsLiteral(J_TYPE_ALIAS_TYPE);
+
+    public static final String J_GENERIC = "Generic";
+    public static final TruffleString T_GENERIC = tsLiteral(J_GENERIC);
+
     public static final String J__SRE = "_sre";
     public static final TruffleString T__SRE = tsLiteral(J__SRE);
 
@@ -440,6 +495,25 @@ public abstract class BuiltinNames {
 
     public static final String J_BZ2 = "_bz2";
     public static final TruffleString T_BZ2 = tsLiteral(J_BZ2);
+
+    public static final String J_HASHLIB = "_hashlib";
+    public static final TruffleString T_HASHLIB = tsLiteral(J_HASHLIB);
+
+    public static final String J_PYEXPAT = "pyexpat";
+    public static final TruffleString T_PYEXPAT = tsLiteral(J_PYEXPAT);
+
+    public static final String J_MD5 = "_md5";
+
+    public static final String J_SHA1 = "_sha1";
+
+    public static final String J_SHA2 = "_sha2";
+
+    public static final String J_SHA3 = "_sha3";
+    public static final TruffleString T_SHA3 = tsLiteral(J_SHA3);
+
+    public static final TruffleString T_SEND = tsLiteral("send");
+    public static final TruffleString T_THROW = tsLiteral("throw");
+    public static final TruffleString T_CLOSE = tsLiteral("close");
 
     public static final String J__ASYNCIO = "_asyncio";
     public static final TruffleString T__ASYNCIO = tsLiteral(J__ASYNCIO);
@@ -462,4 +536,18 @@ public abstract class BuiltinNames {
     public static final String J__CODECS_TW = "_codecs_tw";
     public static final TruffleString T__CODECS_TW = tsLiteral(J__CODECS_TW);
 
+    public static final String J_COPYREG = "copyreg";
+    public static final TruffleString T_COPYREG = tsLiteral(J_COPYREG);
+
+    public static final String J_EXCEPTION_GROUP = "ExceptionGroup";
+    public static final TruffleString T_EXCEPTION_GROUP = tsLiteral(J_EXCEPTION_GROUP);
+
+    public static final String J_UNICODEDATA = "unicodedata";
+    public static final TruffleString T_UNICODEDATA = tsLiteral(J_UNICODEDATA);
+
+    public static final TruffleString T_MTIME = tsLiteral("mtime");
+    public static final TruffleString T_SIZE = tsLiteral("size");
+
+    public static final TruffleString T__IMP = tsLiteral("_imp");
+    public static final TruffleString T_FLAGS = tsLiteral("flags");
 }

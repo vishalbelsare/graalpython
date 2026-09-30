@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,16 +25,16 @@
  */
 package com.oracle.graal.python.runtime.sequence.storage;
 
-import java.util.Arrays;
-
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives;
 
-public final class BoolSequenceStorage extends TypedSequenceStorage {
+public final class BoolSequenceStorage extends ArrayBasedSequenceStorage {
 
     private boolean[] values;
 
     public BoolSequenceStorage() {
-        values = new boolean[]{};
+        this.values = new boolean[DEFAULT_CAPACITY];
+        this.capacity = values.length;
     }
 
     public BoolSequenceStorage(boolean[] elements) {
@@ -53,111 +53,34 @@ public final class BoolSequenceStorage extends TypedSequenceStorage {
         this.length = 0;
     }
 
-    @Override
-    protected void increaseCapacityExactWithCopy(int newCapacity) {
-        values = Arrays.copyOf(values, newCapacity);
+    private void increaseCapacityExactWithCopy(int newCapacity) {
+        values = PythonUtils.arrayCopyOf(values, newCapacity);
         capacity = values.length;
     }
 
-    @Override
-    protected void increaseCapacityExact(int newCapacity) {
-        values = new boolean[newCapacity];
-        capacity = values.length;
+    public void ensureCapacity(int newCapacity) throws ArithmeticException {
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.UNLIKELY_PROBABILITY, newCapacity > capacity)) {
+            increaseCapacityExactWithCopy(capacityFor(newCapacity));
+        }
     }
 
     @Override
-    public SequenceStorage copy() {
-        return new BoolSequenceStorage(PythonUtils.arrayCopyOf(values, length));
-    }
-
-    @Override
-    public SequenceStorage createEmpty(int newLength) {
+    public BoolSequenceStorage createEmpty(int newLength) {
         return new BoolSequenceStorage(newLength);
     }
 
-    @Override
-    public Object[] getInternalArray() {
-        /**
-         * Have to box and copy.
-         */
-        Object[] boxed = new Object[length];
-
-        for (int i = 0; i < length; i++) {
-            boxed[i] = values[i];
-        }
-
-        return boxed;
-    }
-
-    public boolean[] getInternalBoolArray() {
-        return values;
-    }
-
-    @Override
-    public Object getItemNormalized(int idx) {
-        return getBoolItemNormalized(idx);
-    }
-
-    public boolean getBoolItemNormalized(int idx) {
-        return values[idx];
-    }
-
-    @Override
-    public void setItemNormalized(int idx, Object value) throws SequenceStoreException {
-        if (value instanceof Boolean) {
-            setBoolItemNormalized(idx, (boolean) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    public void setBoolItemNormalized(int idx, boolean value) {
-        values[idx] = value;
-    }
-
-    @Override
-    public void insertItem(int idx, Object value) throws SequenceStoreException {
-        if (value instanceof Boolean) {
-            insertBoolItem(idx, (boolean) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    private void insertBoolItem(int idx, boolean value) {
+    public void insertBoolItem(int idx, boolean value) {
         ensureCapacity(length + 1);
 
         // shifting tail to the right by one slot
-        for (int i = values.length - 1; i > idx; i--) {
-            values[i] = values[i - 1];
+        if (idx < length) {
+            PythonUtils.arraycopy(values, idx, values, idx + 1, length - idx);
         }
 
         values[idx] = value;
         length++;
     }
 
-    @Override
-    public void copyItem(int idxTo, int idxFrom) {
-        values[idxTo] = values[idxFrom];
-    }
-
-    @Override
-    public SequenceStorage getSliceInBound(int start, int stop, int step, int sliceLength) {
-        boolean[] newArray = new boolean[sliceLength];
-
-        if (step == 1) {
-            PythonUtils.arraycopy(values, start, newArray, 0, sliceLength);
-            return new BoolSequenceStorage(newArray);
-        }
-
-        for (int i = start, j = 0; j < sliceLength; i += step, j++) {
-            newArray[j] = values[i];
-        }
-
-        return new BoolSequenceStorage(newArray);
-    }
-
-    @Override
     public void reverse() {
         if (length > 0) {
             int head = 0;
@@ -172,25 +95,21 @@ public final class BoolSequenceStorage extends TypedSequenceStorage {
         }
     }
 
-    @Override
-    public Object getIndicativeValue() {
-        return false;
+    public boolean[] getInternalBoolArray() {
+        return values;
+    }
+
+    public boolean getBoolItemNormalized(int idx) {
+        return values[idx];
+    }
+
+    public void setBoolItemNormalized(int idx, boolean value) {
+        values[idx] = value;
     }
 
     @Override
-    public boolean equals(SequenceStorage other) {
-        if (other.length() != length() || !(other instanceof BoolSequenceStorage)) {
-            return false;
-        }
-
-        boolean[] otherArray = ((BoolSequenceStorage) other).getInternalBoolArray();
-        for (int i = 0; i < length(); i++) {
-            if (values[i] != otherArray[i]) {
-                return false;
-            }
-        }
-
-        return true;
+    public Object getIndicativeValue() {
+        return false;
     }
 
     @Override
@@ -200,12 +119,20 @@ public final class BoolSequenceStorage extends TypedSequenceStorage {
 
     @Override
     public Object getCopyOfInternalArrayObject() {
-        return Arrays.copyOf(values, length);
+        return PythonUtils.arrayCopyOf(values, length);
     }
 
-    @Override
     public Object[] getCopyOfInternalArray() {
-        return getInternalArray();
+        /*
+         * Have to box and copy.
+         */
+        Object[] boxed = new Object[length];
+
+        for (int i = 0; i < length; i++) {
+            boxed[i] = values[i];
+        }
+
+        return boxed;
     }
 
     @Override
@@ -214,7 +141,7 @@ public final class BoolSequenceStorage extends TypedSequenceStorage {
     }
 
     @Override
-    public ListStorageType getElementType() {
-        return ListStorageType.Boolean;
+    public StorageType getElementType() {
+        return StorageType.Boolean;
     }
 }

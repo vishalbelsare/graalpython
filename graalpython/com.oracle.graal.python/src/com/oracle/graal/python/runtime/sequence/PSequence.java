@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -29,6 +29,7 @@ import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
+import com.oracle.graal.python.nodes.interop.PForeignToPTypeNode;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.OverflowException;
@@ -63,79 +64,79 @@ public abstract class PSequence extends PythonBuiltinObject {
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean isNumber() {
+    public final boolean isNumber() {
         return false;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public byte asByte() throws UnsupportedMessageException {
+    public final byte asByte() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean fitsInByte() {
+    public final boolean fitsInByte() {
         return false;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public short asShort() throws UnsupportedMessageException {
+    public final short asShort() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean fitsInShort() {
+    public final boolean fitsInShort() {
         return false;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public int asInt() throws UnsupportedMessageException {
+    public final int asInt() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean fitsInInt() {
+    public final boolean fitsInInt() {
         return false;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public long asLong() throws UnsupportedMessageException {
+    public final long asLong() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean fitsInLong() {
+    public final boolean fitsInLong() {
         return false;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public float asFloat() throws UnsupportedMessageException {
+    public final float asFloat() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean fitsInFloat() {
+    public final boolean fitsInFloat() {
         return false;
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public double asDouble() throws UnsupportedMessageException {
+    public final double asDouble() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public boolean fitsInDouble() {
+    public final boolean fitsInDouble() {
         return false;
     }
 
@@ -147,17 +148,17 @@ public abstract class PSequence extends PythonBuiltinObject {
 
     @ExportMessage
     @SuppressWarnings("static-method")
-    public String asString() throws UnsupportedMessageException {
+    public final String asString() throws UnsupportedMessageException {
         throw UnsupportedMessageException.create();
     }
 
     @ExportMessage
-    public boolean hasArrayElements() {
+    public final boolean hasArrayElements() {
         return true;
     }
 
     @ExportMessage
-    public long getArraySize(@Bind("$node") Node inliningTarget,
+    public final long getArraySize(@Bind Node inliningTarget,
                     @Exclusive @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
                     @Exclusive @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
@@ -169,10 +170,10 @@ public abstract class PSequence extends PythonBuiltinObject {
     }
 
     @ExportMessage
-    public Object readArrayElement(long index,
-                    @Bind("$node") Node inliningTarget,
+    public final Object readArrayElement(long index,
+                    @Bind Node inliningTarget,
                     @Exclusive @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
-                    @Cached SequenceStorageNodes.GetItemScalarNode getItem,
+                    @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItem,
                     @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
         boolean mustRelease = gil.acquire();
         try {
@@ -187,4 +188,94 @@ public abstract class PSequence extends PythonBuiltinObject {
         }
     }
 
+    @ExportMessage
+    public final void writeArrayElement(long index, Object value,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
+                    @Exclusive @Cached PForeignToPTypeNode convert,
+                    @Exclusive @Cached SequenceStorageNodes.SetItemScalarNode setItem,
+                    @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
+        boolean mustRelease = gil.acquire();
+        try {
+            try {
+                setItem.execute(inliningTarget, getSequenceStorageNode.execute(inliningTarget, this), PInt.intValueExact(index), convert.executeConvert(value));
+            } catch (OverflowException e) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw InvalidArrayIndexException.create(index);
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public final void removeArrayElement(long index,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
+                    @Exclusive @Cached SequenceStorageNodes.DeleteItemNode delItem,
+                    @Exclusive @Cached GilNode gil) throws InvalidArrayIndexException {
+        boolean mustRelease = gil.acquire();
+        try {
+            try {
+                delItem.execute(inliningTarget, getSequenceStorageNode.execute(inliningTarget, this), PInt.intValueExact(index));
+            } catch (OverflowException e) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw InvalidArrayIndexException.create(index);
+            }
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public final boolean isArrayElementReadable(long idx,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceNodes.IsInBoundsNode isInBoundsNode,
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            return isInBoundsNode.execute(inliningTarget, this, idx);
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public final boolean isArrayElementModifiable(long idx,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceNodes.IsInBoundsNode isInBoundsNode,
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            return isInBoundsNode.execute(inliningTarget, this, idx);
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public final boolean isArrayElementInsertable(long idx,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceNodes.IsInBoundsNode isInBoundsNode,
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            return !isInBoundsNode.execute(inliningTarget, this, idx);
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    public final boolean isArrayElementRemovable(long idx,
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached SequenceNodes.IsInBoundsNode isInBoundsNode,
+                    @Exclusive @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            return isInBoundsNode.execute(inliningTarget, this, idx);
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
 }

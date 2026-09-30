@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -30,6 +30,8 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeErro
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
+import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
@@ -53,7 +55,6 @@ import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.HiddenKey;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.utilities.TriState;
 
@@ -66,29 +67,30 @@ public final class PythonBuiltinClass extends PythonManagedClass {
 
     @TruffleBoundary
     public PythonBuiltinClass(PythonLanguage lang, PythonBuiltinClassType builtinClass, PythonAbstractClass base) {
-        super(lang, builtinClass.getType(), builtinClass.getType().getInstanceShape(lang), builtinClass.getInstanceShape(lang), builtinClass.getName(), base, new PythonAbstractClass[]{base});
+        super(null, lang, PythonBuiltinClassType.PythonClass, PythonBuiltinClassType.PythonClass.getInstanceShape(lang), builtinClass.getInstanceShape(lang), builtinClass.getName(), base,
+                        new PythonAbstractClass[]{base},
+                        builtinClass.getSlots());
         this.type = builtinClass;
-        this.methodsFlags = type.getMethodsFlags();
     }
 
     @Override
-    public void setAttribute(Object name, Object value) {
+    public void setAttribute(TruffleString name, Object value) {
         CompilerAsserts.neverPartOfCompilation();
-        if (name instanceof HiddenKey || !PythonContext.get(null).isCoreInitialized()) {
+        if (!PythonContext.get(null).isCoreInitialized()) {
             setAttributeUnsafe(name, value);
         } else {
-            throw PRaiseNode.raiseUncached(null, TypeError, ErrorMessages.CANT_SET_ATTRIBUTE_R_OF_IMMUTABLE_TYPE_N, PyObjectReprAsTruffleStringNode.executeUncached(name), this);
+            throw PRaiseNode.raiseStatic(null, TypeError, ErrorMessages.CANT_SET_ATTRIBUTE_R_OF_IMMUTABLE_TYPE_N, PyObjectReprAsTruffleStringNode.executeUncached(name), this);
         }
     }
 
     /**
      * Modify attributes in an unsafe way, should only use when initializing.
      */
-    public void setAttributeUnsafe(Object name, Object value) {
+    public void setAttributeUnsafe(TruffleString name, Object value) {
         super.setAttribute(name, value);
     }
 
-    public final PythonBuiltinClassType getType() {
+    public PythonBuiltinClassType getType() {
         return type;
     }
 
@@ -97,17 +99,23 @@ public final class PythonBuiltinClass extends PythonManagedClass {
     public void onAttributeUpdate(TruffleString key, Object newValue) {
         assert !PythonContext.get(null).isCoreInitialized();
         // Ideally, startup code should not create ASTs that rely on assumptions of props of
-        // builtins. So there should be no assumptions to invalidate yet
-        assert !getMethodResolutionOrder().invalidateAttributeInMROFinalAssumptions(key);
-        SpecialMethodSlot slot = SpecialMethodSlot.findSpecialSlotUncached(key);
-        if (slot != null) {
-            SpecialMethodSlot.fixupSpecialMethodSlot(this, slot, newValue);
-        }
+        // builtins
+        assert getMethodResolutionOrder().getFinalAttributeAssumption(key) == null;
+        assert checkSpecialMethodUpdate(key, newValue);
         // NO_VALUE changes MRO lookup results without actually changing any Shapes in the MRO, this
         // can prevent some optimizations, so it is best to avoid any code that triggers such code
         // paths during initialization
         assert newValue != PNone.NO_VALUE;
         PythonClass.updateMroShapeSubTypes(this);
+    }
+
+    private static boolean checkSpecialMethodUpdate(TruffleString key, Object newValue) {
+        // We disallow Python based slots for builtins, so that we can always satisfy slot lookup
+        // only with PythonBuiltinClassType#slots
+        // TODO: change to the commented out line below once all @Builtin are converted to @Slot
+        // assert ... || (newValue instanceof PBuiltinFunction pbf && pbf.getSlot() != null);
+        assert !TpSlots.isSpecialMethod(key) || newValue instanceof PBuiltinFunction || newValue instanceof PBuiltinMethod;
+        return true;
     }
 
     @ExportMessage(library = InteropLibrary.class)
@@ -119,7 +127,7 @@ public final class PythonBuiltinClass extends PythonManagedClass {
     @ExportMessage
     @SuppressWarnings("static-method")
     boolean isMetaInstance(Object instance,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached GetClassNode getClassNode,
                     @Shared("convert") @Cached PForeignToPTypeNode convert,
                     @Cached IsSubtypeNode isSubtype,

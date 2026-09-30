@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,17 +37,27 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import array
+import os
 import sys
-import _io
-from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare, GRAALPYTHON, IS_MANAGED_LAUNCHER
-__dir__ = __file__.rpartition("/")[0]
+import types
+import unittest
+
+from . import (
+    CPyExtFunction,
+    CPyExtHeapType,
+    CPyExtTestCase,
+    CPyExtType,
+    compile_module_from_string,
+    unhandled_error_compare,
+)
+
+DIR = os.path.dirname(__file__)
 
 
 class CallableIter:
     def __init__(self, start):
         self.idx = start
-    
+
     def __call__(self, *args):
         cur = self.idx
         self.idx += 1
@@ -73,26 +83,191 @@ def identCallResult(arg):
         return ident(arg)
 
 
-class TestPyObject(CPyExtTestCase):
+def _make_function_with_fields():
+    closed_over = 42
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyObject, self).compile_module(name)
+    def function(positional="default", *, keyword="kwdefault") -> int:
+        return closed_over
+
+    return function
+
+
+def _function_get_fields_arguments():
+    function_with_fields = _make_function_with_fields()
+    # CPython 3.13 initially stores annotations as a compact tuple internally.
+    # Accessing __annotations__ materializes the dictionary that the public C
+    # getter is expected to expose.
+    function_with_fields.__annotations__
+
+    def function_without_optional_fields():
+        pass
+
+    return (
+        (function_with_fields,),
+        (function_without_optional_fields,),
+    )
+
+
+def _reference_cell_get(args):
+    cell = args[0]
+    if not isinstance(cell, types.CellType):
+        raise SystemError
+    return cell.cell_contents
+
+
+def _reference_cell_set(args):
+    cell, value, clear = args
+    if not isinstance(cell, types.CellType):
+        raise SystemError
+    if clear:
+        del cell.cell_contents
+    else:
+        cell.cell_contents = value
+    try:
+        return False, cell.cell_contents
+    except ValueError:
+        return True, None
+
+
+class TypeWithAttr:
+    attr = "str"
+
+
+class SubtypeWithAttr(TypeWithAttr):
+    pass
+
+
+class TypeWithAttrInDict:
+    attr = "str"
+
+
+TypeWithAttrInDict.__dict__
+
+NativeTypeWithAttr = CPyExtHeapType("NativeTypeWithAttr")
+NativeTypeWithAttr.attr = "str"
+
+
+class DelAttrObject:
+    def __init__(self):
+        self.a = 1
+        setattr(self, "🐍", 2)
+
+    def __delattr__(self, name):
+        if name == "evil":
+            raise RuntimeError(name)
+        object.__delattr__(self, name)
+
+
+class DelItemMapping:
+    def __init__(self):
+        self.items = {"a": 1, "🐍": 2}
+
+    def __delitem__(self, key):
+        if key == "evil":
+            raise RuntimeError(key)
+        del self.items[key]
+
+
+class TestPyObject(CPyExtTestCase):
+    test_PyCell_Get = CPyExtFunction(
+        _reference_cell_get,
+        lambda: (
+            (types.CellType(42),),
+            (types.CellType(["value"]),),
+            (42,),
+        ),
+        code="""
+            static PyObject* wrap_PyCell_Get(PyObject* cell) {
+                return PyCell_Get(cell);
+            }
+        """,
+        argspec="O",
+        arguments=["PyObject* cell"],
+        resultspec="N",
+        callfunction="wrap_PyCell_Get",
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test_PyCell_GET_macro = CPyExtFunction(
+        lambda args: (args[0].cell_contents, True),
+        lambda: (
+            (types.CellType(42),),
+            (types.CellType(["value"]),),
+        ),
+        code="""
+            static PyObject* wrap_PyCell_GET(PyObject* cell) {
+                PyObject *contents = PyCell_GET(cell);
+                PyObject *contents_attr = PyObject_GetAttrString(cell, "cell_contents");
+                PyObject *result;
+
+                if (contents_attr == NULL) {
+                    return NULL;
+                }
+                result = PyTuple_Pack(2, contents, contents == contents_attr ? Py_True : Py_False);
+                Py_DECREF(contents_attr);
+                return result;
+            }
+        """,
+        argspec="O",
+        arguments=["PyObject* cell"],
+        callfunction="wrap_PyCell_GET",
+    )
+
+    test_PyCell_Set = CPyExtFunction(
+        _reference_cell_set,
+        lambda: (
+            (types.CellType(), 42, False),
+            (types.CellType("old"), ["new"], False),
+            (types.CellType("old"), None, True),
+            (42, "new", False),
+        ),
+        code="""
+            static PyObject* wrap_PyCell_Set(PyObject* cell, PyObject* value, int clear) {
+                PyObject *contents;
+                if (PyCell_Set(cell, clear ? NULL : value) < 0) {
+                    return NULL;
+                }
+                contents = PyCell_GET(cell);
+                return Py_BuildValue("(iO)", contents == NULL, contents == NULL ? Py_None : contents);
+            }
+        """,
+        argspec="OOp",
+        arguments=["PyObject* cell", "PyObject* value", "int clear"],
+        callfunction="wrap_PyCell_Set",
+        cmpfunc=unhandled_error_compare,
+    )
+
+    test_PyCell_SET_macro = CPyExtFunction(
+        _reference_cell_set,
+        lambda: (
+            (types.CellType(), 42, False),
+            (types.CellType("old"), ["new"], False),
+            (types.CellType("old"), None, True),
+        ),
+        code="""
+            static PyObject* wrap_PyCell_SET(PyObject* cell, PyObject* value, int clear) {
+                PyObject *contents;
+                if (!clear) {
+                    Py_INCREF(value);
+                }
+                PyCell_SET(cell, clear ? NULL : value);
+                contents = PyCell_GET(cell);
+                return Py_BuildValue("(iO)", contents == NULL, contents == NULL ? Py_None : contents);
+            }
+        """,
+        argspec="OOp",
+        arguments=["PyObject* cell", "PyObject* value", "int clear"],
+        callfunction="wrap_PyCell_SET",
+    )
+
 
     test_Py_TYPE = CPyExtFunction(
         type,
         lambda: ([], 12, sys.modules),
         resulttype = "PyTypeObject*"
     )
-        
+
     # Below are the PyObject_* identifiers that we know are used in numpy
-    
-    def is_buffer(x):
-        __breakpoint__()
-        if (isinstance(x, bytes) or isinstance(x, bytearray) or isinstance(x, array.array)):
-            return 1
-        else:
-            return 0
 
     # test_PyObject_CheckBuffer = CPyExtFunction(
     #     is_buffer,
@@ -112,6 +287,9 @@ class TestPyObject(CPyExtTestCase):
         lambda args: 1 if isinstance(*args) else 0,
         lambda: (
             (1, int),
+            ("hello", str),
+            (True, bool),
+            (True, int),
         ),
         argspec="OO",
         arguments=["PyObject* op", "PyTypeObject* type"],
@@ -119,14 +297,14 @@ class TestPyObject(CPyExtTestCase):
     )
 
     __PyObject_Call_ARGS = (
-            (len, ((1, 2, 3),), {}),
-            (sum, ((0, 1, 2),), {}),
-            (format, (object(),), {"format_spec": ""}),
-            (sum, ("hello, world",), {}),
-            (kw_fun, (123,), {"c": 456, "b": 789}),
-            (kwonly_fun, tuple(), {"x": 456, "y": 789}),
-            (sum, ("hello, world",), None),
-            (kwonly_fun, tuple(), None),
+        (len, ((1, 2, 3),), {}),
+        (sum, ((0, 1, 2),), {}),
+        (format, (object(),), {"format_spec": ""}),
+        (sum, ("hello, world",), {}),
+        (kw_fun, (123,), {"c": 456, "b": 789}),
+        (kwonly_fun, tuple(), {"x": 456, "y": 789}),
+        (sum, ("hello, world",), None),
+        (kwonly_fun, tuple(), None),
     )
 
     test_PyObject_Call = CPyExtFunction(
@@ -144,7 +322,7 @@ class TestPyObject(CPyExtTestCase):
         argspec="OOO",
         callfunction="wrap_PyObject_Call",
     )
-    test__PyObject_CallNoArg = CPyExtFunction(
+    test_PyObject_CallNoArgs = CPyExtFunction(
         lambda args: args[0](),
         lambda: (
             (dict, ),
@@ -258,6 +436,26 @@ class TestPyObject(CPyExtTestCase):
         resultspec="i",
         cmpfunc=unhandled_error_compare
     )
+
+    def delitemstring(args):
+        del args[0][args[1].decode()]
+        return 0
+
+    test_PyObject_DelItemString = CPyExtFunction(
+        delitemstring,
+        lambda: (
+            (DelItemMapping(), b"a"),
+            (DelItemMapping(), "🐍".encode()),
+            (DelItemMapping(), b"missing"),
+            (DelItemMapping(), b"evil"),
+            ([], b"item"),
+        ),
+        arguments=["PyObject* object", "const char* key"],
+        argspec="Oy",
+        resultspec="i",
+        cmpfunc=unhandled_error_compare
+    )
+
     # PyObject_AsReadBuffer
     # PyObject_AsWriteBuffer
     # PyObject_GetBuffer
@@ -304,9 +502,9 @@ class TestPyObject(CPyExtTestCase):
         resultspec="i",
     )
 
-    if not IS_MANAGED_LAUNCHER:
+    if sys.implementation.name != 'graalpy' or __graalpython__.posix_module_backend() != 'java':
         __PyObject_AsFileDescriptor_FD0 = open(1, buffering=0, mode="wb")
-        __PyObject_AsFileDescriptor_FD1 = open("%s/As_FileDescriptor_Testfile" % __dir__, buffering=0, mode="wb")
+        __PyObject_AsFileDescriptor_FD1 = open("%s/As_FileDescriptor_Testfile" % DIR, buffering=0, mode="wb")
         test_PyObject_AsFileDescriptor = CPyExtFunction(
             lambda arg: arg if isinstance(arg, int) else arg.fileno(),
             lambda: (
@@ -332,24 +530,24 @@ class TestPyObject(CPyExtTestCase):
         lambda: ([], {}, 0, 123, b"ello")
     )
 
-    richcompare_args = lambda: (([], [], 0),  
-                 ([], [], 1),
-                 ([], [], 2),
-                 ([], [], 3),
-                 ([], [], 4),
-                 ([], [], 5),
-                 (12, 24, 0),
-                 (12, 24, 1),
-                 (12, 24, 2),
-                 (12, 24, 3),
-                 (12, 24, 4),
-                 (12, 24, 5),
-                 ("aa", "ba", 0),
-                 ("aa", "ba", 1),
-                 ("aa", "ba", 2),
-                 ("aa", "ba", 3),
-                 ("aa", "ba", 4),
-                 ("aa", "ba", 5))
+    richcompare_args = lambda: (([], [], 0),
+                                ([], [], 1),
+                                ([], [], 2),
+                                ([], [], 3),
+                                ([], [], 4),
+                                ([], [], 5),
+                                (12, 24, 0),
+                                (12, 24, 1),
+                                (12, 24, 2),
+                                (12, 24, 3),
+                                (12, 24, 4),
+                                (12, 24, 5),
+                                ("aa", "ba", 0),
+                                ("aa", "ba", 1),
+                                ("aa", "ba", 2),
+                                ("aa", "ba", 3),
+                                ("aa", "ba", 4),
+                                ("aa", "ba", 5))
 
     def richcompare(args):
         return eval("%r %s %r" % (args[0], ["<", "<=", "==", "!=", ">", ">="][args[2]], args[1]))
@@ -384,15 +582,57 @@ class TestPyObject(CPyExtTestCase):
             return item
 
     __PyObject_GetAttrString_ARGS = (
-            (MyObject(), "foo"),
-            ([], "__len__"),
-            (TypeWithGetattr(), "foo"),
-        )
+        (MyObject(), "foo"),
+        ([], "__len__"),
+        (TypeWithGetattr(), "foo"),
+    )
     test_PyObject_GetAttrString = CPyExtFunction(
         lambda args: getattr(*args),
         lambda: TestPyObject.__PyObject_GetAttrString_ARGS,
         arguments=["PyObject* object", "const char* attr"],
         argspec="Os",
+    )
+
+    test__PyType_Lookup = CPyExtFunction(
+        lambda args: "str",
+        lambda: (
+            (TypeWithAttr, "attr"),
+            (TypeWithAttr, "attr"),
+            (SubtypeWithAttr, "attr"),
+            (SubtypeWithAttr, "attr"),
+            (TypeWithAttrInDict, "attr"),
+            (TypeWithAttrInDict, "attr"),
+            (NativeTypeWithAttr, "attr"),
+            (NativeTypeWithAttr, "attr"),
+        ),
+        arguments=["PyTypeObject* type", "PyObject* name"],
+        argspec="OO",
+    )
+
+    test__PyType_LookupRef = CPyExtFunction(
+        lambda args: getattr(*args, None),
+        lambda: (
+            (TypeWithAttr, "attr"),
+            (SubtypeWithAttr, "attr"),
+            (NativeTypeWithAttr, "attr"),
+            (TypeWithAttr, "missing"),
+        ),
+        arguments=["PyTypeObject* type", "PyObject* name"],
+        argspec="OO",
+        resultspec="N",
+        callfunction="test_lookup_ref",
+        code="""
+        static PyObject *
+        test_lookup_ref(PyTypeObject *type, PyObject *name)
+        {
+#if PY_VERSION_HEX >= 0x030D0000
+            PyObject *result = _PyType_LookupRef(type, name);
+#else
+            PyObject *result = Py_XNewRef(_PyType_Lookup(type, name));
+#endif
+            return result != NULL ? result : Py_NewRef(Py_None);
+        }
+        """,
     )
 
     def setattrstring(args):
@@ -410,6 +650,26 @@ class TestPyObject(CPyExtTestCase):
         resultspec="i",
         cmpfunc=unhandled_error_compare
     )
+
+    def delattrstring(args):
+        delattr(args[0], args[1].decode())
+        return 0
+
+    test_PyObject_DelAttrString = CPyExtFunction(
+        delattrstring,
+        lambda: (
+            (DelAttrObject(), b"a"),
+            (DelAttrObject(), "🐍".encode()),
+            (DelAttrObject(), b"missing"),
+            (DelAttrObject(), b"evil"),
+            (42, b"numerator"),
+        ),
+        arguments=["PyObject* object", "const char* attr"],
+        argspec="Oy",
+        resultspec="i",
+        cmpfunc=unhandled_error_compare
+    )
+
     test_PyObject_HasAttr = CPyExtFunction(
         lambda args: 1 if hasattr(*args) else 0,
         lambda: (
@@ -421,7 +681,7 @@ class TestPyObject(CPyExtTestCase):
         argspec="OO",
         resultspec="i",
     )
-    
+
     test_PyObject_HasAttrString = CPyExtFunction(
         lambda args: 1 if hasattr(*args) else 0,
         lambda: (
@@ -433,10 +693,10 @@ class TestPyObject(CPyExtTestCase):
         argspec="Os",
         resultspec="i",
     )
-    
+
     def _ref_hash_not_implemented(args):
         raise TypeError
-    
+
     test_PyObject_HashNotImplemented = CPyExtFunction(
         _ref_hash_not_implemented,
         lambda: (
@@ -448,21 +708,27 @@ class TestPyObject(CPyExtTestCase):
         cmpfunc=unhandled_error_compare
     )
     __PyObject_GetAttr_ARGS = (
-            (MyObject(), "foo"),
-            ([], "__len__"),
-            (TypeWithGetattr(), "foo"),
-        )
+        (MyObject(), "foo"),
+        ([], "__len__"),
+        (TypeWithGetattr(), "foo"),
+    )
     test_PyObject_GetAttr = CPyExtFunction(
         lambda args: getattr(*args),
         lambda: TestPyObject.__PyObject_GetAttr_ARGS,
         arguments=["PyObject* object", "PyObject* attr"],
         argspec="OO",
     )
+    test_PyObject_GenericGetAttr = CPyExtFunction(
+        lambda args: object.__getattribute__(*args),
+        lambda: TestPyObject.__PyObject_GetAttr_ARGS,
+        arguments=["PyObject* object", "PyObject* attr"],
+        argspec="OO",
+    )
+
     test_PyObject_SelfIter = CPyExtFunction(
         lambda x: x,
         lambda: ([], 1, 42, "abc", {}, type),
     )
-    test_PyObject_GenericGetAttr = test_PyObject_GetAttr
 
     test_PyObject_IsTrue = CPyExtFunction(
         lambda arg: 1 if bool(arg) else 0,
@@ -490,3 +756,475 @@ class TestPyObject(CPyExtTestCase):
         argspec="O",
         cmpfunc=lambda x, y: type(x) == staticmethod
     )
+
+    test_method_def_memcpy = CPyExtFunction(
+        lambda args: args[0].__name__,
+        lambda: (
+            (bin,),
+        ),
+        code="""
+            #include <string.h>
+
+            // CPython and other don't have this function; so define it
+            #ifndef GRAALVM_PYTHON
+            #define GraalPyCFunction_GetMethodDef(OBJ) (((PyCFunctionObject*) (OBJ))->m_ml)
+            #endif
+
+            static PyObject* wrapGraalPyCFunction_GetMethodDef(PyObject* func) {
+                PyMethodDef *src;
+                PyMethodDef dst;
+                if (PyCFunction_Check(func)) {
+                    src = GraalPyCFunction_GetMethodDef(func);
+                    dst = *src;
+                    return PyUnicode_FromString(dst.ml_name);
+                }
+                PyErr_Format(PyExc_TypeError, "Unexpected test arg. Expected %s but got %s",
+                        PyCFunction_Type.tp_name,
+                        Py_TYPE(func)->tp_name);
+                return NULL;
+            }
+            """,
+        resultspec="O",
+        argspec="O",
+        arguments=["PyObject* func"],
+        callfunction="wrapGraalPyCFunction_GetMethodDef",
+        cmpfunc=unhandled_error_compare
+    )
+
+    test_PyFunction_GET_FIELDS = CPyExtFunction(
+        lambda args: (
+            args[0].__code__,
+            args[0].__globals__,
+            args[0].__module__,
+            args[0].__defaults__,
+            args[0].__kwdefaults__,
+            args[0].__closure__,
+            args[0].__annotations__ or None,
+            True,
+        ),
+        _function_get_fields_arguments,
+        code="""
+            static PyObject* wrap_PyFunction_GET_FIELDS(PyObject* function) {
+                PyObject *module = PyFunction_GET_MODULE(function);
+                PyObject *defaults = PyFunction_GET_DEFAULTS(function);
+                PyObject *kwdefaults = PyFunction_GET_KW_DEFAULTS(function);
+                PyObject *closure = PyFunction_GET_CLOSURE(function);
+                PyObject *annotations = PyFunction_GET_ANNOTATIONS(function);
+                PyObject *module_attr = PyObject_GetAttrString(function, "__module__");
+                PyObject *result;
+                int stable_module;
+
+                if (module_attr == NULL) {
+                    return NULL;
+                }
+                stable_module = module == module_attr;
+                Py_DECREF(module_attr);
+
+                result = PyTuple_Pack(
+                    8,
+                    PyFunction_GET_CODE(function),
+                    PyFunction_GET_GLOBALS(function),
+                    module,
+                    defaults != NULL ? defaults : Py_None,
+                    kwdefaults != NULL ? kwdefaults : Py_None,
+                    closure != NULL ? closure : Py_None,
+                    annotations != NULL ? annotations : Py_None,
+                    stable_module ? Py_True : Py_False
+                );
+                return result;
+            }
+        """,
+        argspec="O",
+        arguments=["PyObject* function"],
+        callfunction="wrap_PyFunction_GET_FIELDS",
+    )
+    # create function from PyMethodDef
+    # test PyMethodDef is same
+    # test calling m_meth
+
+class TestPyCFunction(unittest.TestCase):
+    def test_docstring_text_signature(self):
+        module = compile_module_from_string(r"""
+            #define PY_SSIZE_T_CLEAN
+            #include <Python.h>
+
+            static PyObject *with_signature(PyObject *self, PyObject *arg) {
+                Py_RETURN_NONE;
+            }
+
+            static PyObject *without_signature(PyObject *self, PyObject *arg) {
+                Py_RETURN_NONE;
+            }
+
+            static PyObject *without_doc(PyObject *self, PyObject *unused) {
+                Py_RETURN_NONE;
+            }
+
+            static PyMethodDef module_methods[] = {
+                {"with_signature", with_signature, METH_O,
+                    "with_signature($module, value, /)\n"
+                    "--\n\n"
+                    "Return module function metadata."},
+                {"without_signature", without_signature, METH_O, "Return a plain docstring."},
+                {"without_doc", without_doc, METH_NOARGS, NULL},
+                {NULL, NULL, 0, NULL}
+            };
+
+            static PyModuleDef module_def = {
+                PyModuleDef_HEAD_INIT,
+                "textsignature",
+                "",
+                -1,
+                module_methods,
+                NULL, NULL, NULL, NULL
+            };
+
+            PyMODINIT_FUNC
+            PyInit_textsignature(void)
+            {
+                return PyModule_Create(&module_def);
+            }
+        """, "textsignature")
+
+        assert module.with_signature.__doc__ == "Return module function metadata."
+        assert module.with_signature.__text_signature__ == "($module, value, /)"
+        assert module.without_signature.__doc__ == "Return a plain docstring."
+        assert module.without_signature.__text_signature__ == "($self, object, /)"
+        assert module.without_doc.__doc__ is None
+        assert module.without_doc.__text_signature__ == "($self, /)"
+
+        TypeWithTextSignature = CPyExtType(
+            "TypeWithTextSignature",
+            """
+            static PyObject *method_with_signature(PyObject *self, PyObject *arg) {
+                Py_RETURN_NONE;
+            }
+            """,
+            tp_methods="""
+            {"method_with_signature", method_with_signature, METH_O,
+                "method_with_signature($self, value, /)\\n"
+                "--\\n\\n"
+                "Return type method metadata."}
+            """,
+        )
+        assert TypeWithTextSignature.method_with_signature.__doc__ == "Return type method metadata."
+        assert TypeWithTextSignature.method_with_signature.__text_signature__ == "($self, value, /)"
+
+    test_PyCFunction_NewEx_non_string_module = CPyExtFunction(
+        lambda args: 1,
+        lambda: (
+            ({},),
+            ([],),
+            (object(),),
+        ),
+        code="""
+            static PyObject *native_meth_noargs(PyObject *self, PyObject *dummy) {
+                Py_RETURN_NONE;
+            }
+
+            static PyMethodDef non_string_module_method = {
+                "non_string_module_method",
+                native_meth_noargs,
+                METH_NOARGS,
+                NULL
+            };
+
+            static int wrap_PyCFunction_NewEx_non_string_module(PyObject *module_obj) {
+                PyObject *func = PyCFunction_NewEx(&non_string_module_method, Py_None, module_obj);
+                if (func == NULL) {
+                    return -1;
+                }
+                PyObject *attr = PyObject_GetAttrString(func, "__module__");
+                Py_DECREF(func);
+                if (attr == NULL) {
+                    return -1;
+                }
+                int same = attr == module_obj;
+                Py_DECREF(attr);
+                return same;
+            }
+            """,
+        resultspec="i",
+        argspec="O",
+        arguments=["PyObject* module_obj"],
+        callfunction="wrap_PyCFunction_NewEx_non_string_module",
+    )
+
+    def test_PyMethodDef(self):
+        TestPyMethodDef = CPyExtType(
+            "TestPyMethodDef",
+            """
+            #include <assert.h>
+
+            // CPython and other don't have this function; so define it
+            #ifndef GRAALVM_PYTHON
+            #define GraalPyCFunction_GetMethodDef(OBJ) (((PyCFunctionObject*) (OBJ))->m_ml)
+            #define GraalPyCFunction_SetMethodDef(OBJ, VAL) (((PyCFunctionObject*) (OBJ))->m_ml = (VAL))
+            #define GraalPyCFunction_GetModule(OBJ) (((PyCFunctionObject*) (OBJ))->m_module)
+            #define GraalPyCFunction_SetModule(OBJ, VAL) (((PyCFunctionObject*) (OBJ))->m_module = (VAL))
+            #define GraalPyMethodDescrObject_GetMethod(OBJ) (((PyMethodDescrObject *) (OBJ))->d_method)
+            #endif
+
+            static PyObject *native_meth_noargs(PyObject *self, PyObject *dummy) {
+                return PyLong_FromLong(789);
+            }
+
+            static PyObject *native_meth_o(PyObject *self, PyObject *arg) {
+                PyObject *one = PyLong_FromLong(1);
+                PyObject *result = PyNumber_Add(arg, one);
+                Py_DECREF(one);
+                return result;
+            }
+
+            static PyObject *native_meth_varargs(PyObject *self, PyObject *args) {
+                Py_INCREF(args);
+                return args;
+            }
+
+            static PyObject *native_meth_keywords(PyObject *self, PyObject *args, PyObject *kwargs) {
+                if (kwargs) {
+                    return PyTuple_Pack(2, args, kwargs);
+                }
+                return PyTuple_Pack(2, args, Py_None);
+            }
+
+            static PyObject *get_name(PyObject *self, PyObject *arg) {
+                if (!PyCFunction_Check(arg)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function)");
+                    return NULL;
+                }
+                PyMethodDef *def = GraalPyCFunction_GetMethodDef(arg);
+                return PyUnicode_FromString(def->ml_name);
+            }
+
+            static PyObject *get_flags(PyObject *self, PyObject *arg) {
+                if (!PyCFunction_Check(arg)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function)");
+                    return NULL;
+                }
+                PyMethodDef *def = GraalPyCFunction_GetMethodDef(arg);
+                return PyLong_FromLong(def->ml_flags);
+            }
+
+            static PyObject *_call_PyCFunction(PyMethodDef *def, PyObject *callable_self, PyObject *callable_args, PyObject *callable_kwargs) {
+                if (def->ml_flags == METH_NOARGS) {
+                    return def->ml_meth(callable_self, NULL);
+                } else if (def->ml_flags == METH_O) {
+                    return def->ml_meth(callable_self, PyTuple_GetItem(callable_args, 0));;
+                } else if (def->ml_flags == METH_VARARGS) {
+                    return def->ml_meth(callable_self, callable_args);
+                } else if (def->ml_flags == METH_FASTCALL) {
+                    return ((_PyCFunctionFast) def->ml_meth)(callable_self, PySequence_Fast_ITEMS(callable_args), PyTuple_Size(callable_args));
+                } else if (def->ml_flags == (METH_VARARGS | METH_KEYWORDS)) {
+                    return ((PyCFunctionWithKeywords) def->ml_meth)(callable_self, callable_args, callable_kwargs);
+                } else if (def->ml_flags == (METH_FASTCALL | METH_KEYWORDS)) {
+                    Py_ssize_t nargs =  PyTuple_Size(callable_args);
+                    if (nargs < 0) {
+                        return NULL;
+                    }
+                    Py_ssize_t nkw =  callable_kwargs != NULL ? PyDict_Size(callable_kwargs) : 0;
+                    if (nkw < 0) {
+                        return NULL;
+                    }
+                    PyObject **args_with_kw = (PyObject **) PyMem_Calloc(nargs + nkw, sizeof(PyObject *));
+                    if (args_with_kw == NULL) {
+                        return NULL;
+                    }
+                    for (Py_ssize_t i = 0; i < nargs; i++) {
+                        // borrowed is fine in this case
+                        args_with_kw[i] = PyTuple_GET_ITEM(callable_args, i);
+                    }
+
+                    PyObject *kwnames = NULL;
+                    if (nkw) {
+                        PyObject *keys = PyDict_Keys(callable_kwargs);
+                        if (keys == NULL) {
+                            PyMem_Free(args_with_kw);
+                            return NULL;
+                        }
+                        kwnames = PySequence_Tuple(keys);
+                        if (kwnames == NULL) {
+                            Py_DECREF(keys);
+                            PyMem_Free(args_with_kw);
+                            return NULL;
+                        }
+                        assert(nkw == PyTuple_Size(kwnames));
+                        for (Py_ssize_t i = 0; i < nkw; i++) {
+                            args_with_kw[nargs + i] = PyDict_GetItemWithError(callable_kwargs, PyTuple_GET_ITEM(kwnames, i));
+                        }
+                    }
+                    PyObject *result = ((_PyCFunctionFastWithKeywords) def->ml_meth)(callable_self, args_with_kw, nargs, kwnames);
+                    PyMem_Free(args_with_kw);
+                    Py_XDECREF(kwnames);
+                    return result;
+                } else {
+                    PyErr_SetString(PyExc_ValueError, "<callable> has unsupported signature");
+                    return NULL;
+                }
+            }
+
+            static PyObject *call_meth(PyObject *self, PyObject *args) {
+                PyObject *callable, *callable_args, *callable_kwargs = NULL;
+                if (!PyArg_ParseTuple(args, "OO|O:call_meth",
+                                         &callable, &callable_args, &callable_kwargs)) {
+                    PyErr_SetString(PyExc_ValueError, "required args: <callable>, <args_tuple> [, <kwargs>]");
+                    return NULL;
+                }
+                if (!PyCFunction_Check(callable)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function) ");
+                    return NULL;
+                }
+                PyMethodDef *def = GraalPyCFunction_GetMethodDef(callable);
+                // returns a borrowed ref
+                PyObject *callable_self = PyCFunction_GetSelf(callable);
+                return _call_PyCFunction(def, callable_self, callable_args, callable_kwargs);
+            }
+
+            static PyObject *call_meth_descr(PyObject *self, PyObject *args) {
+                PyObject *callable, *callable_self, *callable_args, *callable_kwargs = NULL;
+                if (!PyArg_ParseTuple(args, "OOO|O:call_meth",
+                                         &callable, &callable_self, &callable_args, &callable_kwargs)) {
+                    PyErr_SetString(PyExc_ValueError, "required args: <callable>, <self>, <args_tuple> [, <kwargs>]");
+                    return NULL;
+                }
+                if (!PyObject_TypeCheck(callable, &PyMethodDescr_Type)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyMethodDescrObject (i.e. method_descriptor)");
+                    return NULL;
+                }
+                PyMethodDef *def = GraalPyMethodDescrObject_GetMethod(callable);
+                // returns a borrowed ref
+                return _call_PyCFunction(def, callable_self, callable_args, callable_kwargs);
+            }
+
+            static PyObject *get_doc(PyObject *self, PyObject *arg) {
+                if (!PyCFunction_Check(arg)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function)");
+                    return NULL;
+                }
+                PyMethodDef *def = GraalPyCFunction_GetMethodDef(arg);
+                return PyUnicode_FromString(def->ml_doc);
+            }
+
+            static PyObject *set_def(PyObject *self, PyObject *arg) {
+                if (!PyCFunction_Check(arg)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function)");
+                    return NULL;
+                }
+                PyMethodDef *def = GraalPyCFunction_GetMethodDef(arg);
+                GraalPyCFunction_SetMethodDef(arg, def);
+                return PyUnicode_FromString(GraalPyCFunction_GetMethodDef(arg)->ml_doc);
+            }
+
+            static PyObject *get_set_module(PyObject *self, PyObject *arg) {
+                if (!PyCFunction_Check(arg)) {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function)");
+                    return NULL;
+                }
+                PyObject *module = GraalPyCFunction_GetModule(arg);
+                Py_XINCREF(self);
+                GraalPyCFunction_SetModule(arg, self);
+                if (GraalPyCFunction_GetModule(arg) != self) {
+                    PyErr_SetString(PyExc_TypeError, "module of function is not self");
+                    return NULL;
+                }
+                Py_XINCREF(self);
+                return self;
+            }
+
+            static PyObject *new_meth(PyObject *self, PyObject *args) {
+                PyObject *callable_type = NULL, *callable_self, *callable;
+                if (!PyArg_ParseTuple(args, "OO:new_meth",
+                                         &callable_self, &callable)) {
+                                         // &PyType_Type, &callable_type, &callable_self, &callable)) {
+                    PyErr_SetString(PyExc_ValueError, "required args: <type>, <self>, <callable>");
+                    return NULL;
+                }
+                PyMethodDef *def;
+                if (PyCFunction_Check(callable)) {
+                    def = GraalPyCFunction_GetMethodDef(callable);
+                } else if (PyObject_TypeCheck(callable, &PyMethodDescr_Type)) {
+                    def = GraalPyMethodDescrObject_GetMethod(callable);
+                } else {
+                    PyErr_SetString(PyExc_TypeError, "<callable> is not a PyCFunction (i.e. builtin_method_or_function) "
+                                                     "nor a PyMethodDescrObject (i.e. method_descriptor)");
+                    return NULL;
+                }
+                return PyCMethod_New(def, callable_self, NULL, (PyTypeObject *)callable_type);
+            }
+            """,
+            tp_methods='''
+            {"native_meth_noargs", (PyCFunction)native_meth_noargs, METH_NOARGS, "doc noargs"},
+            {"native_meth_o", (PyCFunction)native_meth_o, METH_O, "doc o"},
+            {"native_meth_varargs", (PyCFunction)native_meth_varargs, METH_VARARGS, "doc varargs"},
+            {"native_meth_keywords", (PyCFunction)native_meth_keywords, METH_VARARGS | METH_KEYWORDS, "doc keywords"},
+            {"get_name", (PyCFunction)get_name, METH_O, ""},
+            {"get_flags", (PyCFunction)get_flags, METH_O, ""},
+            {"call_meth", (PyCFunction)call_meth, METH_VARARGS, ""},
+            {"call_meth_descr", (PyCFunction)call_meth_descr, METH_VARARGS, ""},
+            {"get_doc", (PyCFunction)get_doc, METH_O, ""},
+            {"new_meth", (PyCFunction)new_meth, METH_VARARGS, ""},
+            {"set_def", (PyCFunction)set_def, METH_O, ""},
+            {"get_set_module", (PyCFunction)get_set_module, METH_O, ""}
+            ''',
+            post_ready_code='''
+            PyModule_AddIntMacro(m, METH_NOARGS);
+            PyModule_AddIntMacro(m, METH_O);
+            PyModule_AddIntMacro(m, METH_VARARGS);
+            PyModule_AddIntMacro(m, METH_KEYWORDS);
+            '''
+        )
+        m = __import__(TestPyMethodDef.__module__)
+        tester = TestPyMethodDef()
+        assert tester.get_name(tester.native_meth_noargs) == "native_meth_noargs"
+        assert tester.get_flags(tester.native_meth_noargs) == m.METH_NOARGS
+        assert tester.get_doc(tester.native_meth_noargs) == "doc noargs"
+        assert tester.call_meth(tester.native_meth_noargs, tuple()) == 789
+        assert tester.get_name(tester.native_meth_o) == "native_meth_o"
+        assert tester.get_flags(tester.native_meth_o) == m.METH_O
+        assert tester.get_doc(tester.native_meth_o) == "doc o"
+        assert tester.call_meth(tester.native_meth_o, (123,)) == 124
+        assert tester.get_name(tester.native_meth_varargs) == "native_meth_varargs"
+        assert tester.get_flags(tester.native_meth_varargs) == m.METH_VARARGS
+        assert tester.get_doc(tester.native_meth_varargs) == "doc varargs"
+        assert tester.call_meth(tester.native_meth_varargs, (1, 2, "hello", "world")) == (1, 2, "hello", "world")
+        assert tester.get_name(tester.native_meth_keywords) == "native_meth_keywords"
+        assert tester.get_flags(tester.native_meth_keywords) == m.METH_VARARGS | m.METH_KEYWORDS
+        assert tester.get_doc(tester.native_meth_keywords) == "doc keywords"
+        assert tester.call_meth(tester.native_meth_keywords, (1, 2), {"hello": "world"}) == ((1, 2), {"hello": "world"})
+        assert tester.set_def(tester.native_meth_keywords) == "doc keywords"
+        assert tester.get_set_module(tester.get_set_module) == tester
+
+        # built-in functions
+
+        # METH_NOARGS
+        assert tester.call_meth(globals, None) is not None
+        # METH_O
+        assert tester.get_name(bin) == "bin"
+        assert tester.get_flags(bin) == m.METH_O
+        assert tester.call_meth(bin, (123, )) == "0b1111011"
+        # METH_VARARGS or METH_FASTCALL
+        assert tester.call_meth(divmod, (123, 5)) == (24, 3)
+        # METH_KEYWORDS
+        # TODO
+
+        # built-in methods
+        assert tester.call_meth_descr(str.center, "abc", (10, )) == "   abc    "
+        assert tester.call_meth_descr(str.center, "abc", (10, "-")) == "---abc----"
+        assert tester.call_meth_descr(str.format, "{a}{b}{c}", tuple(), {"a": "a", "b": "b", "c": "c"}) == "abc"
+
+        # create new methods from PyMethodDef
+        m0 = tester.new_meth("abc", str.center)
+        assert type(m0) is type(bin)
+        assert m0(10) == "   abc    "
+        assert m0(10, "-") == "---abc----"
+
+        # str.lower is a unary builtin
+        m1 = tester.new_meth("ABC", str.lower)
+        assert type(m1) is type(bin)
+        assert m1() == "abc"
+
+        # str.splitlines is a binary builtin with an optional arg
+        m2 = tester.new_meth("line0\nline1", str.splitlines)
+        assert type(m2) is type(bin)
+        assert m2() == ['line0', 'line1']
+        assert m2(True) == ['line0\n', 'line1']

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,7 +43,6 @@ package com.oracle.graal.python.builtins.objects.ssl;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.MemoryError;
 import static com.oracle.graal.python.builtins.objects.exception.OSErrorEnum.EAGAIN;
 import static com.oracle.graal.python.builtins.objects.exception.OSErrorEnum.EWOULDBLOCK;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
 import java.nio.ByteBuffer;
@@ -76,7 +75,6 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.strings.TruffleString;
 
 /**
  * This class implements equivalents of OpenSSL transport functions ({@code SSL_read} etc) on top of
@@ -120,12 +118,12 @@ public abstract class SSLOperationNode extends PNodeWithContext {
      * Errors are wrapped into Python exceptions. Requests for IO in non-blocking modes are
      * indicated using Python exceptions ({@code SSLErrorWantRead}, {@code SSLErrorWantWrite}).
      */
-    public void handshake(VirtualFrame frame, Node inliningTarget, PSSLSocket socket) {
+    public void handshake(VirtualFrame frame, Node inliningTarget, PConstructAndRaiseNode.Lazy constructAndRaiseNode, PSSLSocket socket) {
         if (!socket.isHandshakeComplete()) {
             try {
                 beginHandshake(socket);
             } catch (SSLException e) {
-                throw handleSSLException(e);
+                throw handleSSLException(inliningTarget, e, constructAndRaiseNode);
             }
             execute(frame, inliningTarget, socket, SSLOperationNode.EMPTY_BUFFER, SSLOperationNode.EMPTY_BUFFER, SSLOperation.HANDSHAKE);
         }
@@ -176,8 +174,7 @@ public abstract class SSLOperationNode extends PNodeWithContext {
                     @CachedLibrary(limit = "1") PosixSupportLibrary posixLib,
                     @Cached(inline = false) GilNode gil,
                     @Shared @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
-                    @Cached(inline = false) TruffleString.FromJavaStringNode fromJavaStringNode,
-                    @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                    @Shared @Cached PRaiseNode raiseNode) {
         assert socket.getSocket() != null;
         prepare(socket);
         TimeoutHelper timeoutHelper = null;
@@ -188,7 +185,7 @@ public abstract class SSLOperationNode extends PNodeWithContext {
         PythonContext context = PythonContext.get(inliningTarget);
         while (true) {
             try {
-                status = loop(socket, appInput, targetBuffer, operation);
+                status = loop(inliningTarget, constructAndRaiseNode, socket, appInput, targetBuffer, operation);
                 switch (status) {
                     case COMPLETE:
                         return;
@@ -237,13 +234,13 @@ public abstract class SSLOperationNode extends PNodeWithContext {
                             }
                             networkInboundBIO.advanceWritePosition(recvlen);
                         } catch (PosixException e) {
-                            if (e.getErrorCode() == EAGAIN.getNumber() || e.getErrorCode() == EWOULDBLOCK.getNumber()) {
+                            if (e.hasErrno(EAGAIN) || e.hasErrno(EWOULDBLOCK)) {
                                 throw constructAndRaiseNode.get(inliningTarget).raiseSSLError(frame, SSLErrorCode.ERROR_WANT_READ, ErrorMessages.SSL_WANT_READ);
                             }
                             if (socket.hasSavedException()) {
                                 throw socket.getAndClearSavedException();
                             }
-                            throw constructAndRaiseNode.get(inliningTarget).raiseOSError(frame, e.getErrorCode(), fromJavaStringNode.execute(e.getMessage(), TS_ENCODING), null, null);
+                            throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
                         }
                         break;
                     case WANTS_WRITE:
@@ -257,20 +254,20 @@ public abstract class SSLOperationNode extends PNodeWithContext {
                                             true, false, timeoutHelper);
                             networkOutboundBIO.advanceReadPosition(writtenBytes);
                         } catch (PosixException e) {
-                            if (e.getErrorCode() == EAGAIN.getNumber() || e.getErrorCode() == EWOULDBLOCK.getNumber()) {
+                            if (e.hasErrno(EAGAIN) || e.hasErrno(EWOULDBLOCK)) {
                                 throw constructAndRaiseNode.get(inliningTarget).raiseSSLError(frame, SSLErrorCode.ERROR_WANT_WRITE, ErrorMessages.SSL_WANT_WRITE);
                             }
                             if (socket.hasSavedException()) {
                                 throw socket.getAndClearSavedException();
                             }
-                            throw constructAndRaiseNode.get(inliningTarget).raiseOSError(frame, e.getErrorCode(), fromJavaStringNode.execute(e.getMessage(), TS_ENCODING), null, null);
+                            throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
                         }
                         break;
                 }
             } catch (SSLException e) {
-                throw handleSSLException(e);
+                throw handleSSLException(inliningTarget, e, constructAndRaiseNode);
             } catch (OverflowException | OutOfMemoryError node) {
-                throw raiseNode.get(inliningTarget).raise(MemoryError);
+                throw raiseNode.raise(inliningTarget, MemoryError);
             }
             PythonContext.triggerAsyncActions(inliningTarget);
         }
@@ -279,11 +276,11 @@ public abstract class SSLOperationNode extends PNodeWithContext {
     @Specialization(guards = "socket.getSocket() == null")
     static void doMemory(VirtualFrame frame, Node inliningTarget, PSSLSocket socket, ByteBuffer appInput, ByteBuffer targetBuffer, SSLOperation operation,
                     @Shared @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode,
-                    @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                    @Shared @Cached PRaiseNode raiseNode) {
         prepare(socket);
         SSLOperationStatus status;
         try {
-            status = loop(socket, appInput, targetBuffer, operation);
+            status = loop(inliningTarget, constructAndRaiseNode, socket, appInput, targetBuffer, operation);
             switch (status) {
                 case COMPLETE:
                     return;
@@ -310,9 +307,9 @@ public abstract class SSLOperationNode extends PNodeWithContext {
                     throw CompilerDirectives.shouldNotReachHere("MemoryBIO-based socket operation returned WANTS_WRITE");
             }
         } catch (SSLException e) {
-            throw handleSSLException(e);
+            throw handleSSLException(inliningTarget, e, constructAndRaiseNode);
         } catch (OverflowException | OutOfMemoryError node) {
-            throw raiseNode.get(inliningTarget).raise(MemoryError);
+            throw raiseNode.raise(inliningTarget, MemoryError);
         }
     }
 
@@ -338,7 +335,7 @@ public abstract class SSLOperationNode extends PNodeWithContext {
     }
 
     @TruffleBoundary
-    private static SSLOperationStatus loop(PSSLSocket socket, ByteBuffer appInput, ByteBuffer targetBuffer, SSLOperation op)
+    private static SSLOperationStatus loop(Node inliningTarget, PConstructAndRaiseNode.Lazy raiseNode, PSSLSocket socket, ByteBuffer appInput, ByteBuffer targetBuffer, SSLOperation op)
                     throws SSLException, OverflowException {
         PMemoryBIO applicationInboundBIO = socket.getApplicationInboundBIO();
         PMemoryBIO networkInboundBIO = socket.getNetworkInboundBIO();
@@ -445,7 +442,7 @@ public abstract class SSLOperationNode extends PNodeWithContext {
                     case WRITE:
                     case HANDSHAKE:
                         // Write and handshake operations need to fail loudly
-                        throw PConstructAndRaiseNode.raiseUncachedSSLError(SSLErrorCode.ERROR_ZERO_RETURN, ErrorMessages.SSL_SESSION_CLOSED);
+                        throw raiseNode.get(inliningTarget).raiseSSLError(null, SSLErrorCode.ERROR_ZERO_RETURN, ErrorMessages.SSL_SESSION_CLOSED);
                 }
                 throw CompilerDirectives.shouldNotReachHere();
             }
@@ -550,10 +547,14 @@ public abstract class SSLOperationNode extends PNodeWithContext {
     }
 
     @TruffleBoundary
-    private static PException handleSSLException(SSLException e) {
+    private static PException handleSSLException(Node inliningTarget, SSLException e, PConstructAndRaiseNode.Lazy raiseNode) {
         if (e.getCause() instanceof CertificateException) {
-            throw PConstructAndRaiseNode.raiseUncachedSSLError(SSLErrorCode.ERROR_CERT_VERIFICATION, ErrorMessages.CERTIFICATE_VERIFY_FAILED, e.toString());
+            throw raiseNode.get(inliningTarget).raiseSSLError(null, SSLErrorCode.ERROR_CERT_VERIFICATION, ErrorMessages.CERTIFICATE_VERIFY_FAILED, e.toString());
         }
-        throw PConstructAndRaiseNode.raiseUncachedSSLError(SSLErrorCode.ERROR_SSL, toTruffleStringUncached(e.toString()));
+        String message = e.toString();
+        if (message.contains("Unrecognized SSL message, plaintext connection?")) {
+            message = "before TLS handshake with data";
+        }
+        throw raiseNode.get(inliningTarget).raiseSSLError(null, SSLErrorCode.ERROR_SSL, toTruffleStringUncached(message));
     }
 }

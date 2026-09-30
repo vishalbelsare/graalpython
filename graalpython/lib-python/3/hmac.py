@@ -53,7 +53,7 @@ class HMAC:
             raise TypeError("key: expected bytes or bytearray, but got %r" % type(key).__name__)
 
         if not digestmod:
-            raise TypeError("Missing required parameter 'digestmod'.")
+            raise TypeError("Missing required argument 'digestmod'.")
 
         if _hashopenssl and isinstance(digestmod, (str, _functype)):
             try:
@@ -127,6 +127,7 @@ class HMAC:
         # Call __new__ directly to avoid the expensive __init__.
         other = self.__class__.__new__(self.__class__)
         other.digest_size = self.digest_size
+        other.block_size = self.block_size
         if self._hmac:
             other._hmac = self._hmac.copy()
             other._inner = other._outer = None

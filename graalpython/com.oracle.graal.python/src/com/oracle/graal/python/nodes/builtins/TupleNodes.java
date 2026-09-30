@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,114 +40,86 @@
  */
 package com.oracle.graal.python.nodes.builtins;
 
-import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTupleObject__ob_item;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyVarObject__ob_size;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readLongField;
 
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.CreateStorageFromIteratorNode;
-import com.oracle.graal.python.builtins.objects.str.PString;
-import com.oracle.graal.python.builtins.objects.str.StringUtils;
+import com.oracle.graal.python.builtins.objects.iterator.IteratorNodes;
+import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.runtime.sequence.storage.NativeObjectSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleStringIterator;
 
 public abstract class TupleNodes {
 
     @GenerateUncached
     @GenerateInline(false) // footprint reduction 40 -> 21
+    @ImportStatic(PGuards.class)
     public abstract static class ConstructTupleNode extends PNodeWithContext {
-        public final PTuple execute(VirtualFrame frame, Object value) {
-            return execute(frame, PythonBuiltinClassType.PTuple, value);
-        }
-
-        public abstract PTuple execute(Frame frame, Object cls, Object value);
+        public abstract PTuple execute(Frame frame, Object value);
 
         @Specialization(guards = "isNoValue(none)")
-        static PTuple tuple(Object cls, @SuppressWarnings("unused") PNone none,
-                        @Shared("factory") @Cached PythonObjectFactory factory) {
-            return factory.createEmptyTuple(cls);
+        static PTuple tuple(@SuppressWarnings("unused") PNone none,
+                        @Bind PythonLanguage language) {
+            return PFactory.createEmptyTuple(language);
         }
 
-        @Specialization
-        @InliningCutoff
-        static PTuple tuple(Object cls, TruffleString arg,
-                        @Shared("factory") @Cached PythonObjectFactory factory,
-                        @Shared @Cached TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Shared @Cached TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
-                        @Shared @Cached TruffleStringIterator.NextNode nextNode,
-                        @Shared @Cached TruffleString.FromCodePointNode fromCodePointNode) {
-            return factory.createTuple(cls, StringUtils.toCharacterArray(arg, codePointLengthNode, createCodePointIteratorNode, nextNode, fromCodePointNode));
-        }
-
-        @Specialization
-        @InliningCutoff
-        static PTuple tuple(Object cls, PString arg,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("factory") @Cached PythonObjectFactory factory,
-                        @Cached CastToTruffleStringNode castToStringNode,
-                        @Shared @Cached TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Shared @Cached TruffleString.CreateCodePointIteratorNode createCodePointIteratorNode,
-                        @Shared @Cached TruffleStringIterator.NextNode nextNode,
-                        @Shared @Cached TruffleString.FromCodePointNode fromCodePointNode) {
-            return tuple(cls, castToStringNode.execute(inliningTarget, arg), factory, codePointLengthNode, createCodePointIteratorNode, nextNode, fromCodePointNode);
-        }
-
-        @Specialization(guards = {"cannotBeOverridden(cls)", "cannotBeOverridden(iterable, this, getClassNode)"}, limit = "1")
-        static PTuple tuple(@SuppressWarnings("unused") Object cls, PTuple iterable,
-                        @Exclusive @SuppressWarnings("unused") @Cached GetClassNode getClassNode) {
+        @Specialization(guards = "isBuiltinTuple(iterable)")
+        static PTuple tuple(PTuple iterable) {
             return iterable;
         }
 
-        @Specialization(guards = {"!isNoValue(iterable)", "createNewTuple(this, cls, iterable, getClassNode)"}, limit = "1")
-        @InliningCutoff
-        static PTuple tuple(VirtualFrame frame, Object cls, Object iterable,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @SuppressWarnings("unused") @Cached GetClassNode getClassNode,
-                        @Shared("factory") @Cached PythonObjectFactory factory,
-                        @Cached CreateStorageFromIteratorNode storageNode,
-                        @Cached PyObjectGetIter getIter) {
-            Object iterObj = getIter.execute(frame, inliningTarget, iterable);
-            return factory.createTuple(cls, storageNode.execute(frame, iterObj));
+        @Specialization(guards = "isBuiltinList(iterable)")
+        static PTuple list(PList iterable,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached SequenceStorageNodes.CopyNode copyNode) {
+            return PFactory.createTuple(language, copyNode.execute(inliningTarget, iterable.getSequenceStorage()));
+        }
+
+        @Specialization(guards = "isNativeTuple(iterable)")
+        static PTuple nativeTuple(PythonAbstractNativeObject iterable,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached SequenceStorageNodes.ToArrayNode toArrayNode) {
+            return PFactory.createTuple(language, toArrayNode.execute(inliningTarget, GetTupleStorage.doNative(iterable)));
         }
 
         @Fallback
-        static PTuple tuple(@SuppressWarnings("unused") Object cls, Object value) {
-            CompilerDirectives.transferToInterpreter();
-            throw new RuntimeException("tuple does not support iterable object " + value);
-        }
-
-        protected boolean createNewTuple(Node inliningTarget, Object cls, Object iterable, GetClassNode getClassNode) {
-            if (iterable instanceof PTuple) {
-                return !(PGuards.cannotBeOverridden(cls) && PGuards.cannotBeOverridden(getClassNode.execute(inliningTarget, iterable)));
-            }
-            return true;
+        @InliningCutoff
+        static PTuple generic(VirtualFrame frame, Object iterable,
+                        @Bind Node inliningTarget,
+                        @Bind PythonLanguage language,
+                        @Cached IteratorNodes.GetLength lenNode,
+                        @Cached CreateStorageFromIteratorNode storageNode,
+                        @Cached PyObjectGetIter getIter) {
+            int len = lenNode.execute(frame, inliningTarget, iterable);
+            Object iterObj = getIter.execute(frame, inliningTarget, iterable);
+            return PFactory.createTuple(language, storageNode.execute(frame, iterObj, len));
         }
 
         @NeverDefault
@@ -162,33 +134,51 @@ public abstract class TupleNodes {
 
     @GenerateInline
     @GenerateCached(false)
+    @GenerateUncached
     public abstract static class GetTupleStorage extends Node {
         public abstract SequenceStorage execute(Node inliningTarget, Object tuple);
 
         @Specialization
-        SequenceStorage getManaged(PTuple tuple) {
+        static SequenceStorage doManaged(PTuple tuple) {
             return tuple.getSequenceStorage();
         }
 
         @Specialization
-        SequenceStorage getNative(PythonAbstractNativeObject tuple,
-                        @Cached(inline = false) GetNativeTupleStorage getNativeTupleStorage) {
-            return getNativeTupleStorage.execute(tuple);
+        public static NativeObjectSequenceStorage doNative(PythonAbstractNativeObject tuple) {
+            assert PyTupleCheckNode.executeUncached(tuple);
+            long tupleRawPtr = tuple.getPtr();
+            long array = CStructAccess.getFieldPtr(tupleRawPtr, CFields.PyTupleObject__ob_item);
+            int size = (int) readLongField(tupleRawPtr, PyVarObject__ob_size);
+            // The storage borrows the native tuple's ob_item memory, so keep the native tuple owner
+            // alive for as long as the storage may read from it.
+            return NativeObjectSequenceStorage.create(array, size, size, tuple);
         }
     }
 
-    @GenerateInline(false)
-    public abstract static class GetNativeTupleStorage extends Node {
-        public abstract NativeObjectSequenceStorage execute(PythonAbstractNativeObject tuple);
+    @GenerateUncached
+    @GenerateInline
+    @GenerateCached(false)
+    public abstract static class EnsureManagedTupleNode extends Node {
+
+        /**
+         * Ensures that the given tuple object is a managed tuple (i.e. {@link PTuple}). If the
+         * object is not a tuple at all, this node returns {@code null}.
+         */
+        public abstract PTuple execute(Node inliningTarget, Object object);
 
         @Specialization
-        NativeObjectSequenceStorage getNative(PythonAbstractNativeObject tuple,
-                        @Cached CStructAccess.ReadPointerNode getContents,
-                        @Cached CStructAccess.ReadI64Node readI64Node) {
-            assert PyTupleCheckNode.executeUncached(tuple);
-            Object array = getContents.readFromObj(tuple, PyTupleObject__ob_item);
-            int size = (int) readI64Node.readFromObj(tuple, PyVarObject__ob_size);
-            return NativeObjectSequenceStorage.create(array, size, size, false);
+        static PTuple doGeneric(Node inliningTarget, Object object,
+                        @Cached SequenceStorageNodes.CopyNode copyNode) {
+            if (object instanceof PTuple managedTuple) {
+                return managedTuple;
+            }
+            if (object instanceof PythonAbstractNativeObject nativeTuple && PyTupleCheckNode.doNative(nativeTuple)) {
+                // 'GetTupleStorageNode.doNative' will just "wrap" the 'ob_item' pointer. The memory is then still
+                // owned by the native tuple object. Therefore, we need to copy the storage to a managed storage.
+                NativeObjectSequenceStorage nativeObjectSequenceStorage = GetTupleStorage.doNative(nativeTuple);
+                return PFactory.createTuple(PythonLanguage.get(inliningTarget), copyNode.execute(inliningTarget, nativeObjectSequenceStorage));
+            }
+            return null;
         }
     }
 }

@@ -1,0 +1,226 @@
+{
+    local common = import "graal/ci/common.jsonnet",
+
+    MX_VERSION:: "HEAD",
+    CPYTHON_VERSION:: "3.13.14",
+
+    TIME_LIMIT:: {
+        "10m": "00:10:00",
+        "15m": "00:15:00",
+        "30m": "00:30:00",
+        "90m": "1:30:00",
+        "1h": "1:00:00",
+        "2h": "2:00:00",
+        "3h": "3:00:00",
+        "4h": "4:00:00",
+        "5h": "5:00:00",
+        "6h": "6:00:00",
+        "7h": "7:00:00",
+        "8h": "8:00:00",
+        "9h": "9:00:00",
+        "10h": "10:00:00",
+        "11h": "11:00:00",
+        "16h": "16:00:00",
+        "20h": "20:00:00",
+    },
+
+    TARGET:: {
+        onDemand: common.frequencies.on_demand.targets,
+        postMerge: common.frequencies.post_merge.targets,
+        daily: common.frequencies.daily.targets,
+        weekly: common.frequencies.weekly.targets,
+        monthly: common.frequencies.monthly.targets,
+        gate: common.frequencies.gate.targets,
+    },
+
+    NOTIFY_GROUPS:: ["tim.felgentreff@oracle.com"],
+
+    local ENV = {
+        graalpy_svm_ee: ["--env", "native-ee"],
+        graalpy_jvm_ee: ["--env", "jvm-ee-libgraal"],
+        libgraal_ee: ["--env", "../../graal-enterprise/vm-enterprise/mx.vm-enterprise/libgraal-enterprise"],
+    },
+
+    local DY = {
+      ee: "/vm-enterprise,/graalpython-enterprise",
+    },
+
+    local PYVM = {
+      graalpython: "graalpython",
+      cpython: "cpython",
+      pypy: "pypy",
+    },
+    PYVM:: PYVM,
+
+    local PYVM_CONFIG = {
+      default: "default",
+      default_manual: "default-manual",
+      default_multi: "default-multi",
+      interpreter: "interpreter",
+      interpreter_manual: "interpreter-manual",
+      interpreter_uncached: "interpreter-uncached",
+      native_interpreter: "native-interpreter",
+      native_interpreter_manual: "native-interpreter-manual",
+      interpreter_multi: "interpreter-multi",
+      native_interpreter_multi: "native-interpreter-multi",
+      native: "native",
+      native_manual: "native-manual",
+      native_multi: "native-multi",
+      launcher: "launcher",
+    },
+
+    local JAVA_EMBEDDING_VM_CONFIG = {
+      java_embedding_multi_shared: "java-driver-multi-shared",
+      java_embedding_interpreter_multi_shared: "java-driver-interpreter-multi-shared",
+    },
+
+    // the host VMs
+    local JVM_VM = {
+      graaljdk_ee: {
+        dy: ["--dynamicimports", DY.ee],
+        env: ENV.graalpy_jvm_ee,
+        edition: 'ee',
+      },
+      graal_native_image_ee: {
+        dy: ["--dynamicimports", DY.ee],
+        env: ENV.graalpy_svm_ee,
+        edition: 'ee',
+      },
+      server_libgraal_ee: {
+        jvm: 'server',
+        jvm_config: 'graal-enterprise-libgraal',
+        dy: ["--dynamicimports", DY.ee],
+        env: ENV.libgraal_ee,
+        edition: 'ee',
+      },
+      // this is needed to simplify the VM mixins (see below)
+      none: {
+        dy: [],
+        env: [],
+        edition: 'ce',
+      },
+    },
+
+    // the python vms
+    local PYTHON_VM = {
+      graalpython: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.default,
+      },
+      graalpython_manual: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.default_manual,
+      },
+      graalpython_interpreter: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.interpreter,
+      },
+      graalpython_interpreter_manual: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.interpreter_manual,
+      },
+      graalpython_interpreter_uncached: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.interpreter_uncached,
+      },
+      graalpython_native_interpreter: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.native_interpreter,
+      },
+      graalpython_native_interpreter_manual: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.native_interpreter_manual,
+      },
+      graalpython_multi: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.default_multi,
+      },
+      graalpython_interpreter_multi: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.interpreter_multi,
+      },
+      graalpython_native_interpreter_multi: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.native_interpreter_multi,
+      },
+      graalpython_native: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.native,
+      },
+      graalpython_native_manual: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.native_manual,
+      },
+      graalpython_native_multi: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: PYVM_CONFIG.native_multi,
+      },
+      java_embedding_multi_shared: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: JAVA_EMBEDDING_VM_CONFIG.java_embedding_multi_shared,
+      },
+      java_embedding_interpreter_multi_shared: {
+        python_vm: PYVM.graalpython,
+        python_vm_config: JAVA_EMBEDDING_VM_CONFIG.java_embedding_interpreter_multi_shared,
+      },
+      cpython: {
+        python_vm: PYVM.cpython,
+        python_vm_config: PYVM_CONFIG.default,
+      },
+      cpython_launcher: {
+        python_vm: PYVM.cpython,
+        python_vm_config: PYVM_CONFIG.launcher,
+      },
+      pypy: {
+        python_vm: PYVM.pypy,
+        python_vm_config: PYVM_CONFIG.default,
+      },
+      pypy_launcher: {
+        python_vm: PYVM.pypy,
+        python_vm_config: PYVM_CONFIG.launcher,
+      },
+    },
+
+    local VM = {
+        // graalpy jvm standalones
+        graalpython_enterprise: PYTHON_VM.graalpython + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_manual: PYTHON_VM.graalpython_manual + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_multi: PYTHON_VM.graalpython_multi + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_interpreter: PYTHON_VM.graalpython_interpreter + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_interpreter_manual: PYTHON_VM.graalpython_interpreter_manual + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_native: PYTHON_VM.graalpython_native + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_native_manual: PYTHON_VM.graalpython_native_manual + JVM_VM.graaljdk_ee,
+        graalpython_enterprise_native_multi: PYTHON_VM.graalpython_native_multi + JVM_VM.graaljdk_ee,
+
+        // graalpy native standalones
+        graalvm_ee_default: PYTHON_VM.graalpython + JVM_VM.graal_native_image_ee,
+        graalvm_ee_default_manual: PYTHON_VM.graalpython_manual + JVM_VM.graal_native_image_ee,
+        graalvm_ee_default_interpreter: PYTHON_VM.graalpython_interpreter + JVM_VM.graal_native_image_ee,
+        graalvm_ee_default_interpreter_uncached: PYTHON_VM.graalpython_interpreter_uncached + JVM_VM.graal_native_image_ee,
+        graalvm_ee_default_interpreter_manual: PYTHON_VM.graalpython_interpreter_manual + JVM_VM.graal_native_image_ee,
+
+        // Java embedding
+        java_embedding_enterprise_multi_shared: PYTHON_VM.java_embedding_multi_shared + JVM_VM.server_libgraal_ee,
+        java_embedding_enterprise_interpreter_multi_shared: PYTHON_VM.java_embedding_interpreter_multi_shared + JVM_VM.server_libgraal_ee,
+        java_jmh_enterprise: JVM_VM.server_libgraal_ee,
+        java_jmh_native_enterprise: {
+            jvm: 'native-image',
+            jvm_config: 'default-ee',
+            dy: ["--dynamicimports", DY.ee],
+            env: ["--env", "jmh-native-ee"],
+            edition: 'ee',
+        },
+
+        // basline vms
+        cpython: PYTHON_VM.cpython + JVM_VM.none,
+        pypy: PYTHON_VM.pypy + JVM_VM.none,
+        cpython_launcher: PYTHON_VM.cpython_launcher + JVM_VM.none,
+        pypy_launcher: PYTHON_VM.pypy_launcher + JVM_VM.none,
+    },
+    VM:: VM,
+}
+
+// Local Variables:
+// jsonnet-indent-level: 4
+// smie-indent-basic: 4
+// End:

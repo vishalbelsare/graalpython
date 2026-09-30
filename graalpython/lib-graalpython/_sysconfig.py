@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,32 +38,36 @@
 # SOFTWARE.
 
 
-def _get_posix_vars():
-    """Initialize the config vars as appropriate for POSIX systems."""
-    import _imp
-    import sys
+def _append_flags(g, key, flags):
+    value = g.get(key, "")
+    parts = value.split()
+    for flag in flags:
+        if flag and flag not in parts:
+            parts.append(flag)
+    g[key] = " ".join(parts)
+
+
+def _setdefault(g, key, value):
+    if key not in g:
+        g[key] = value
+
+
+def _update_posix_vars(config_vars=None):
+    """Add runtime path-dependent config vars."""
     import os
-    darwin_native = sys.platform == "darwin" and __graalpython__.get_platform_id() == "native"
-    win32_native = sys.platform == "win32" and __graalpython__.get_platform_id() == "native"
+    import sys
 
-    # note: this must be kept in sync with _imp.extension_suffixes
-    so_abi = sys.implementation.cache_tag + "-" + __graalpython__.get_platform_id() + "-" + sys.implementation._multiarch
-    if win32_native:
-        so_ext = ".pyd"
-    else:
-        so_ext = ".so"
-    assert _imp.extension_suffixes()[0] == "." + so_abi + so_ext, "mismatch between extension suffix to _imp.extension_suffixes"
+    if config_vars is None:
+        config_vars = {}
 
-    use_system_toolchain = __graalpython__.use_system_toolchain
-    if use_system_toolchain:
-        get_toolchain = __graalpython__.determine_system_toolchain().get
-    else:
-        get_toolchain = __graalpython__.get_toolchain_tool_path
-
-    toolchain_cxx = get_toolchain('CXX')
-    have_cxx = toolchain_cxx is not None
+    win32_native = sys.platform == "win32"
+    darwin_native = sys.platform == "darwin"
+    get_toolchain = __graalpython__.determine_system_toolchain().get
 
     if win32_native:
+        # Windows no longer loads _sysconfigdata, so provide the public hash
+        # algorithm configuration variable here instead of losing it.
+        _setdefault(config_vars, 'Py_HASH_ALGORITHM', 0)
         python_inc = os.path.join(os.path.normpath(sys.base_prefix), 'Include')
     else:
         python_inc = os.path.join(
@@ -72,77 +76,30 @@ def _get_posix_vars():
             f'python{sys.version_info[0]}.{sys.version_info[1]}{sys.abiflags}'
         )
 
-    fpic = "" if win32_native else "-fPIC"
-
-    g = {}
-    g['CC'] = get_toolchain('CC')
-    g['CXX'] = toolchain_cxx if have_cxx else get_toolchain('CC') + ' --driver-mode=g++'
-    opt_flags = ["-DNDEBUG"]
-    if not use_system_toolchain:
-        opt_flags += ["-stdlib=libc++"]
-    g['OPT'] = ' '.join(opt_flags)
-    g['INCLUDEPY'] = python_inc
-    g['CONFINCLUDEPY'] = python_inc
-    g['CPPFLAGS'] = '-I. -I' + python_inc
-    gnu_source = "-D_GNU_SOURCE=1"
-    g['USE_GNU_SOURCE'] = gnu_source
-    cflags_default = list(opt_flags)
-    if not use_system_toolchain:
-        cflags_default += ["-Wno-unused-command-line-argument", "-DGRAALVM_PYTHON_LLVM"]
+    _setdefault(config_vars, 'CC', get_toolchain('CC'))
+    _setdefault(config_vars, 'CXX', get_toolchain('CXX'))
+    _setdefault(config_vars, 'AR', get_toolchain('AR'))
+    _setdefault(config_vars, 'RANLIB', get_toolchain('RANLIB'))
+    _setdefault(config_vars, 'LD', get_toolchain('LD'))
+    _setdefault(config_vars, 'NM', get_toolchain('NM'))
+    _setdefault(config_vars, 'INCLUDEPY', python_inc)
+    _setdefault(config_vars, 'CONFINCLUDEPY', python_inc)
+    _append_flags(config_vars, 'CPPFLAGS', ['-I.', '-I' + python_inc])
     if win32_native:
-        cflags_default += ["-DMS_WINDOWS", "-DPy_ENABLE_SHARED", "-DHAVE_DECLSPEC_DLL"]
-    g['CFLAGS_DEFAULT'] = ' '.join(cflags_default)
-    g['CFLAGS'] = ' '.join(cflags_default + [gnu_source])
-    g['LDFLAGS'] = ""
-    g['CCSHARED'] = fpic
-    g['LDSHARED_LINUX'] = "%s -shared %s" % (get_toolchain('CC'), fpic)
-    if darwin_native:
-        g['LDSHARED'] = get_toolchain('CC') + " -bundle -undefined dynamic_lookup"
-        g['LDFLAGS'] = "-bundle -undefined dynamic_lookup"
-    elif win32_native:
-        g['LDFLAGS'] = f"-L{__graalpython__.capi_home.replace(os.path.sep, '/')}"
-        g['LDSHARED_WINDOWS'] = f"{g['LDSHARED_LINUX']} {g['LDFLAGS']}"
-        g['LDSHARED'] = g['LDSHARED_WINDOWS']
+        lib_path = f"-L{__graalpython__.capi_home.replace(os.path.sep, '/')}"
+        _append_flags(config_vars, 'LDFLAGS', [lib_path])
+        if 'LDSHARED' in config_vars:
+            _append_flags(config_vars, 'LDSHARED', [lib_path])
+        if 'LDCXXSHARED' in config_vars:
+            _append_flags(config_vars, 'LDCXXSHARED', [lib_path])
+        ldshared_common = f"-shared {config_vars.get('CCSHARED', '')} {config_vars.get('LDFLAGS', '')}"
+    elif darwin_native:
+        ldshared_common = config_vars.get('LDFLAGS', '')
     else:
-        g['LDSHARED'] = g['LDSHARED_LINUX']
-    g['SOABI'] = so_abi
-    g['EXT_SUFFIX'] = "." + so_abi + so_ext
-    g['SHLIB_SUFFIX'] = so_ext
-    g['SO'] = "." + so_abi + so_ext # deprecated in Python 3, for backward compatibility
-    g['AR'] = get_toolchain('AR')
-    g['RANLIB'] = get_toolchain('RANLIB')
-    g['ARFLAGS'] = "rc"
-    g['LD'] = get_toolchain('LD')
-    g['EXE'] = ".exe" if win32_native else ""
-    g['LIBDIR'] = os.path.join(sys.prefix, 'lib')
-    g['VERSION'] = ".".join(sys.version.split(".")[:2])
-    g['Py_HASH_ALGORITHM'] = 0 # does not give any specific info about the hashing algorithm
-    g['NM'] = get_toolchain('NM')
-    g['MULTIARCH'] = sys.implementation._multiarch
-    g['ABIFLAGS'] = ""
-    g['Py_DEBUG'] = 0
-    g['Py_ENABLE_SHARED'] = 0
-    g['LIBDIR'] = __graalpython__.capi_home
-    g['LIBDEST'] = __graalpython__.capi_home
-    g['LDLIBRARY'] = 'libpython.' + so_abi + so_ext
-    return g
-
-
-def make_sysconfigdata():
-    # the sysconfigdata module name matches what's computed in stdlib's sysconfig.py
-    import sys
-    multiarch = getattr(sys.implementation, '_multiarch', '')
-    name = f'_sysconfigdata_{sys.abiflags}_{sys.platform}_{multiarch}'
-    sys.modules[name] = mod = type(sys)(name)
-    no_default = object()
-    def __getattr__(key, default=no_default):
-        if key == "build_time_vars":
-            return _get_posix_vars()
-        elif default is no_default:
-            raise AttributeError(key)
-        else:
-            return default
-    mod.__getattr__ = __getattr__
-
-
-make_sysconfigdata()
+        ldshared_common = f"-shared {config_vars.get('CCSHARED', '')}"
+    _setdefault(config_vars, 'LDSHARED', f"{config_vars['CC']} {ldshared_common}".rstrip())
+    _setdefault(config_vars, 'LDCXXSHARED', f"{config_vars['CXX']} {ldshared_common}".rstrip())
+    _setdefault(config_vars, 'LIBDIR', __graalpython__.capi_home)
+    _setdefault(config_vars, 'LIBDEST', __graalpython__.capi_home)
+    _setdefault(config_vars, 'LIBPL', __graalpython__.capi_home.replace(os.path.sep, '/'))
+    return config_vars

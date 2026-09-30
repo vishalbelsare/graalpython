@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,31 +46,37 @@ import static com.oracle.graal.python.nodes.ErrorMessages.ARG_D_MUST_BE_S_NOT_P;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_MUST_BE_S;
 import static com.oracle.graal.python.nodes.ErrorMessages.TDATAOBJECT_SHOULDNT_HAVE_NEXT;
 import static com.oracle.graal.python.nodes.ErrorMessages.TDATAOBJECT_SHOULD_NOT_HAVE_MORE_LINKS;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___COPY__;
 
 import java.util.List;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.modules.BuiltinFunctions.LenNode;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetSequenceStorageNode;
+import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonQuaternaryClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -86,12 +92,34 @@ public final class TeeDataObjectBuiltins extends PythonBuiltins {
 
     static final int LINKCELLS = 128;
 
+    public static final TpSlots SLOTS = TeeDataObjectBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return TeeDataObjectBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, parameterNames = {"$self", "it", "values", "nxt"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "_tee_dataobject", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class TeeDataObjectNode extends PythonVarargsBuiltinNode {
+        @SuppressWarnings("unused")
+        @Specialization
+        PTeeDataObject construct(Object cls, Object[] arguments, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached InlinedBranchProfile errorProfile,
+                        @Bind PythonLanguage language) {
+            if (!isTypeNode.execute(inliningTarget, cls)) {
+                errorProfile.enter(inliningTarget);
+                throw PRaiseNode.raiseStatic(this, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+            }
+            return PFactory.createTeeDataObject(language);
+        }
+    }
+
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "TeeDataObject", minNumOfPositionalArgs = 1, parameterNames = {"$self", "it", "values", "nxt"})
     @ArgumentClinic(name = "values", defaultValue = "PNone.NONE", useDefaultForNone = true)
     @ArgumentClinic(name = "nxt", defaultValue = "PNone.NONE", useDefaultForNone = true)
     @GenerateNodeFactory
@@ -124,26 +152,26 @@ public final class TeeDataObjectBuiltins extends PythonBuiltins {
             self.setNextlink(nxt);
         }
 
-        @Specialization(guards = "isList(values)")
+        @Specialization
         static Object init(VirtualFrame frame, PTeeDataObject self, Object it, PList values, Object nxt,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached LenNode lenNode,
-                        @Cached GetSequenceStorageNode getStorageNode,
+                        @Cached SequenceStorageNodes.GetInternalObjectArrayNode getInternalObjectArrayNode,
                         @Cached InlinedBranchProfile numreadLCProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             int numread = (int) lenNode.execute(frame, values);
             if (numread == LINKCELLS) {
                 numreadLCProfile.enter(inliningTarget);
                 if (!(nxt instanceof PTeeDataObject)) {
-                    throw raiseNode.get(inliningTarget).raise(ValueError, S_MUST_BE_S, "_tee_dataobject next link", "_tee_dataobject");
+                    throw raiseNode.raise(inliningTarget, ValueError, S_MUST_BE_S, "_tee_dataobject next link", "_tee_dataobject");
                 }
             } else if (numread > LINKCELLS) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, TDATAOBJECT_SHOULD_NOT_HAVE_MORE_LINKS, LINKCELLS);
+                throw raiseNode.raise(inliningTarget, ValueError, TDATAOBJECT_SHOULD_NOT_HAVE_MORE_LINKS, LINKCELLS);
             } else if (!(nxt instanceof PNone)) {
-                throw raiseNode.get(inliningTarget).raise(ValueError, TDATAOBJECT_SHOULDNT_HAVE_NEXT);
+                throw raiseNode.raise(inliningTarget, ValueError, TDATAOBJECT_SHOULDNT_HAVE_NEXT);
             }
             self.setIt(it);
-            Object[] valuesArray = getStorageNode.execute(inliningTarget, values).getInternalArray();
+            Object[] valuesArray = getInternalObjectArrayNode.execute(inliningTarget, values.getSequenceStorage());
             Object[] obj = new Object[LINKCELLS];
             PythonUtils.arraycopy(valuesArray, 0, obj, 0, numread);
             self.setValues(obj);
@@ -156,32 +184,26 @@ public final class TeeDataObjectBuiltins extends PythonBuiltins {
         @SuppressWarnings("unused")
         @Specialization(guards = {"!isList(values)", "!isNone(values)"})
         static Object init(VirtualFrame frame, PTeeDataObject self, Object it, Object values, Object nxt,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(TypeError, ARG_D_MUST_BE_S_NOT_P, "teedataobject()", 2, "list", values);
-        }
-
-        protected LookupAndCallUnaryNode createCopyNode() {
-            return LookupAndCallUnaryNode.create(T___COPY__);
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ARG_D_MUST_BE_S_NOT_P, "teedataobject()", 2, "list", values);
         }
     }
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         abstract Object execute(VirtualFrame frame, PythonObject self);
 
         @Specialization
-        static Object reduce(PTeeDataObject self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetClassNode getClass,
-                        @Cached PythonObjectFactory factory) {
+        static Object reduce(PTeeDataObject self) {
+            PythonLanguage language = PythonLanguage.get(null);
             int numread = self.getNumread();
             Object[] values = new Object[numread];
             PythonUtils.arraycopy(self.getValues(), 0, values, 0, numread);
-            Object type = getClass.execute(inliningTarget, self);
+            Object type = GetClassNode.executeUncached(self);
             Object nextlink = self.getNextlink();
-            PTuple tuple = factory.createTuple(new Object[]{self.getIt(), factory.createList(values), nextlink == null ? PNone.NONE : nextlink});
-            return factory.createTuple(new Object[]{type, tuple});
+            PTuple tuple = PFactory.createTuple(language, new Object[]{self.getIt(), PFactory.createList(language, values), nextlink == null ? PNone.NONE : nextlink});
+            return PFactory.createTuple(language, new Object[]{type, tuple});
         }
     }
 }

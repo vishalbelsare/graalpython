@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,12 +44,17 @@ import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetObjectAr
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.IsSameTypeNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
+import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.NeverDefault;
@@ -58,12 +63,10 @@ import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.NodeInfo;
 
 @GenerateUncached
 @ImportStatic(PythonOptions.class)
-@NodeInfo(shortName = "cpython://Objects/abstract.c/abstract_issubclass")
-@SuppressWarnings("truffle-inlining")       // footprint reduction 44 -> 26
+@GenerateInline(false)       // footprint reduction 44 -> 26
 public abstract class AbstractObjectIsSubclassNode extends PNodeWithContext {
     static final int MAX_RECURSION = 3; // Don't use PythonOptions to avoid language reference
 
@@ -85,8 +88,8 @@ public abstract class AbstractObjectIsSubclassNode extends PNodeWithContext {
     @Specialization(guards = "isSameMetaObject(inliningTarget, isSameTypeNode, derived, cls)")
     @SuppressWarnings("unused")
     static boolean doSameClass(Object derived, Object cls, @SuppressWarnings("unused") int depth,
-                    @Bind("this") Node inliningTarget,
-                    @Shared("isSameType") @Cached IsSameTypeNode isSameTypeNode) {
+                    @Bind Node inliningTarget,
+                    @Shared @Cached IsSameTypeNode isSameTypeNode) {
         return true;
     }
 
@@ -99,16 +102,16 @@ public abstract class AbstractObjectIsSubclassNode extends PNodeWithContext {
     @Specialization(guards = {"depth < MAX_RECURSION", "!isSameMetaObject(inliningTarget, isSameTypeNode, derived, cls)", "derived == cachedDerived",
                     "cls == cachedCls"}, limit = "getCallSiteInlineCacheMaxDepth()")
     static boolean doSubclass(VirtualFrame frame, @SuppressWarnings("unused") Object derived, @SuppressWarnings("unused") Object cls, int depth,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached(value = "observedSize()", dimensions = 1) int[] observedSizeArray,
-                    @Cached("derived") Object cachedDerived,
-                    @Cached("cls") Object cachedCls,
-                    @Shared("isSameType") @Cached @SuppressWarnings("unused") IsSameTypeNode isSameTypeNode,
+                    @Cached(value = "derived", weak = true) Object cachedDerived,
+                    @Cached(value = "cls", weak = true) Object cachedCls,
+                    @Shared @Cached @SuppressWarnings("unused") IsSameTypeNode isSameTypeNode,
                     @Shared @Cached AbstractObjectGetBasesNode getBasesNode,
-                    @Cached AbstractObjectIsSubclassNode isSubclassNode,
+                    @Shared @Cached AbstractObjectIsSubclassNode isSubclassNode,
                     @Shared @Cached GetObjectArrayNode getObjectArrayNode) {
         CompilerAsserts.partialEvaluationConstant(depth);
-        PTuple bases = getBasesNode.execute(frame, cachedDerived);
+        PTuple bases = getBasesNode.execute(frame, inliningTarget, cachedDerived);
         if (bases == null || isEmpty(bases)) {
             return false;
         }
@@ -148,19 +151,45 @@ public abstract class AbstractObjectIsSubclassNode extends PNodeWithContext {
         return false;
     }
 
-    @Specialization(replaces = {"doSubclass", "doSameClass"})
-    static boolean doGeneric(VirtualFrame frame, Object derived, Object cls, int depth,
-                    @Bind("this") Node inliningTarget,
+    @Specialization(replaces = {"doSubclass", "doSameClass"}, guards = "depth < MAX_RECURSION")
+    static boolean doGenericCached(VirtualFrame frame, Object derived, Object cls, int depth,
+                    @Bind Node inliningTarget,
                     @Shared @Cached AbstractObjectGetBasesNode getBasesNode,
-                    @Cached("createRecursive(depth)") AbstractObjectIsSubclassNode isSubclassNode,
-                    @Shared("isSameType") @Cached IsSameTypeNode isSameTypeNode,
+                    @Shared @Cached AbstractObjectIsSubclassNode isSubclassNode,
+                    @Shared @Cached IsSameTypeNode isSameTypeNode,
                     @Shared @Cached GetObjectArrayNode getObjectArrayNode) {
         CompilerAsserts.partialEvaluationConstant(depth);
+        return doGeneric(frame, inliningTarget, derived, cls, depth, getBasesNode, isSubclassNode, isSameTypeNode, getObjectArrayNode);
+    }
+
+    @Specialization(guards = "depth >= MAX_RECURSION")
+    @InliningCutoff
+    static boolean doGenericBoundary(VirtualFrame frame, Object derived, Object cls, int depth,
+                    @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+        CompilerAsserts.partialEvaluationConstant(depth);
+        Object saved = BoundaryCallContext.enter(frame, boundaryCallData);
+        try {
+            return doGenericBoundary(derived, cls);
+        } finally {
+            BoundaryCallContext.exit(frame, boundaryCallData, saved);
+        }
+    }
+
+    @TruffleBoundary
+    private static boolean doGenericBoundary(Object derived, Object cls) {
+        return doGeneric(null, null, derived, cls, MAX_RECURSION + 1,
+                        AbstractObjectGetBasesNode.getUncached(), AbstractObjectIsSubclassNodeGen.getUncached(),
+                        IsSameTypeNode.getUncached(), GetObjectArrayNode.getUncached());
+    }
+
+    private static boolean doGeneric(VirtualFrame frame, Node inliningTarget, Object derived, Object cls, int depth,
+                    AbstractObjectGetBasesNode getBasesNode, AbstractObjectIsSubclassNode isSubclassNode,
+                    IsSameTypeNode isSameTypeNode, GetObjectArrayNode getObjectArrayNode) {
         if (isSameMetaObject(inliningTarget, isSameTypeNode, derived, cls)) {
             return true;
         }
 
-        PTuple bases = getBasesNode.execute(frame, derived);
+        PTuple bases = getBasesNode.execute(frame, inliningTarget, derived);
         if (bases == null || isEmpty(bases)) {
             return false;
         }
@@ -171,14 +200,6 @@ public abstract class AbstractObjectIsSubclassNode extends PNodeWithContext {
             }
         }
         return false;
-    }
-
-    @NeverDefault
-    protected AbstractObjectIsSubclassNode createRecursive(int depth) {
-        if (depth >= MAX_RECURSION) {
-            return AbstractObjectIsSubclassNodeGen.getUncached();
-        }
-        return AbstractObjectIsSubclassNodeGen.create();
     }
 
     private static boolean isEmpty(PTuple bases) {

@@ -1,4 +1,4 @@
-# Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,30 +38,152 @@
 # SOFTWARE.
 
 import os
-import signal
 import subprocess
-from pathlib import Path
-
 import sys
+import tempfile
+import textwrap
+from pathlib import Path
+from unittest import skipIf
 
-DIR = Path(__file__).parent
-MODULE_PATH = DIR / 'module_with_native_destructor.py'
-ENV = dict(os.environ)
-ENV['PYTHONPATH'] = str(DIR.parent.parent)
-ARGS = []
-if sys.implementation.name == 'graalpy':
-    ARGS = ['--python.EnableDebuggingBuiltins']
-COMMAND = [sys.executable, *ARGS, str(MODULE_PATH)]
+from tests import compile_module_from_string
 
-
-# Test that running Py_DECREF in native global destructor doesn't crash
-def test_normal_exit():
-    subprocess.run(COMMAND, check=True, env=ENV)
+GRAALPY = sys.implementation.name == 'graalpy'
 
 
-def test_sigterm():
-    proc = subprocess.Popen([*COMMAND, "sleep"], env=ENV, stdout=subprocess.PIPE)
-    expected = b'sleeping\n'
-    assert proc.stdout.read(len(expected)) == expected
-    proc.terminate()
-    assert proc.wait() in [-signal.SIGTERM, 128 + signal.SIGTERM]
+@skipIf(not GRAALPY, "GraalPy-only native weakref shutdown test")
+def test_native_weakref_shutdown_skips_c_retained_object():
+    module = compile_module_from_string(textwrap.dedent("""
+        #include "Python.h"
+        #include "structmember.h"
+        #include <stddef.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+
+        typedef struct {
+            PyObject_HEAD
+            PyObject *weakreflist;
+            int id;
+        } NativeWeakRefObject;
+
+        static PyObject *kept_alive;
+        static PyTypeObject NativeWeakRefType;
+
+        static void write_marker(const char *contents) {
+            const char *marker_path = getenv("GR50212_DEALLOC_MARKER");
+            if (marker_path != NULL) {
+                FILE *marker = fopen(marker_path, "a");
+                if (marker != NULL) {
+                    fputs(contents, marker);
+                    fclose(marker);
+                }
+            }
+        }
+
+        static PyObject *new_native_weakref(int id) {
+            NativeWeakRefObject *obj = (NativeWeakRefObject *)PyObject_CallNoArgs((PyObject *)&NativeWeakRefType);
+            if (obj == NULL) {
+                return NULL;
+            }
+            obj->id = id;
+            return (PyObject *)obj;
+        }
+
+        static void NativeWeakRef_dealloc(NativeWeakRefObject *self) {
+            write_marker(self->id == 1 ? "deallocated:held\\n" : "deallocated:free\\n");
+            if (self->weakreflist != NULL) {
+                PyObject_ClearWeakRefs((PyObject *)self);
+            }
+            Py_TYPE(self)->tp_free((PyObject *)self);
+        }
+
+        static PyTypeObject NativeWeakRefType = {
+            PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "native_weakref_shutdown_reproducer_gr50212.NativeWeakRef",
+            .tp_basicsize = sizeof(NativeWeakRefObject),
+            .tp_dealloc = (destructor)NativeWeakRef_dealloc,
+            .tp_flags = Py_TPFLAGS_DEFAULT,
+            .tp_new = PyType_GenericNew,
+            .tp_weaklistoffset = offsetof(NativeWeakRefObject, weakreflist),
+        };
+
+        static PyObject *hold(PyObject *self, PyObject *Py_UNUSED(ignored)) {
+            Py_CLEAR(kept_alive);
+            kept_alive = new_native_weakref(1);
+            if (kept_alive == NULL) {
+                return NULL;
+            }
+            write_marker("created:held\\n");
+            return Py_NewRef(kept_alive);
+        }
+
+        static PyObject *make(PyObject *self, PyObject *Py_UNUSED(ignored)) {
+            PyObject *obj = new_native_weakref(2);
+            if (obj == NULL) {
+                return NULL;
+            }
+            write_marker("created:free\\n");
+            return obj;
+        }
+
+        static PyMethodDef methods[] = {
+            {"hold", hold, METH_NOARGS, ""},
+            {"make", make, METH_NOARGS, ""},
+            {NULL, NULL, 0, NULL},
+        };
+
+        static PyModuleDef module = {
+            PyModuleDef_HEAD_INIT,
+            "native_weakref_shutdown_reproducer_gr50212",
+            "",
+            -1,
+            methods,
+            NULL, NULL, NULL, NULL
+        };
+
+        PyMODINIT_FUNC PyInit_native_weakref_shutdown_reproducer_gr50212(void) {
+            if (PyType_Ready(&NativeWeakRefType) < 0) {
+                return NULL;
+            }
+            PyObject *m = PyModule_Create(&module);
+            if (m == NULL) {
+                return NULL;
+            }
+            Py_INCREF(&NativeWeakRefType);
+            if (PyModule_AddObject(m, "NativeWeakRef", (PyObject *)&NativeWeakRefType) < 0) {
+                Py_DECREF(&NativeWeakRefType);
+                Py_DECREF(m);
+                return NULL;
+            }
+            return m;
+        }
+        """), "native_weakref_shutdown_reproducer_gr50212")
+    module_dir = str(Path(module.__file__).parent)
+    args = [
+        sys.executable,
+        '--experimental-options',
+        '--python.EnableDebuggingBuiltins',
+    ]
+    code = textwrap.dedent("""
+        import gc
+        import weakref
+        import native_weakref_shutdown_reproducer_gr50212
+
+        held = native_weakref_shutdown_reproducer_gr50212.hold()
+        free = native_weakref_shutdown_reproducer_gr50212.make()
+        held_wr = weakref.ref(held)
+        free_wr = weakref.ref(free)
+        type_wr = weakref.ref(native_weakref_shutdown_reproducer_gr50212.NativeWeakRef)
+        print(type(held).__name__, type(free).__name__, flush=True)
+        del free
+        for _ in range(3):
+            gc.collect()
+        print(held_wr() is not None, free_wr() is None, flush=True)
+    """)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = module_dir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        marker = Path(tmpdir) / "deallocated"
+        env["GR50212_DEALLOC_MARKER"] = str(marker)
+        proc = subprocess.run([*args, '-c', code], env=env, capture_output=True, text=True, check=True)
+        assert proc.stdout.splitlines() == ["NativeWeakRef NativeWeakRef", "True True"]
+        assert marker.read_text().splitlines() == ["created:held", "created:free", "deallocated:free"]

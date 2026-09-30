@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,12 +47,13 @@ import static com.oracle.graal.python.nodes.ErrorMessages.TOO_LARGE_TO_CONVERT_T
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.truffle.PythonArithmeticTypes;
+import com.oracle.graal.python.nodes.truffle.PythonIntegerAndFloatTypes;
 import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.graal.python.util.TimeUtils;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
@@ -66,7 +67,7 @@ import com.oracle.truffle.api.nodes.Node;
 /**
  * Equivalent of {@code _PyTime_FromObject} from CPython.
  */
-@TypeSystemReference(PythonArithmeticTypes.class)
+@TypeSystemReference(PythonIntegerAndFloatTypes.class)
 @GenerateInline
 @GenerateCached(false)
 public abstract class PyTimeFromObjectNode extends PNodeWithContext {
@@ -80,12 +81,16 @@ public abstract class PyTimeFromObjectNode extends PNodeWithContext {
 
     public abstract long execute(VirtualFrame frame, Node inliningTarget, Object obj, RoundType round, long unitToNs);
 
+    // Like _PyTime_FromSecondsObject
+    public final long fromSeconds(VirtualFrame frame, Node inliningTarget, Object obj, RoundType round) {
+        return execute(frame, inliningTarget, obj, round, TimeUtils.SEC_TO_NS);
+    }
+
     @Specialization
     static long doDouble(Node inliningTarget, double d, RoundType round, long unitToNs,
-                    @Shared @Cached PRaiseNode.Lazy raiseNode) {
-        // Implements _PyTime_FromDouble, rounding mode (HALF_UP) is hard-coded for now
+                    @Shared @Cached PRaiseNode raiseNode) {
         if (Double.isNaN(d)) {
-            throw raiseNode.get(inliningTarget).raise(ValueError, INVALID_VALUE_NAN);
+            throw raiseNode.raise(inliningTarget, ValueError, INVALID_VALUE_NAN);
         }
 
         double value = d * unitToNs;
@@ -102,25 +107,25 @@ public abstract class PyTimeFromObjectNode extends PNodeWithContext {
                 break;
         }
         if (value < Long.MIN_VALUE || value > Long.MAX_VALUE) {
-            throw raiseTimeOverflow(raiseNode.get(inliningTarget));
+            throw raiseTimeOverflow(inliningTarget, raiseNode);
         }
         return (long) value;
     }
 
     @Specialization
     static long doLong(Node inliningTarget, long l, @SuppressWarnings("unused") RoundType round, long unitToNs,
-                    @Shared @Cached PRaiseNode.Lazy raiseNode) {
+                    @Shared @Cached PRaiseNode raiseNode) {
         try {
             return PythonUtils.multiplyExact(l, unitToNs);
         } catch (OverflowException e) {
-            throw raiseTimeOverflow(raiseNode.get(inliningTarget));
+            throw raiseTimeOverflow(inliningTarget, raiseNode);
         }
     }
 
     @Specialization
     static long doOther(VirtualFrame frame, Node inliningTarget, Object value, RoundType round, long unitToNs,
                     @Cached CastToJavaDoubleNode castToDouble,
-                    @Exclusive @Cached PRaiseNode.Lazy raiseNode,
+                    @Exclusive @Cached PRaiseNode raiseNode,
                     @Cached PyLongAsLongAndOverflowNode asLongNode) {
         try {
             return doDouble(inliningTarget, castToDouble.execute(inliningTarget, value), round, unitToNs, raiseNode);
@@ -128,12 +133,12 @@ public abstract class PyTimeFromObjectNode extends PNodeWithContext {
             try {
                 return doLong(inliningTarget, asLongNode.execute(frame, inliningTarget, value), round, unitToNs, raiseNode);
             } catch (OverflowException e1) {
-                throw raiseTimeOverflow(raiseNode.get(inliningTarget));
+                throw raiseTimeOverflow(inliningTarget, raiseNode);
             }
         }
     }
 
-    private static PException raiseTimeOverflow(PRaiseNode raise) {
-        throw raise.raise(PythonBuiltinClassType.OverflowError, TOO_LARGE_TO_CONVERT_TO, "timestamp", "long");
+    private static PException raiseTimeOverflow(Node inliningTarget, PRaiseNode raise) {
+        throw raise.raise(inliningTarget, PythonBuiltinClassType.OverflowError, TOO_LARGE_TO_CONVERT_TO, "timestamp", "long");
     }
 }

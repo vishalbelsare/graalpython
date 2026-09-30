@@ -1,100 +1,124 @@
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_cancel
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_cancelled
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_already_cancelled
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_already_failed
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_already_successful
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_raises
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_raises_already_succeeded
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_with_cancel
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_with_exception
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_done_callback_with_result
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_exception_with_success
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_exception_with_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_multiple_set_exception
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_multiple_set_result
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_repr
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_result_with_cancel
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_result_with_success
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_result_with_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.FutureTests.test_running
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkAsCompletedTest.test_correct_timeout_exception_msg
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolExecutorTest.test_idle_process_reuse_multiple
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolExecutorTest.test_idle_process_reuse_one
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolExecutorTest.test_max_workers_negative
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolExecutorTest.test_max_workers_too_large
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolExecutorTest.test_no_stale_references
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolShutdownTest.test_hang_gh83386
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkProcessPoolShutdownTest.test_run_after_shutdown
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkserverProcessPoolExecutorTest.test_max_workers_too_large
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolForkserverProcessPoolExecutorTest.test_no_stale_references
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnAsCompletedTest.test_correct_timeout_exception_msg
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnAsCompletedTest.test_duplicate_futures
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnAsCompletedTest.test_no_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnAsCompletedTest.test_zero_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_crash_at_task_unpickle
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_error_at_task_pickle
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_error_at_task_unpickle
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_error_during_func_exec_on_worker
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_error_during_result_pickle_on_worker
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_error_during_result_unpickle_in_result_handler
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_exit_at_task_unpickle
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_exit_during_func_exec_on_worker
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_exit_during_result_pickle_on_worker
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_exit_during_result_unpickle_in_result_handler
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnExecutorDeadlockTest.test_shutdown_deadlock_pickle
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnFailingInitializerTest.test_initializer
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnInitializerTest.test_initializer
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_idle_process_reuse_multiple
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_killed_child
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_map
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_map_chunksize
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_map_exception
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_map_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_max_workers_negative
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_max_workers_too_large
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_no_stale_references
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_saturation
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_shutdown_race_issue12456
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_submit
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_submit_keyword
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolExecutorTest.test_traceback
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_cancel_futures
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_context_manager_shutdown
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_del_shutdown
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_hang_gh83386
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_hang_gh94440
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_hang_issue12364
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_processes_terminate
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_run_after_shutdown
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_shutdown_no_wait
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnProcessPoolShutdownTest.test_submit_after_interpreter_shutdown
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_20369
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_all_completed
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_first_completed
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_first_completed_some_already_completed
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_first_exception
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_first_exception_one_already_failed
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_first_exception_some_already_complete
-*graalpython.lib-python.3.test.test_concurrent_futures.ProcessPoolSpawnWaitTest.test_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolAsCompletedTest.test_correct_timeout_exception_msg
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolAsCompletedTest.test_duplicate_futures
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolAsCompletedTest.test_no_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolAsCompletedTest.test_zero_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_default_workers
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_executor_map_current_future_cancel
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_idle_thread_reuse
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_map
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_map_exception
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_map_submits_without_iteration
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_map_timeout
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_max_workers_negative
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_no_stale_references
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_saturation
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_shutdown_race_issue12456
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_submit
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolExecutorTest.test_submit_keyword
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolFailingInitializerTest.test_initializer
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolInitializerTest.test_initializer
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolShutdownTest.test_cancel_futures
-*graalpython.lib-python.3.test.test_concurrent_futures.ThreadPoolShutdownTest.test_context_manager_shutdown
+test.test_concurrent_futures.test_as_completed.ProcessPoolSpawnAsCompletedTest.test_correct_timeout_exception_msg @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64
+test.test_concurrent_futures.test_as_completed.ProcessPoolSpawnAsCompletedTest.test_duplicate_futures @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_as_completed.ProcessPoolSpawnAsCompletedTest.test_future_times_out @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_as_completed.ProcessPoolSpawnAsCompletedTest.test_no_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_as_completed.ThreadPoolAsCompletedTest.test_correct_timeout_exception_msg @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_as_completed.ThreadPoolAsCompletedTest.test_duplicate_futures @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_as_completed.ThreadPoolAsCompletedTest.test_future_times_out @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_as_completed.ThreadPoolAsCompletedTest.test_no_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+# Transiently times out GR-65714
+!test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_crash_at_task_unpickle
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_crash_big_data @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_crash_during_func_exec_on_worker @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_crash_during_result_pickle_on_worker @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_error_at_task_pickle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_error_at_task_unpickle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_error_during_func_exec_on_worker @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_error_during_result_pickle_on_worker @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_error_during_result_unpickle_in_result_handler @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_exit_at_task_unpickle @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_exit_during_func_exec_on_worker @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_exit_during_result_pickle_on_worker @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_exit_during_result_unpickle_in_result_handler @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+!test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_gh105829_should_not_deadlock_if_wakeup_pipe_full
+test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_shutdown_deadlock @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+!test.test_concurrent_futures.test_deadlock.ProcessPoolSpawnExecutorDeadlockTest.test_shutdown_deadlock_pickle
+!test.test_concurrent_futures.test_future.FutureTests.test_cancel
+!test.test_concurrent_futures.test_future.FutureTests.test_cancelled
+test.test_concurrent_futures.test_future.FutureTests.test_done @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_already_cancelled @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_already_failed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_already_successful @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_raises @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_raises_already_succeeded @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_with_cancel @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_with_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_done_callback_with_result @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_exception_with_success @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_exception_with_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_multiple_set_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_multiple_set_result @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_result_with_cancel @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_result_with_success @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_result_with_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_future.FutureTests.test_running @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_init.ProcessPoolSpawnFailingInitializerTest.test_initializer @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_init.ProcessPoolSpawnInitializerTest.test_initializer @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_init.ThreadPoolFailingInitializerTest.test_initializer @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_init.ThreadPoolInitializerTest.test_initializer @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_idle_process_reuse_multiple @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+# Transiently ends up with 2 processes
+!test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_idle_process_reuse_one
+!test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_killed_child
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_map @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_map_chunksize @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_map_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_map_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_max_tasks_early_shutdown @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_max_tasks_per_child @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_max_tasks_per_child_defaults_to_spawn_context @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_max_workers_negative @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_max_workers_too_large @ win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_python_finalization_error @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_saturation @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_shutdown_race_issue12456 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_submit @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_submit_keyword @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_swallows_falsey_exceptions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_process_pool.ProcessPoolSpawnProcessPoolExecutorTest.test_traceback @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_cancel_futures @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_context_manager_shutdown @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+# Transiently times out GR-52666
+!test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_del_shutdown
+!test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_hang_gh94440
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_hang_issue12364 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_processes_terminate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_run_after_shutdown @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_shutdown_gh_132969_case_1 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_shutdown_gh_132969_case_2 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_shutdown_no_wait @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+# Transiently times out GR-52666
+!test.test_concurrent_futures.test_shutdown.ProcessPoolSpawnProcessPoolShutdownTest.test_submit_after_interpreter_shutdown
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_cancel_futures @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_context_manager_shutdown @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+!test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_del_shutdown
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_hang_gh94440 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_hang_issue12364 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_run_after_shutdown @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_shutdown_no_wait @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_submit_after_interpreter_shutdown @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+# Transiently times out GR-52666
+!test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_thread_names_assigned
+!test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_thread_names_default
+test.test_concurrent_futures.test_shutdown.ThreadPoolShutdownTest.test_threads_terminate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_default_workers @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_executor_map_current_future_cancel @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+!test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_idle_thread_reuse
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_map @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_map_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_map_submits_without_iteration @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+!test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_map_timeout
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_max_workers_negative @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_saturation @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_shutdown_race_issue12456 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_submit @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_submit_keyword @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_thread_pool.ThreadPoolExecutorTest.test_swallows_falsey_exceptions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_20369 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_all_completed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_first_completed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_first_completed_some_already_completed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_first_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_first_exception_one_already_failed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_first_exception_some_already_complete @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ProcessPoolSpawnWaitTest.test_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_20369 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_all_completed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_first_completed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_first_completed_some_already_completed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_first_exception @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_first_exception_one_already_failed @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_first_exception_some_already_complete @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_pending_calls_race @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_concurrent_futures.test_wait.ThreadPoolWaitTests.test_timeout @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

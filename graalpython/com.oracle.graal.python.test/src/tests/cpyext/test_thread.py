@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,17 +37,27 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import threading
+import unittest
+import sys
 
 from . import CPyExtTestCase, CPyExtFunction, unhandled_error_compare, CPyExtType
-
-__dir__ = __file__.rpartition("/")[0]
 
 
 class TestPyThread(CPyExtTestCase):
 
-    def compile_module(self, name):
-        type(self).mro()[1].__dict__["test_%s" % name].create_module(name)
-        super(TestPyThread, self).compile_module(name)
+    test_PyThread_get_thread_ident = CPyExtFunction(
+        lambda args: threading.get_ident(),
+        lambda: (tuple(),),
+        code='''
+        unsigned long wrap_PyThread_get_thread_ident(PyObject *ignored) {
+            return PyThread_get_thread_ident();
+        }
+        ''',
+        resultspec="k",
+        argspec="",
+        arguments=["PyObject* ignored"],
+        callfunction="wrap_PyThread_get_thread_ident",
+    )
 
     # TODO test that it's really thread-local
     test_PyThread_tss = CPyExtFunction(
@@ -86,20 +96,44 @@ class TestPyThread(CPyExtTestCase):
     )
 
 
-class TestNativeThread:
+@unittest.skipIf(sys.platform == 'win32', "Needs pthread")
+class TestNativeThread(unittest.TestCase):
     def test_register_new_thread(self):
         TestThread = CPyExtType(
             name="TestThread",
             includes="#include <pthread.h>",
             code=r'''
-            void* thread_entrypoint(void* arg) {
-                PyObject* callable = (PyObject*)arg;
+            void test_attach_detach(PyObject *callable) {
+                // This check is important not just to check that the function works without the thread attached,
+                // but also because the thread attaching logic in it can break the following PyGILState_Ensure call
+                if (PyGILState_Check()) {
+                    PyErr_SetString(PyExc_RuntimeError, "Thread shouldn't be holding the GIL at this point");
+                    PyErr_WriteUnraisable(NULL);
+                    return;
+                }
                 PyGILState_STATE gstate;
                 gstate = PyGILState_Ensure();
+                if (!PyGILState_Check()) {
+                    PyErr_SetString(PyExc_RuntimeError, "GIL not acquired");
+                    PyErr_WriteUnraisable(NULL);
+                    return;
+                }
                 if (!PyObject_CallNoArgs(callable)) {
                     PyErr_WriteUnraisable(callable);
                 }
+                if (PyThreadState_Get() == NULL || PyThreadState_Get() == NULL) {
+                    PyErr_WriteUnraisable(callable);
+                }
                 PyGILState_Release(gstate);
+                if (PyGILState_Check()) {
+                    PyErr_SetString(PyExc_RuntimeError, "GIL not released");
+                    PyErr_WriteUnraisable(NULL);
+                }
+            }
+            void* thread_entrypoint(void* arg) {
+                test_attach_detach((PyObject*)arg);
+                test_attach_detach((PyObject*)arg);
+                test_attach_detach((PyObject*)arg);
                 return NULL;
             }
             PyObject* run_in_thread(PyObject* self, PyObject* callable) {

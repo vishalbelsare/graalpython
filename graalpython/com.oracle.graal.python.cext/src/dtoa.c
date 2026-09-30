@@ -1,42 +1,7 @@
-/*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+/* Copyright (c) 2024, 2026, Oracle and/or its affiliates.
+ * Copyright (C) 1996-2024 Python Software Foundation
  *
- * The Universal Permissive License (UPL), Version 1.0
- *
- * Subject to the condition set forth below, permission is hereby granted to any
- * person obtaining a copy of this software, associated documentation and/or
- * data (collectively the "Software"), free of charge and under any and all
- * copyright rights in the Software, and any and all patent rights owned or
- * freely licensable by each licensor hereunder covering either (i) the
- * unmodified Software as contributed to or provided by such licensor, or (ii)
- * the Larger Works (as defined below), to deal in both
- *
- * (a) the Software, and
- *
- * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
- * one is included with the Software each a "Larger Work" to which the Software
- * is contributed by such licensors),
- *
- * without restriction, including without limitation the rights to copy, create
- * derivative works of, display, perform, and distribute the Software and make,
- * use, sell, offer for sale, import, export, have made, and have sold the
- * Software and the Larger Work(s), and to sublicense the foregoing rights on
- * either these or other terms.
- *
- * This license is subject to the following condition:
- *
- * The above copyright notice and either this complete permission notice or at a
- * minimum a reference to the UPL must be included in all copies or substantial
- * portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
  */
 /****************************************************************
  *
@@ -112,7 +77,7 @@
 /* Please send bug reports for the original dtoa.c code to David M. Gay (dmg
  * at acm dot org, with " at " changed at "@" and " dot " changed to ".").
  * Please report bugs for this modified version using the Python issue tracker
- * (http://bugs.python.org). */
+ * as detailed at (https://devguide.python.org/triage/issue-tracker/). */
 
 /* On a machine with IEEE extended-precision registers, it is
  * necessary to specify double-precision (53-bit) rounding precision
@@ -158,11 +123,13 @@
 /* Linking of Python's #defines to Gay's #defines starts here. */
 
 #include "Python.h"
-#include "pycore_dtoa.h"
+#include "pycore_dtoa.h"          // _PY_SHORT_FLOAT_REPR
+#include "pycore_pystate.h"       // _PyInterpreterState_GET()
+#include <stdlib.h>               // exit()
 
-/* if PY_NO_SHORT_FLOAT_REPR is defined, then don't even try to compile
+/* if _PY_SHORT_FLOAT_REPR == 0, then don't even try to compile
    the following code */
-#ifndef PY_NO_SHORT_FLOAT_REPR
+#if _PY_SHORT_FLOAT_REPR == 1
 
 #include "float.h"
 
@@ -195,7 +162,7 @@
 #endif
 
 
-typedef uint32_t ULong;
+// ULong is defined in pycore_dtoa.h.
 typedef int32_t Long;
 typedef uint64_t ULLong;
 
@@ -208,16 +175,6 @@ typedef uint64_t ULLong;
 
 #ifdef DEBUG
 #define Bug(x) {fprintf(stderr, "%s\n", x); exit(1);}
-#endif
-
-#ifndef PRIVATE_MEM
-#define PRIVATE_MEM 2304
-#endif
-#define PRIVATE_mem ((PRIVATE_MEM+sizeof(double)-1)/sizeof(double))
-static double private_mem[PRIVATE_mem], *pmem_next = private_mem;
-
-#ifdef __cplusplus
-extern "C" {
 #endif
 
 typedef union { double d; ULong L[2]; } U;
@@ -312,17 +269,10 @@ typedef union { double d; ULong L[2]; } U;
 #endif
 #endif /*Flt_Rounds*/
 
-#undef Flt_Rounds // GR-46522
-#define Flt_Rounds 1
 #define Rounding Flt_Rounds
 
 #define Big0 (Frac_mask1 | Exp_msk1*(DBL_MAX_EXP+Bias-1))
 #define Big1 0xffffffff
-
-/* Standard NaN used by _Py_dg_stdnan. */
-
-#define NAN_WORD0 0x7ff80000
-#define NAN_WORD1 0
 
 /* Bits of the representation of positive infinity. */
 
@@ -338,8 +288,6 @@ BCinfo {
 };
 
 #define FFFFFFFF 0xffffffffUL
-
-#define Kmax 7
 
 /* struct Bigint is used to represent arbitrary-precision integers.  These
    integers are stored in sign-magnitude format, with the magnitude stored as
@@ -363,16 +311,10 @@ BCinfo {
        significant (x[0]) to most significant (x[wds-1]).
 */
 
-struct
-Bigint {
-    struct Bigint *next;
-    int k, maxwds, sign, wds;
-    ULong x[1];
-};
-
+// struct Bigint is defined in pycore_dtoa.h.
 typedef struct Bigint Bigint;
 
-#ifndef Py_USING_MEMORY_DEBUGGER
+#if !defined(Py_GIL_DISABLED) && !defined(Py_USING_MEMORY_DEBUGGER)
 
 /* Memory management: memory is allocated from, and returned to, Kmax+1 pools
    of memory, where pool k (0 <= k <= Kmax) is for Bigints b with b->maxwds ==
@@ -393,7 +335,9 @@ typedef struct Bigint Bigint;
    Bfree to PyMem_Free.  Investigate whether this has any significant
    performance on impact. */
 
-static Bigint *freelist[Kmax+1];
+#define freelist interp->dtoa.freelist
+#define private_mem interp->dtoa.preallocated
+#define pmem_next interp->dtoa.preallocated_next
 
 /* Allocate space for a Bigint with up to 1<<k digits */
 
@@ -403,14 +347,17 @@ Balloc(int k)
     int x;
     Bigint *rv;
     unsigned int len;
+    PyInterpreterState *interp = _PyInterpreterState_GET();
 
-    if (k <= Kmax && (rv = freelist[k]))
+    if (k <= Bigint_Kmax && (rv = freelist[k]))
         freelist[k] = rv->next;
     else {
         x = 1 << k;
         len = (sizeof(Bigint) + (x-1)*sizeof(ULong) + sizeof(double) - 1)
             /sizeof(double);
-        if (k <= Kmax && pmem_next - private_mem + len <= (Py_ssize_t)PRIVATE_mem) {
+        if (k <= Bigint_Kmax &&
+            pmem_next - private_mem + len <= (Py_ssize_t)Bigint_PREALLOC_SIZE
+        ) {
             rv = (Bigint*)pmem_next;
             pmem_next += len;
         }
@@ -432,14 +379,19 @@ static void
 Bfree(Bigint *v)
 {
     if (v) {
-        if (v->k > Kmax)
+        if (v->k > Bigint_Kmax)
             FREE((void*)v);
         else {
+            PyInterpreterState *interp = _PyInterpreterState_GET();
             v->next = freelist[v->k];
             freelist[v->k] = v;
         }
     }
 }
+
+#undef pmem_next
+#undef private_mem
+#undef freelist
 
 #else
 
@@ -481,7 +433,7 @@ Bfree(Bigint *v)
     }
 }
 
-#endif /* Py_USING_MEMORY_DEBUGGER */
+#endif /* !defined(Py_GIL_DISABLED) && !defined(Py_USING_MEMORY_DEBUGGER) */
 
 #define Bcopy(x,y) memcpy((char *)&x->sign, (char *)&y->sign,   \
                           y->wds*sizeof(Long) + 2*sizeof(int))
@@ -719,10 +671,6 @@ mult(Bigint *a, Bigint *b)
 
 #ifndef Py_USING_MEMORY_DEBUGGER
 
-/* p5s is a linked list of powers of 5 of the form 5**(2**i), i >= 2 */
-
-static Bigint *p5s;
-
 /* multiply the Bigint b by 5**k.  Returns a pointer to the result, or NULL on
    failure; if the returned pointer is distinct from b then the original
    Bigint b will have been Bfree'd.   Ignores the sign of b. */
@@ -730,9 +678,16 @@ static Bigint *p5s;
 static Bigint *
 pow5mult(Bigint *b, int k)
 {
-    Bigint *b1, *p5, *p51;
+    Bigint *b1, *p5, **p5s;
     int i;
     static const int p05[3] = { 5, 25, 125 };
+
+    // For double-to-string conversion, the maximum value of k is limited by
+    // DBL_MAX_10_EXP (308), the maximum decimal base-10 exponent for binary64.
+    // For string-to-double conversion, the extreme case is constrained by our
+    // hardcoded exponent limit before we underflow of -512, adjusted by
+    // STRTOD_DIGLIM-DBL_DIG-1, giving a maximum of k=535.
+    assert(0 <= k && k < 1024);
 
     if ((i = k & 3)) {
         b = multadd(b, p05[i-1], 0);
@@ -742,18 +697,12 @@ pow5mult(Bigint *b, int k)
 
     if (!(k >>= 2))
         return b;
-    p5 = p5s;
-    if (!p5) {
-        /* first time */
-        p5 = i2b(625);
-        if (p5 == NULL) {
-            Bfree(b);
-            return NULL;
-        }
-        p5s = p5;
-        p5->next = 0;
-    }
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    p5s = interp->dtoa.p5s;
     for(;;) {
+        assert(p5s != interp->dtoa.p5s + Bigint_Pow5size);
+        p5 = *p5s;
+        p5s++;
         if (k & 1) {
             b1 = mult(b, p5);
             Bfree(b);
@@ -763,17 +712,6 @@ pow5mult(Bigint *b, int k)
         }
         if (!(k >>= 1))
             break;
-        p51 = p5->next;
-        if (!p51) {
-            p51 = mult(p5,p5);
-            if (p51 == NULL) {
-                Bfree(b);
-                return NULL;
-            }
-            p51->next = 0;
-            p5->next = p51;
-        }
-        p5 = p51;
     }
     return b;
 }
@@ -1446,35 +1384,6 @@ bigcomp(U *rv, const char *s0, BCinfo *bc)
     return 0;
 }
 
-/* Return a 'standard' NaN value.
-
-   There are exactly two quiet NaNs that don't arise by 'quieting' signaling
-   NaNs (see IEEE 754-2008, section 6.2.1).  If sign == 0, return the one whose
-   sign bit is cleared.  Otherwise, return the one whose sign bit is set.
-*/
-
-double
-_Py_dg_stdnan(int sign)
-{
-    U rv;
-    word0(&rv) = NAN_WORD0;
-    word1(&rv) = NAN_WORD1;
-    if (sign)
-        word0(&rv) |= Sign_bit;
-    return dval(&rv);
-}
-
-/* Return positive or negative infinity, according to the given sign (0 for
- * positive infinity, 1 for negative infinity). */
-
-double
-_Py_dg_infinity(int sign)
-{
-    U rv;
-    word0(&rv) = POSINF_WORD0;
-    word1(&rv) = POSINF_WORD1;
-    return sign ? -dval(&rv) : dval(&rv);
-}
 
 double
 _Py_dg_strtod(const char *s00, char **se)
@@ -2894,8 +2803,44 @@ _Py_dg_dtoa(double dd, int mode, int ndigits,
         _Py_dg_freedtoa(s0);
     return NULL;
 }
-#ifdef __cplusplus
-}
-#endif
 
-#endif  /* PY_NO_SHORT_FLOAT_REPR */
+#endif  // _PY_SHORT_FLOAT_REPR == 1
+
+PyStatus
+_PyDtoa_Init(PyInterpreterState *interp)
+{
+#if _PY_SHORT_FLOAT_REPR == 1 && !defined(Py_USING_MEMORY_DEBUGGER)
+    Bigint **p5s = interp->dtoa.p5s;
+
+    // 5**4 = 625
+    Bigint *p5 = i2b(625);
+    if (p5 == NULL) {
+        return PyStatus_NoMemory();
+    }
+    p5s[0] = p5;
+
+    // compute 5**8, 5**16, 5**32, ..., 5**512
+    for (Py_ssize_t i = 1; i < Bigint_Pow5size; i++) {
+        p5 = mult(p5, p5);
+        if (p5 == NULL) {
+            return PyStatus_NoMemory();
+        }
+        p5s[i] = p5;
+    }
+
+#endif
+    return PyStatus_Ok();
+}
+
+void
+_PyDtoa_Fini(PyInterpreterState *interp)
+{
+#if _PY_SHORT_FLOAT_REPR == 1 && !defined(Py_USING_MEMORY_DEBUGGER)
+    Bigint **p5s = interp->dtoa.p5s;
+    for (Py_ssize_t i = 0; i < Bigint_Pow5size; i++) {
+        Bigint *p5 = p5s[i];
+        p5s[i] = NULL;
+        Bfree(p5);
+    }
+#endif
+}

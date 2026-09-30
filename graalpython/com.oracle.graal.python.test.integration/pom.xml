@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
 DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 
 The Universal Permissive License (UPL), Version 1.0
@@ -64,7 +64,7 @@ Additionally, one can change the polyglot artifacts version with
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <com.oracle.graal.python.test.polyglot.version>24.0.0-dev</com.oracle.graal.python.test.polyglot.version>
+        <com.oracle.graal.python.test.polyglot.version>25.3.4.1</com.oracle.graal.python.test.polyglot.version>
     </properties>
 
     <build>
@@ -87,6 +87,7 @@ Additionally, one can change the polyglot artifacts version with
                     </dependency>
                 </dependencies>
                 <configuration>
+                    <trimStackTrace>false</trimStackTrace>
                     <testSourceDirectory>src</testSourceDirectory>
                     <testClassesDirectory>${project.build.outputDirectory}</testClassesDirectory>
                     <includes>
@@ -98,6 +99,17 @@ Additionally, one can change the polyglot artifacts version with
     </build>
 
     <profiles>
+        <profile>
+            <id>Version from suite</id>
+            <activation>
+                <property>
+                    <name>env.GRAALPY_VERSION</name>
+                </property>
+            </activation>
+            <properties>
+                <com.oracle.graal.python.test.polyglot.version>${env.GRAALPY_VERSION}</com.oracle.graal.python.test.polyglot.version>
+            </properties>
+        </profile>
         <profile>
             <id>Custom central repo</id>
             <activation>
@@ -138,6 +150,18 @@ Additionally, one can change the polyglot artifacts version with
                 </repository>
             </repositories>
         </profile>
+        <profile>
+            <id>isolate</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.graalvm.polyglot</groupId>
+                    <artifactId>python-isolate</artifactId>
+                    <version>${com.oracle.graal.python.test.polyglot.version}</version>
+                    <scope>runtime</scope>
+                    <type>pom</type>
+                </dependency>
+            </dependencies>
+        </profile>
     </profiles>
 
     <dependencies>
@@ -148,15 +172,7 @@ Additionally, one can change the polyglot artifacts version with
         </dependency>
         <dependency>
             <groupId>org.graalvm.polyglot</groupId>
-            <artifactId>python-community</artifactId>
-            <version>${com.oracle.graal.python.test.polyglot.version}</version>
-            <scope>runtime</scope>
-            <type>pom</type>
-        </dependency>
-        <dependency>
-            <!-- See MultiContextTest#testSharingWithStruct -->
-            <groupId>org.graalvm.polyglot</groupId>
-            <artifactId>llvm-community</artifactId>
+            <artifactId>python</artifactId>
             <version>${com.oracle.graal.python.test.polyglot.version}</version>
             <scope>runtime</scope>
             <type>pom</type>
@@ -164,7 +180,7 @@ Additionally, one can change the polyglot artifacts version with
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
-            <version>4.12</version>
+            <version>4.13.2</version>
         </dependency>
     </dependencies>
 </project>

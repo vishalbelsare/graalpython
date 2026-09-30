@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.graal.python.compiler;
 
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.codePointsToTruffleString;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
@@ -65,13 +66,18 @@ import com.oracle.graal.python.pegparser.sst.PatternTy;
 import com.oracle.graal.python.pegparser.sst.SSTNode;
 import com.oracle.graal.python.pegparser.sst.SSTreeVisitor;
 import com.oracle.graal.python.pegparser.sst.StmtTy;
+import com.oracle.graal.python.pegparser.sst.StmtTy.TypeAlias;
 import com.oracle.graal.python.pegparser.sst.TypeIgnoreTy;
+import com.oracle.graal.python.pegparser.sst.TypeParamTy.ParamSpec;
+import com.oracle.graal.python.pegparser.sst.TypeParamTy.TypeVar;
+import com.oracle.graal.python.pegparser.sst.TypeParamTy.TypeVarTuple;
 import com.oracle.graal.python.pegparser.sst.WithItemTy;
 import com.oracle.graal.python.runtime.formatting.ComplexFormatter;
 import com.oracle.graal.python.runtime.formatting.FloatFormatter;
 import com.oracle.graal.python.runtime.formatting.InternalFormat.Spec;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 public class Unparser implements SSTreeVisitor<Void> {
     public static TruffleString unparse(SSTNode node) {
@@ -79,17 +85,17 @@ public class Unparser implements SSTreeVisitor<Void> {
     }
 
     private static TruffleString unparse(SSTNode node, int level) {
-        TruffleStringBuilder builder = TruffleStringBuilder.create(TS_ENCODING);
+        TruffleStringBuilderUTF32 builder = TruffleStringBuilder.createUTF32();
         node.accept(new Unparser(builder, level));
         return builder.toStringUncached();
     }
 
-    private Unparser(TruffleStringBuilder builder, int level) {
+    private Unparser(TruffleStringBuilderUTF32 builder, int level) {
         this.builder = builder;
         this.level = level;
     }
 
-    private TruffleStringBuilder builder;
+    private TruffleStringBuilderUTF32 builder;
     private int level;
 
     private static final int PR_TUPLE = 0;
@@ -155,8 +161,8 @@ public class Unparser implements SSTreeVisitor<Void> {
     }
 
     private void appendFStringElement(ExprTy e, boolean isFormatSpec) {
-        if (e instanceof ExprTy.Constant) {
-            appendFString(((ExprTy.Constant) e).value.getRaw(TruffleString.class));
+        if (e instanceof ExprTy.Constant c) {
+            appendFString(codePointsToTruffleString(c.value.getCodePoints()));
         } else if (e instanceof ExprTy.JoinedStr) {
             appendJoinedStr((ExprTy.JoinedStr) e, isFormatSpec);
         } else if (e instanceof ExprTy.FormattedValue) {
@@ -167,8 +173,8 @@ public class Unparser implements SSTreeVisitor<Void> {
     }
 
     public TruffleString buildFStringBody(ExprTy[] values, boolean isFormatSpec) {
-        TruffleStringBuilder savedBuilder = builder;
-        builder = TruffleStringBuilder.create(TS_ENCODING);
+        TruffleStringBuilderUTF32 savedBuilder = builder;
+        builder = TruffleStringBuilder.createUTF32();
         for (int i = 0; i < values.length; i++) {
             appendFStringElement(values[i], isFormatSpec);
         }
@@ -536,8 +542,8 @@ public class Unparser implements SSTreeVisitor<Void> {
             case BOOLEAN:
                 appendStr(value.getBoolean() ? "True" : "False");
                 break;
-            case RAW:
-                appendStr(StringNodes.StringReprNode.getUncached().execute(value.getRaw(TruffleString.class)));
+            case CODEPOINTS:
+                appendStr(StringNodes.StringReprNode.getUncached().execute(codePointsToTruffleString(value.getCodePoints())));
                 break;
             case BIGINTEGER:
                 appendStr(value.getBigInteger().toString());
@@ -652,7 +658,7 @@ public class Unparser implements SSTreeVisitor<Void> {
                     conversion = "!s";
                     break;
                 default:
-                    throw PRaiseNode.getUncached().raise(PythonBuiltinClassType.SystemError, ErrorMessages.UNKNOWN_F_VALUE_CONVERSION_KIND);
+                    throw PRaiseNode.raiseStatic(null, PythonBuiltinClassType.SystemError, ErrorMessages.UNKNOWN_F_VALUE_CONVERSION_KIND);
             }
             appendStr(conversion);
         }
@@ -1057,6 +1063,11 @@ public class Unparser implements SSTreeVisitor<Void> {
     }
 
     @Override
+    public Void visit(StmtTy.TryStar node) {
+        throw new IllegalStateException("unknown expression kind");
+    }
+
+    @Override
     public Void visit(ExceptHandlerTy.ExceptHandler node) {
         throw new IllegalStateException("unknown expression kind");
     }
@@ -1089,5 +1100,25 @@ public class Unparser implements SSTreeVisitor<Void> {
     @Override
     public Void visit(StmtTy.Pass aThis) {
         throw new IllegalStateException("unknown expression kind");
+    }
+
+    @Override
+    public Void visit(TypeAlias node) {
+        throw new IllegalStateException("unknown AST node");
+    }
+
+    @Override
+    public Void visit(TypeVar node) {
+        throw new IllegalStateException("unknown AST node");
+    }
+
+    @Override
+    public Void visit(ParamSpec node) {
+        throw new IllegalStateException("unknown AST node");
+    }
+
+    @Override
+    public Void visit(TypeVarTuple node) {
+        throw new IllegalStateException("unknown AST node");
     }
 }

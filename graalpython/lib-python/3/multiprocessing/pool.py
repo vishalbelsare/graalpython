@@ -200,7 +200,8 @@ class Pool(object):
         self._initargs = initargs
 
         if processes is None:
-            processes = os.cpu_count() or 1
+            # GraalPy change: lower the number of processes
+            processes = __graalpython__.get_max_process_count()
         if processes < 1:
             raise ValueError("Number of processes must be at least 1")
         if maxtasksperchild is not None:
@@ -696,7 +697,7 @@ class Pool(object):
 
         if (not result_handler.is_alive()) and (len(cache) != 0):
             raise AssertionError(
-                "Cannot have cache with result_hander not alive")
+                "Cannot have cache with result_handler not alive")
 
         result_handler._state = TERMINATE
         change_notifier.put(None)
@@ -918,6 +919,30 @@ class IMapUnorderedIterator(IMapIterator):
 #
 #
 
+# GraalPy change: ThreadPool would still have used semaphore-based
+# multiprocessing lock. Use a threading lock to make thread pools work
+# on emulated posix backend
+class _ThreadPoolContext:
+
+    def __init__(self, ctx):
+        self._ctx = ctx
+
+    def __getattr__(self, name):
+        return getattr(self._ctx, name)
+
+    def get_context(self, method=None):
+        if method is None:
+            return self
+        return self._ctx.get_context(method)
+
+    def Lock(self):
+        return threading.Lock()
+
+    def SimpleQueue(self):
+        from .queues import SimpleQueue
+        return SimpleQueue(ctx=self)
+
+
 class ThreadPool(Pool):
     _wrap_exception = False
 
@@ -927,7 +952,8 @@ class ThreadPool(Pool):
         return Process(*args, **kwds)
 
     def __init__(self, processes=None, initializer=None, initargs=()):
-        Pool.__init__(self, processes, initializer, initargs)
+        # GraalPy change
+        Pool.__init__(self, processes, initializer, initargs, context=_ThreadPoolContext(get_context()))
 
     def _setup_queues(self):
         self._inqueue = queue.SimpleQueue()

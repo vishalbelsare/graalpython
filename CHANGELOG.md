@@ -3,7 +3,98 @@
 This changelog summarizes major changes between GraalVM versions of the Python
 language runtime. The main focus is on user-observable behavior of the engine.
 
+## Version 25.4
+* Remove BouncyCastle entirely. BouncyCastle was only needed for legacy RSA, DSA, and EC private keys versions 0 and 1. To support these from Python embeddings, BouncyCastle must now be explicitly enabled by adding the `org.graalvm.python:python-bouncycastle-support` Maven _and_ adding `bcprov-jdk18on`, `bcpkix-jdk18on`, and `bcutil-jdk18on` dependencies.
+
+## Version 25.3
+* Update Python standard library to 3.13.14 and implement new Python 3.13 features.
+
+## Version 25.2
+* Windows standalone builds now use a native OS backend by default, improving compatibility for files, sockets, subprocesses, `mmap`, and Windows-specific modules compared to the Java-based backend.
+
+## Version 25.1
+* The standalone artifacts now include the Python version name before the Graal version. The new artifacts now start with `graalpy<PYTHON_VERSION>-<GRAAL_VERSION>-<OPERATING_SYSTEM>-<ARCHITECTURE>`.
+* Standalone JVM artifacts are no longer released as separate distributions. For standalone deployments, use the GraalPy native artifacts. If you require Java interoperability, use our jbang launcher (`jbang graalpy@oracle/graalpython -c "print('hello from GraalPy')"`) or a custom embedding.
+* Add `-X jit=0|1|2` presets to tune startup-heavy or throughput-oriented workloads, and make the GraalPy launcher default to the `jit=1` preset.
+* Treat foreign buffer objects as Python buffer-compatible binary objects, so APIs like `memoryview`, `bytes`, `bytearray`, `binascii.hexlify`, and `io.BytesIO` work naturally on them when embedding GraalPy in Java. This allows passing binary data between Python and Java's `ByteBuffer` and `ByteSequence` types with minimal (sometimes zero) copies.
+* Add support for [Truffle source options](https://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/source/Source.SourceBuilder.html#option(java.lang.String,java.lang.String)):
+  * The `python.Optimize` option can be used to specify the optimization level, like the `-O` (level 1) and `-OO` (level 2) commandline options.
+  * The `python.NewGlobals` option can be used to run a source with a fresh globals dictionary instead of the main module globals, which is useful for embeddings that want isolated top-level execution.
+* Intern string literals in source files
+* Allocation reporting via Truffle has been removed. Python object sizes were never reported correctly, so the data was misleading and there was a non-neglible overhead for object allocations even when reporting was inactive.
+* Better `readline` support via JLine. Autocompletion and history now works in `pdb`
+* Remove the intrinsified _ctypes module in favor of the native CPython version. This makes GraalPy's ctypes implementation more compatible and reduces the memory footprint of using ctypes.
+* Add a new, more natural style of subclassing Java classes from Python by passing the `new_style=True` keyword. Multiple levels of inheritance are supported, and `super()` calls both in the constructor override via `__new__` as well as in Java method overrides work as expected.
+* Add `polyglot.gil_locked_during_interop` context manager. By default, the global interpreter lock (GIL) is unlocked when interacting with objects from another language, to give other Python threads a chance to run in parallel. While this avoids potential deadlocks, repeated unlocking and locking of the GIL can decrease performance, so this context manager can be used to keep the lock held around short-running interop.
+* Add Github workflows that run our gates from the same job definitions as our internal CI. This will make it easier for contributors opening PRs on Github to ensure code contributions pass the same tests that we are running internally.
+* Added support for specifying generics on foreign classes, and inheriting from such classes. Especially when using Java classes that support generics, this allows expressing the generic types in Python type annotations as well.
+* Added a new `java` backend for the `pyexpat` module that uses a Java XML parser instead of the native `expat` library. It can be useful when running without native access or multiple-context scenarios. This backend is the default when embedding and can be switched back to native `expat` by setting `python.PyExpatModuleBackend` option to `native`. Standalone distribution still defaults to native expat backend.
+* Add a new context option `python.UnicodeCharacterDatabaseNativeFallback` to control whether the ICU database may fall back to the native unicode character database from CPython for features and characters not supported by ICU. This requires native access to be enabled and is disabled by default for embeddings.
+* Add a new context option `python.AllowSignalHandlers` to control whether Python code may install signal handlers. This is disabled by default for Java embedding and enabled in the standalone.
+* Add an experimental `python.InitializationEntropySource` option to control the entropy source used for initialization-only randomness such as hash secret generation and `random.Random(None)` seeding. This means embeddings and tests can select deterministic or externally provided initialization entropy without affecting cryptographically relevant APIs like `os.urandom()` or `random.SystemRandom()`.
+* Dispatch `sys.audit` events to hooks registered with `sys.addaudithook`, including audit events raised through the `PySys_Audit` C API.
+* Foreign temporal objects (dates, times, and timezones) are now given a Python class corresponding to their interop traits, i.e., `date`, `time`, `datetime`, or `tzinfo`. This allows any foreign objects with these traits to be used in place of the native Python types and Python methods available on these types work on the foreign types.
+* Make BouncyCastle an optional dependency for embedding use cases. BouncyCastle is only needed for legacy RSA, DSA, and EC private keys versions 0 and 1. To support these from Python embeddings, BouncyCastle must now be explicitly enabled by adding the `org.graalvm.python:python-bouncycastle-support` Maven artifact.
+* The GraalPy Native standalone on Linux now uses a lower-footprint Native Image garbage collection configuration. This reduces resident set size (RSS) for many workloads, but may increase startup time and warmup time, and can slow down some workloads.
+
+## Version 25.0.1
+* Allow users to keep going on unsupported JDK/OS/ARCH combinations at their own risk by opting out of early failure using `-Dtruffle.UseFallbackRuntime=true`, `-Dpolyglot.engine.userResourceCache=/set/to/a/writeable/dir`, `-Dpolyglot.engine.allowUnsupportedPlatform=true`, and `-Dpolyglot.python.UnsupportedPlatformEmulates=[linux|macos|windows]` and `-Dorg.graalvm.python.resources.exclude=native.files`.
+
+## Version 25.0.0
+* `sys.implementation.version` now returns the GraalPy version instead of the Python version it implements. Also available as `sys.graalpy_version_info` for better discoverability by people already familiar with PyPy and its `sys.pypy_version_info`.
+* `GRAALPY_VERSION_NUM` C macro now inlcudes the release level and serial number at the end to conform to the `hexversion` format. This shouldn't break any existing comparisons.
+* `dir(foreign_object)` now returns both foreign methods and Python methods (it used to return only foreign methods).
+* Support `__name__`, `__doc__`, `__text_signature__` fields on foreign executables to serve as their proper counterparts on the Python side. This is useful to, for example, use Java functional interfaces in lieu of Python functions for things like LangChain's `@tool` annotation that want to inspect the underlying function.
+* Remove support for running C extensions as LLVM bitcode. This also removes the related options `python.UseSystemToolchain` and `python.NativeModules`. Isolation of native code when embedding GraalPy into Java projects is now provided via the GraalVM enterprise edition polyglot isolate feature, which can launch in a separate external sub-process by setting the `--engine.IsolateMode=external` option.
+* Remove built-in HPy module. HPy can now be installed and used from the upstream sources.
+* Update Python standard library and core to 3.12.8.
+* Implement `faulthandler.dump_traceback_later` to better support testing frameworks that implement resilience to crashes.
+* Fix various issues affecting cibuildwheels on Windows, to make it easier for Python projects to provide native extensions for GraalPy on all supported platforms.
+* Add support for sharing Arrow arrays and tables between Java, PyArrow, and Pandas to avoid data copying when embedding those libraries into a Java project.
+* Enable FTS3, FTS4, FTS5, RTREE, and math function features in the bundled sqlite3 library.
+* Add support patches for Torch 2.7.0, PyGObject 3.52.3, xmlschema 4.0.0, lxml < 5.4.0, SciPy 1.15, jq 1.8.0, NumPy < 2.3, ormsgpack < 1.9.1, pandas 2.2.3, PyArrow 19.0, PyMuPDF 1.25.4.
+* The GraalPy Native standalone on Linux now uses the G1 garbage collector which is much faster.
+* The full-featured Python REPL is now available on GraalPy standalone builds for Windows.
+
+## Version 24.2.0
+* Updated developer metadata of Maven artifacts.
+* Added gradle plugin for polyglot embedding of Python packages into Java.
+* When calling a method on a foreign object in Python code, Python methods are now prioritized over foreign members.
+* Added `polyglot.register_interop_type` and `@polyglot.interop_type` to define custom Python methods for a given foreign class/type. See [the documentation](https://github.com/oracle/graalpython/blob/master/docs/user/Interoperability.md#the-interoperability-extension-api) for more information.
+* Foreign objects are now given a Python class corresponding to their interop traits.
+  * Foreign lists now inherit from Python `list`, foreign dictionaries from `dict`, foreign strings from `str`, foreign iterators from `iterator`, foreign exceptions from `BaseException`, foreign numbers from `polyglot.ForeignNumber`, foreign booleans from `polyglot.ForeignBoolean`, and foreign null values from `NoneType`.
+  * This means all Python methods of these types are available on the corresponding foreign objects, which behave as close as possible as if they were Python objects.
+  * See [the documentation](https://github.com/oracle/graalpython/blob/master/docs/user/Interoperability.md#interacting-with-foreign-objects-from-python-scripts) for more information.
+* Remove support for running with Sulong managed both in embeddings as well as through the `graalpy-managed` launcher.
+* Rewrite wheelbuilder to be easier to use and contribute to. This version is now the same we run internally to build publishable wheels for some platforms we support, so the community can build the same wheels on their own hardware easily if desired.
+* `pip` is now able to fetch newer versions of GraalPy patches for third-party packages from `graalpython` GitHub repository, allowing us to add new patches to released versions.
+  * The patch repository can be overridden using `PIP_GRAALPY_PATCHES_URL` environment variable, which can point to a local path or a URL. It can be disabled by setting it to an empty string.
+* Added `GRAALPY_VERSION` and `GRAALPY_VERSION_NUM` C macros.
+* Remove `ginstall` module. It hasn't been necessary for several releases. Please, use `pip install`.
+* Remove experimental `SetupLLVMLibraryPaths` option. It was used to pre-set library path for LLVM toolchain's libc++. The path can still be set manually.
+* Added `GRAALPY_VERSION` and `GRAALPY_VERSION_NUM` C macros
+* Added experimental `python.IsolateNativeModules` option to allow loading native extensions multiple times in different contexts. See [the documentation](https://github.com/oracle/graalpython/blob/master/docs/user/Native-Extensions.md) for more information.
+* GraalPy Embedding:
+  * Introduced new types: KeywordArguments and PositionalArguments, in the GraalPy Embedding library (org.graalvm.python:python-embedding), to support directly passing [keyword and positional arguments](https://docs.python.org/3/glossary.html#term-argument) from Java to Python.
+  * Deprecated the org.graalvm.python.embedding.util API package and added new equivalents to org.graalvm.python.embedding
+  * Maven and Gradle plugins do not embed Python home into the generated virtual filesystem. Instead, the handling of language home for any Truffle language, including GraalPy, for the GraalVM Native Image build can be controlled by new Native Image options +H:IncludeLanguageResources and +H:CopyLanguageResources. By default, the whole Python home is embedded into the native executable. In the case of JVM deployment, the language home is embedded in the GraalPy artifacts at Mavencentral.
+  * Removed deprecated methods in VirtualFileSystem
+* No longer ship `graalpy_virtualenv` virtualenv plugin within the standard library. Instead, inject the dependency on it into virtualenv, so that it gets installed only when necessary and can be uninstalled.
+* Rename `graalpy_virtualenv` to `graalpy_virtualenv_seeder`.
+
+## Version 24.1.0
+* GraalPy is now considered stable for pure Python workloads. While many workloads involving native extension modules work, we continue to consider them experimental. You can use the command-line option `--python.WarnExperimentalFeatures` to enable warnings for such modules at runtime. In Java embeddings the warnings are enabled by default and you can suppress them by setting the context option 'python.WarnExperimentalFeatures' to 'false'.
+* Update to Python 3.11.7.
+* We now provide intrinsified `_pickle` module also in the community version.
+* `polyglot.eval` now raises more meaningful exceptions. Unavailable languages raise `ValueError`. Exceptions from the polyglot language are raised directly as interop objects (typed as `polyglot.ForeignException`). The shortcut for executing python files without specifying language has been removed, use regular `eval` for executing Python code.
+* In Jython emulation mode we now magically fall back to calling Java getters or setters when using Python attribute access for non-visible properties. This can help migrating away from Jython if you relied on this behavior.
+* The option `python.EmulateJython` to enable Jython emulation is now marked as stable, and can thus be relied upon in production.
+* Fixed parsing of pyvenv.cfg according to PEP 405, which is required to use [uv](https://github.com/astral-sh/uv?tab=readme-ov-file#uv) generated venvs with GraalPy.
+* Use https://www.graalvm.org/python/wheels/ as the default value for the `--extra-index-url` pip option. This will make it easy for users to install GraalPy binary wheels in the future.
+* GraalPy can now be installed on Windows with [pyenv-win](https://github.com/pyenv-win/pyenv-win). This makes it as easy to get the latest GraalPy release on Windows as it already is on macOS and Linux using [pyenv](https://github.com/pyenv/pyenv).
+
 ## Version 24.0.0
+* We now provide a collection of recipes in the form of GitHub Actions to build popular native extensions on GraalPy. These provide a reproducible way for the community to build native extensions for GraalPy with the correct dependencies. See scripts/wheelbuilder/README.md for details.
 * Foreign big integers are now supported and work with all `Numeric` operators.
 * Interop `null` values are now treated as *identical*, not only *equal* to Python's `None`. This means that something like `java.type("java.lang.Object[]")(1)[0] is None` will now return `True`.
 * Update to Python 3.10.13. This inlines the security and bugfixes from 3.10.8 to 3.10.13.
@@ -16,9 +107,13 @@ language runtime. The main focus is on user-observable behavior of the engine.
 * Add option `python.InitialLocale` to change the default locale. If not set, then Java Locale#getDefault is used.
 * `multiprocessing` module now uses the `spawn` method (creates new processes) by default. The formerly default method that uses threads and multiple Truffle contexts can be selected using `multiprocessing.set_start_method('graalpy')`.
 * `polyglot` module: add API to redefine Truffle interop messages for external / user defined types. For more details see [The Truffle Interoperability Extension API](docs/user/Interoperability.md).
+* Adding integration with jBang (https://www.jbang.dev/)
+  * running example via `jbang hello@oracle/graalpython` or `jbang hello@oracle/graalpython "print(1*4)"`
+  * creating new script via: `jbang init --template=graalpy@oracle/graalpython myscript.java`
+  * creating new script with local maven repo for testing: `jbang init --template=graalpy_local_repo@oracle/graalpython -Dpath_to_local_repo=/absolute/path/to/local/maven/repository myscript.java'
 
 ## Version 23.1.0
-* Oracle GraalPy distributions (previously known as GraalPy Enterprise) are now available under the [GFTC license](https://www.oracle.com/downloads/licenses/graal-free-license.html). The community builds published on Github have been renamed to `graalpy-community-<version>-<os>-<arch>.tar.gz`.
+* GraalPy distributions (previously known as GraalPy Enterprise) are now available under the [GFTC license](https://www.oracle.com/downloads/licenses/graal-free-license.html). The community builds published on Github have been renamed to `graalpy-community-<version>-<os>-<arch>.tar.gz`.
 * Add support for the sqlite3 module. This allows many packages like `coverage` or `Flask-SQLAlchemy` to work on top of this embedded database.
 * Provide Windows distributions of GraalPy. This is the first preview of Windows support for GraalPy, and there are limitations, but pure Python packages like Pygal can be installed with `python -m pip --no-cache install pygal`.
 * The GraalPy standalone tool was updated. You can now build single-file executable Python binaries for Linux, Windows, and macOS. The tool can also generate a skeleton Maven project that sets up a polyglot embedding of Python packages into Java.
@@ -140,7 +235,7 @@ language runtime. The main focus is on user-observable behavior of the engine.
 * Escaping Unicode characters using the character names in strings like
   "\N{GREEK CAPITAL LETTER DELTA}".
 * When a `*.py` file is imported, `*.pyc` file is created. It contains binary data to speed up parsing.
-* Adding option `PyCachePrefix`, which is equivalent to PYTHONPYCACHEPREFIX environment variable, which is also accepted now. 
+* Adding option `PyCachePrefix`, which is equivalent to PYTHONPYCACHEPREFIX environment variable, which is also accepted now.
 * Adding optin `DontWriteBytecodeFlag`. Equivalent to the Python -B flag. Don't write bytecode files.
 * Command option -B works
 * Implement better reference counting for native extensions to fix memory leaks

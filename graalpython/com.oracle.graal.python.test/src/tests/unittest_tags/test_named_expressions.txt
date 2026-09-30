@@ -1,67 +1,68 @@
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_01
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_02
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_03
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_04
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_05
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_06
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_07
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_08
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_09
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_10
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_11
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_12
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_13
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_14
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_15
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_16
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_17
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_18
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_01
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_02
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_03
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_04
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_06
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_07
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_08
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_09
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_10
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_11
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_12
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_13
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_14
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_15
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_16
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_17
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_comprehension_iterable_expression
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_in_class_body
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_list_comprehension_iterable_expression
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_rebinding_comprehension_inner_loop
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_rebinding_list_comprehension_inner_loop
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_rebinding_set_comprehension_inner_loop
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_set_comprehension_iterable_expression
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_global_scope
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_global_scope_no_global_keyword
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_nonlocal_scope
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_nonlocal_scope_no_nonlocal_keyword
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_01
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_02
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_03
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_04
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_05
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_06
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_07
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_08
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_09
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_10
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_11
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_17
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_18
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_19
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_20
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_21
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_22
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_23
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_24
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_25
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_in_genexp
-*graalpython.lib-python.3.test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_variable_reuse_in_comprehensions
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_01 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_02 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_03 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_04 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_05 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_06 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_07 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_08 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_09 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_10 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_11 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_12 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_13 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_14 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_15 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_16 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_17 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionAssignmentTest.test_named_expression_assignment_18 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_01 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_02 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_03 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_04 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_06 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_07 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_08 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_09 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_10 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_11 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_12 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_13 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_14 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_15 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_16 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_17 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_dict_comprehension_iterable_expression @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_in_class_body @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_list_comprehension_iterable_expression @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_rebinding_dict_comprehension_inner_loop @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_rebinding_list_comprehension_inner_loop @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_rebinding_set_comprehension_inner_loop @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionInvalidTest.test_named_expression_invalid_set_comprehension_iterable_expression @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_global_scope @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_global_scope_no_global_keyword @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_nonlocal_scope @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_nonlocal_scope_no_nonlocal_keyword @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_01 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_02 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_03 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_04 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_05 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_06 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_07 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_08 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_09 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_10 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_11 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_17 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_18 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_19 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_20 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_21 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_22 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_23 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_24 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_25 @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_in_genexp @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_scope_mangled_names @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_named_expressions.NamedExpressionScopeTest.test_named_expression_variable_reuse_in_comprehensions @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

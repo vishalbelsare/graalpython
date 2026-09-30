@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,38 +40,44 @@
  */
 package com.oracle.graal.python.builtins.objects.ordereddict;
 
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REVERSED__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.dict.PDictView.PDictItemsView;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
-import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.POrderedDictItems)
 public class OrderedDictItemsBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = OrderedDictItemsBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return OrderedDictItemsBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object iter(PDictItemsView self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictIterator((POrderedDict) self.getWrappedDict(), POrderedDictIterator.IteratorType.ITEMS, false);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictIterator(language, (POrderedDict) self.getWrappedDict(), POrderedDictIterator.IteratorType.ITEMS, false);
         }
     }
 
@@ -80,8 +86,8 @@ public class OrderedDictItemsBuiltins extends PythonBuiltins {
     abstract static class ReversedNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object iter(PDictItemsView self,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createOrderedDictIterator((POrderedDict) self.getWrappedDict(), POrderedDictIterator.IteratorType.ITEMS, true);
+                        @Bind PythonLanguage language) {
+            return PFactory.createOrderedDictIterator(language, (POrderedDict) self.getWrappedDict(), POrderedDictIterator.IteratorType.ITEMS, true);
         }
     }
 }

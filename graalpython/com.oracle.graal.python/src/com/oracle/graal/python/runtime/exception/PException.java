@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,20 +44,28 @@ import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.exception.ExceptionNodes;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
+import com.oracle.graal.python.builtins.objects.exception.PBaseExceptionGroup;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.traceback.LazyTraceback;
 import com.oracle.graal.python.builtins.objects.traceback.MaterializeLazyTracebackNode;
 import com.oracle.graal.python.builtins.objects.traceback.PTraceback;
 import com.oracle.graal.python.lib.PyExceptionInstanceCheckNode;
-import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.PRootNode;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.bytecode.LocalVariable;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.interop.ExceptionType;
@@ -66,17 +74,22 @@ import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.strings.TruffleString;
 
 /**
- * Serves both as a throwable carrier of the python exception object and as a represenation of the
- * exception state at a single point in the program. An important invariant is that it must never be
- * rethrown after the contained exception object has been exposed to the program, instead, a new
- * object must be created for each throw.
+ * Serves both as a throwable carrier of the python exception object ({@link PBaseException}) and as
+ * a representation of the exception state at a single point in the program. An important invariant
+ * is that it must never be rethrown after the contained exception object has been exposed to the
+ * program, instead, a new object must be created for each throw. See
+ * {@link MaterializeLazyTracebackNode} for more details on how tracebacks work and why we need to
+ * create fresh {@link PException} instances.
  */
 @ExportLibrary(value = InteropLibrary.class, delegateTo = "pythonException")
+@SuppressWarnings({"serial"})
 public final class PException extends AbstractTruffleException {
     private static final long serialVersionUID = -6437116280384996361L;
 
@@ -86,30 +99,50 @@ public final class PException extends AbstractTruffleException {
     private String message = null;
     final transient Object pythonException;
     private transient PFrame.Reference frameInfo;
-    private transient PBytecodeRootNode catchRootNode;
+    private transient Thread escapedFrameThread;
+
+    /**
+     * Root node that caught this exception object.
+     */
+    private transient PRootNode rootNode;
+    /**
+     * Present only for Bytecode DSL interpreter. The {@link BytecodeNode} that caught this
+     * exception. For Bytecode DSL, only {@link BytecodeNode} can resolve BCI, not the root node.
+     */
+    private transient BytecodeNode bytecodeNode;
+
     private int catchBci;
-    private transient LazyTraceback traceback;
     private boolean reified = false;
     private boolean skipFirstTracebackFrame;
+    private boolean reraised;
+
+    // See the docs of MaterializeLazyTracebackNode
     private int tracebackFrameCount;
+    private boolean shouldTrace;
+
+    private static Node validateLocation(Node location) {
+        // For Bytecode DSL root nodes the location must lead to a BytecodeNode
+        assert location == null || !(location.getRootNode() instanceof PBytecodeDSLRootNode) || BytecodeNode.get(location) != null : String.format("%s, root: %s", location, location.getRootNode());
+        return location;
+    }
 
     private PException(Object pythonException, Node node) {
-        super(node);
+        super(validateLocation(node));
         this.pythonException = pythonException;
     }
 
     private PException(Object pythonException, Node node, Throwable wrapped) {
-        super(null, wrapped, UNLIMITED_STACK_TRACE, node);
+        super(null, wrapped, UNLIMITED_STACK_TRACE, validateLocation(node));
         this.pythonException = pythonException;
         assert PyExceptionInstanceCheckNode.executeUncached(pythonException);
     }
 
-    private PException(Object pythonException, LazyTraceback traceback, Throwable wrapped) {
-        super(null, wrapped, UNLIMITED_STACK_TRACE, null);
-        this.pythonException = pythonException;
-        this.traceback = traceback;
-        reified = true;
-        assert PyExceptionInstanceCheckNode.executeUncached(pythonException);
+    public static PException fromObjectFixUncachedLocation(Object pythonException, Node location, boolean withJavaStacktrace) {
+        Node n = location;
+        if (n == null || !n.isAdoptable()) {
+            n = EncapsulatingNodeReference.getCurrent().get();
+        }
+        return fromObject(pythonException, n, withJavaStacktrace);
     }
 
     public static PException fromObject(Object pythonException, Node node, boolean withJavaStacktrace) {
@@ -140,21 +173,14 @@ public final class PException extends AbstractTruffleException {
         return pException;
     }
 
-    public static PException fromExceptionInfo(Object pythonException, PTraceback traceback, boolean withJavaStacktrace) {
-        LazyTraceback lazyTraceback = null;
-        if (traceback != null) {
-            lazyTraceback = new LazyTraceback(traceback);
-        }
-        return fromExceptionInfo(pythonException, lazyTraceback, withJavaStacktrace);
-    }
-
-    public static PException fromExceptionInfo(Object pythonException, LazyTraceback traceback, boolean withJavaStacktrace) {
+    public static PException fromExceptionInfo(Object pythonException, boolean withJavaStacktrace) {
         Throwable wrapped = null;
         if (withJavaStacktrace) {
             // Create a carrier for the java stacktrace as PException cannot have one
             wrapped = createStacktraceCarrier();
         }
-        PException pException = new PException(pythonException, traceback, wrapped);
+        PException pException = new PException(pythonException, null, wrapped);
+        pException.reified = true;
         if (pythonException instanceof PBaseException managedException) {
             managedException.setException(pException);
         }
@@ -164,13 +190,20 @@ public final class PException extends AbstractTruffleException {
     @Override
     public String getMessage() {
         if (message == null) {
-            message = pythonException.toString();
+            return getPythonExceptionString();
         }
         return message;
     }
 
-    public void setMessage(Object object) {
-        message = object.toString();
+    @TruffleBoundary
+    private String getPythonExceptionString() {
+        return pythonException.toString();
+    }
+
+    public void materializeMessage() {
+        if (message == null) {
+            message = ExceptionUtils.getExceptionMessage(pythonException);
+        }
     }
 
     @Override
@@ -192,15 +225,25 @@ public final class PException extends AbstractTruffleException {
     }
 
     public boolean catchingFrameWantedForTraceback() {
-        return tracebackFrameCount >= 0 && catchRootNode != null && catchRootNode.frameIsVisibleToPython();
-    }
-
-    public PBytecodeRootNode getCatchRootNode() {
-        return catchRootNode;
+        if (tracebackFrameCount < 0 || rootNode == null) {
+            return false;
+        }
+        return !((PBytecodeDSLRootNode) rootNode).isInternal();
     }
 
     public int getCatchBci() {
         return catchBci;
+    }
+
+    public BytecodeNode getBytecodeNode() {
+        return bytecodeNode;
+    }
+
+    public int getCatchLine() {
+        if (rootNode == null) {
+            return -1;
+        }
+        return ((PBytecodeDSLRootNode) rootNode).bciToLine(catchBci, bytecodeNode);
     }
 
     /**
@@ -256,10 +299,49 @@ public final class PException extends AbstractTruffleException {
         }
     }
 
-    public void setCatchingFrameReference(Frame frame, PBytecodeRootNode catchLocation, int catchBci) {
-        this.frameInfo = PArguments.getCurrentFrameInfo(frame);
-        this.catchRootNode = catchLocation;
-        this.catchBci = catchBci;
+    /**
+     * Sets the catching frame information for a Bytecode DSL node.
+     *
+     * The Bytecode DSL interpreter's generated code automatically dispatches to a handler. We can
+     * set the frame info inside the handler code, but the bci of the raising instruction is lost at
+     * that point.
+     *
+     * We thus set the catch information in two steps:
+     * <ol>
+     * <li>First, we use a hook in the DSL to set the catch location every time an exception is
+     * thrown from the bytecode loop ({@link #setCatchLocation}).</li>
+     * <li>Then, we mark the exception as "caught" when we reach a handler
+     * ({@link #markAsCaught(Frame, PBytecodeDSLRootNode)}. Once it's "caught", the catch location
+     * is frozen.</li>
+     * </ol>
+     *
+     * (It is necessary to freeze the location after calling
+     * {@link #markAsCaught(Frame, PBytecodeDSLRootNode)} because Python-level try-except-finally
+     * blocks are implemented with multiple DSL-level throws; these throws will trigger subsequent
+     * {@link #setCatchLocation} calls that would overwrite the location.)
+     *
+     * Since the catch location is set unconditionally, it could refer to a location that had no
+     * handler (i.e., the location is invalid). Code should not use the location unless the other
+     * frame info (e.g., the {@link #rootNode}) has been set, which indicates that a handler was
+     * found and that the catch location actually refers to a guarded instruction.
+     */
+    public void setCatchLocation(int catchBci, BytecodeNode bytecodeNode) {
+        // Overwrite the catchBci as long as no handler has been found yet.
+        if (!isCaught()) {
+            this.catchBci = catchBci;
+            this.bytecodeNode = bytecodeNode;
+        }
+    }
+
+    public void markAsCaught(Frame frame, PBytecodeDSLRootNode catchLocation) {
+        if (!isCaught()) {
+            this.frameInfo = PArguments.getCurrentFrameInfo(frame);
+            this.rootNode = catchLocation;
+        }
+    }
+
+    private boolean isCaught() {
+        return rootNode != null;
     }
 
     public void markEscaped() {
@@ -275,7 +357,26 @@ public final class PException extends AbstractTruffleException {
         // shouldn't leak to the traceback
         if (this.frameInfo != null) {
             this.frameInfo.markAsEscaped();
+            if (escapedFrameThread == null) {
+                escapedFrameThread = Thread.currentThread();
+            }
         }
+    }
+
+    private void markFrameEscaped(Frame frame) {
+        if (frame != null) {
+            PFrame.Reference currentFrameInfo = PArguments.getCurrentFrameInfo(frame);
+            if (currentFrameInfo != null) {
+                currentFrameInfo.markAsEscaped();
+                if (escapedFrameThread == null) {
+                    escapedFrameThread = Thread.currentThread();
+                }
+            }
+        }
+    }
+
+    public Thread getEscapedFrameThread() {
+        return escapedFrameThread;
     }
 
     /**
@@ -287,29 +388,8 @@ public final class PException extends AbstractTruffleException {
     }
 
     /**
-     * Get traceback from the time the exception was caught (reified). The contained python object's
-     * traceback may not be the same as it is mutable and thus may change after being caught.
-     */
-    public LazyTraceback getTraceback() {
-        ensureReified();
-        return traceback;
-    }
-
-    /**
-     * Set traceback for the exception state. This has no effect on the contained python exception
-     * object at this point but it may be synced to the object at a later point if the exception
-     * state gets reraised (for example with `raise` without arguments as opposed to the exception
-     * object itself being explicitly reraised with `raise e`).
-     */
-    public void setTraceback(LazyTraceback traceback) {
-        ensureReified();
-        this.traceback = traceback;
-    }
-
-    /**
-     * If not done already, create the traceback for this exception state using the frame previously
-     * provided to {@link #setCatchingFrameReference(Frame, PBytecodeRootNode, int)} and sync it to
-     * the attached python exception.
+     * If not done already, create the traceback for this exception state and sync it to the
+     * attached python exception.
      */
     public void ensureReified() {
         if (!reified) {
@@ -321,7 +401,7 @@ public final class PException extends AbstractTruffleException {
                  * exception hasn't escaped to the program and thus couldn't have changed in the
                  * meantime
                  */
-                traceback = managedException.internalReifyException(frameInfo);
+                managedException.internalReifyException(frameInfo);
             } else {
                 materializeNativeExceptionTraceback();
             }
@@ -333,9 +413,10 @@ public final class PException extends AbstractTruffleException {
         return tracebackFrameCount;
     }
 
-    public void notifyAddedTracebackFrame(boolean visible) {
+    public void notifyAddedTracebackFrame(Frame frame, boolean visible) {
         if (visible) {
             tracebackFrameCount++;
+            markFrameEscaped(frame);
         }
     }
 
@@ -347,23 +428,16 @@ public final class PException extends AbstractTruffleException {
      * end of `finally`, `__exit__`...
      */
     public PException getExceptionForReraise(boolean rootNodeVisible) {
-        if (pythonException instanceof PBaseException managedException) {
-            managedException.setTraceback(getTraceback());
-        } else {
-            setNativeExceptionTraceback(getTraceback());
-        }
+        ensureReified();
         PException pe = PException.fromObject(pythonException, getLocation(), false);
+        pe.reraised = true;
+        if (pe.getUnreifiedException() instanceof PBaseExceptionGroup grp) {
+            grp.setContainsReraises(true);
+        }
         if (rootNodeVisible) {
             pe.skipFirstTracebackFrame();
         }
         return pe;
-    }
-
-    @TruffleBoundary
-    private PTraceback setNativeExceptionTraceback(LazyTraceback tb) {
-        PTraceback materializedTb = tb != null ? MaterializeLazyTracebackNode.executeUncached(tb) : null;
-        ExceptionNodes.SetTracebackNode.executeUncached(pythonException, materializedTb != null ? materializedTb : PNone.NONE);
-        return materializedTb;
     }
 
     @TruffleBoundary
@@ -373,8 +447,9 @@ public final class PException extends AbstractTruffleException {
         if (existingTraceback instanceof PTraceback nextTraceback) {
             nextChain = new LazyTraceback(nextTraceback);
         }
-        PTraceback materializedTraceback = setNativeExceptionTraceback(new LazyTraceback(frameInfo, this, nextChain));
-        traceback = new LazyTraceback(materializedTraceback);
+        LazyTraceback tb = new LazyTraceback(frameInfo, this, nextChain);
+        PTraceback materializedTb = MaterializeLazyTracebackNode.executeUncached(tb);
+        ExceptionNodes.SetTracebackNode.executeUncached(pythonException, materializedTb != null ? materializedTb : PNone.NONE);
     }
 
     @TruffleBoundary
@@ -387,12 +462,6 @@ public final class PException extends AbstractTruffleException {
     @SuppressWarnings("static-method")
     boolean isException() {
         return true;
-    }
-
-    @ExportMessage
-    ExceptionType getExceptionType(
-                    @CachedLibrary(limit = "1") InteropLibrary lib) throws UnsupportedMessageException {
-        return lib.getExceptionType(pythonException);
     }
 
     @ExportMessage
@@ -413,8 +482,8 @@ public final class PException extends AbstractTruffleException {
 
     @ExportMessage(name = "getSourceLocation")
     SourceSection getExceptionSourceLocation(
-                    @Bind("$node") Node inliningTarget,
-                    @Cached InlinedBranchProfile unsupportedProfile) throws UnsupportedMessageException {
+                    @Bind Node inliningTarget,
+                    @Exclusive @Cached InlinedBranchProfile unsupportedProfile) throws UnsupportedMessageException {
         if (hasSourceLocation()) {
             return getLocation().getEncapsulatingSourceSection();
         }
@@ -422,5 +491,124 @@ public final class PException extends AbstractTruffleException {
         throw UnsupportedMessageException.create();
     }
 
-    // Note: remaining interop messages are forwarded to the contained PBaseException
+    @ExportMessage
+    ExceptionType getExceptionType(
+                    @Shared @CachedLibrary(limit = "1") InteropLibrary lib) throws UnsupportedMessageException {
+        if (pythonException instanceof PBaseException) {
+            return lib.getExceptionType(pythonException);
+        }
+        // Native exceptions currently cannot be any other type
+        return ExceptionType.RUNTIME_ERROR;
+    }
+
+    @ExportMessage
+    @SuppressWarnings("static-method")
+    boolean isExceptionIncompleteSource() {
+        return false;
+    }
+
+    @ExportMessage
+    @SuppressWarnings("static-method")
+    boolean hasExceptionMessage() {
+        return true;
+    }
+
+    @ExportMessage
+    String getExceptionMessage(
+                    @Shared("gil") @Cached GilNode gil) {
+        if (message == null) {
+            boolean mustRelease = gil.acquire();
+            try {
+                materializeMessage();
+            } finally {
+                gil.release(mustRelease);
+            }
+        }
+        return message;
+    }
+
+    @ExportMessage
+    int getExceptionExitStatus(
+                    @Bind Node inliningTarget,
+                    @Shared @CachedLibrary(limit = "1") InteropLibrary lib,
+                    @Exclusive @Cached InlinedBranchProfile unsupportedProfile) throws UnsupportedMessageException {
+        if (pythonException instanceof PBaseException) {
+            return lib.getExceptionExitStatus(pythonException);
+        }
+        // Native exceptions currently cannot be exit exceptions
+        unsupportedProfile.enter(inliningTarget);
+        throw UnsupportedMessageException.create();
+    }
+
+    private Object getCause(Node inliningTarget, ExceptionNodes.GetContextNode getContextNode, ExceptionNodes.GetSuppressContextNode getSuppressContextNode, ExceptionNodes.GetCauseNode getCauseNode) {
+        Object cause = getCauseNode.execute(inliningTarget, pythonException);
+        if (cause != PNone.NONE) {
+            return cause;
+        }
+        if (!getSuppressContextNode.execute(inliningTarget, pythonException)) {
+            Object context = getContextNode.execute(inliningTarget, pythonException);
+            if (context != PNone.NONE) {
+                return context;
+            }
+        }
+        return null;
+    }
+
+    @ExportMessage
+    boolean hasExceptionCause(
+                    @Bind Node inliningTarget,
+                    @Shared @Cached ExceptionNodes.GetContextNode getContextNode,
+                    @Shared @Cached ExceptionNodes.GetSuppressContextNode getSuppressContextNode,
+                    @Shared @Cached ExceptionNodes.GetCauseNode getCauseNode,
+                    @Shared("gil") @Cached GilNode gil) {
+        boolean mustRelease = gil.acquire();
+        try {
+            return getCause(inliningTarget, getContextNode, getSuppressContextNode, getCauseNode) != null;
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    @ExportMessage
+    Object getExceptionCause(
+                    @Bind Node inliningTarget,
+                    @Shared @Cached ExceptionNodes.GetContextNode getContextNode,
+                    @Shared @Cached ExceptionNodes.GetSuppressContextNode getSuppressContextNode,
+                    @Shared @Cached ExceptionNodes.GetCauseNode getCauseNode,
+                    @Shared @Cached InlinedBranchProfile unsupportedProfile,
+                    @Shared("gil") @Cached GilNode gil) throws UnsupportedMessageException {
+        boolean mustRelease = gil.acquire();
+        try {
+            Object result = getCause(inliningTarget, getContextNode, getSuppressContextNode, getCauseNode);
+            if (result != null) {
+                return result;
+            }
+            unsupportedProfile.enter(inliningTarget);
+            throw UnsupportedMessageException.create();
+        } finally {
+            gil.release(mustRelease);
+        }
+    }
+
+    public boolean getShouldTrace() {
+        return shouldTrace;
+    }
+
+    public void dontTraceOnReraise() {
+        shouldTrace = true;
+    }
+
+    public boolean isReraised() {
+        return reraised;
+    }
+
+    @TruffleBoundary
+    public static PException raiseUnboundLocalException(BytecodeNode bytecodeNode, LocalVariable localVariable) {
+        Object info = localVariable.getInfo();
+        if (info == null || !(info instanceof Integer i)) {
+            throw CompilerDirectives.shouldNotReachHere("User locals must have their info field set to a varnames index.");
+        }
+        TruffleString localName = ((PBytecodeDSLRootNode) bytecodeNode.getRootNode()).getCodeUnit().varnames[i];
+        throw PRaiseNode.raiseStatic(bytecodeNode, PythonBuiltinClassType.UnboundLocalError, ErrorMessages.LOCAL_VAR_REFERENCED_BEFORE_ASSIGMENT, localName);
+    }
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,11 +36,11 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
+import os
 import sys, ast, unittest
+import inspect
 
 
-@unittest.skipIf(sys.version_info.minor < 10, "Requires Python 3.10+")
 def test_guard():
     def f(x, g):
         match x:
@@ -62,7 +62,6 @@ def test_guard():
     assert f(1) == 42
     assert f(2) == 0
 
-@unittest.skipIf(sys.version_info.minor < 10, "Requires Python 3.10+")
 def test_complex_as_binary_op():
     src = """
 def f(a):
@@ -87,7 +86,6 @@ def f(a):
     assert f(6+3j) == "match add"
     assert f(-2-3j) == "match sub"
 
-@unittest.skipIf(sys.version_info.minor < 10, "Requires Python 3.10+")
 def test_long_mapping():
     def f(x):
         match d:
@@ -106,6 +104,47 @@ def test_long_mapping():
 
     assert star_match(d) == {33:33}
 
+def test_mapping_star_rest_missing_key_falls_through():
+    def single_key(subject):
+        match subject:
+            case {"x": x, **rest}:
+                return ("x", x, rest)
+            case {**rest}:
+                return ("rest", rest)
+
+    assert single_key({"p": 1, "q": 2}) == ("rest", {"p": 1, "q": 2})
+    assert single_key({"x": 1, "q": 2}) == ("x", 1, {"q": 2})
+
+    def two_keys(subject):
+        match subject:
+            case {"x": x, "y": y, **rest}:
+                return ("xy", x, y, rest)
+            case {**rest}:
+                return ("rest", rest)
+
+    assert two_keys({"p": 1, "q": 2}) == ("rest", {"p": 1, "q": 2})
+    assert two_keys({"x": 1, "y": 2, "q": 3}) == ("xy", 1, 2, {"q": 3})
+
+def test_mapping_pattern_get_called_once_per_key():
+    class CountingDict(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.get_calls = []
+
+        def get(self, key, default=None):
+            self.get_calls.append(key)
+            return super().get(key, default)
+
+    def match_x(subject):
+        match subject:
+            case {"x": x}:
+                return x
+        return None
+
+    subject = CountingDict(x=1)
+    assert match_x(subject) == 1
+    assert subject.get_calls == ["x"]
+
 def test_mutable_dict_keys():
     class MyObj:
         pass
@@ -123,3 +162,221 @@ def test_mutable_dict_keys():
 
     assert test('attr1') == {'dyn_match': 1, 'attr2': 2, 'attr3': 3}
     assert test('attr2') == {'dyn_match': 2, 'attr1': 1, 'attr3': 3}
+
+def test_multiple_or_pattern_basic():
+    match 0:
+        case 0 | 1 | 2 | 3 | 4 | 5 as x:
+            assert x == 0
+
+    match 3:
+        case ((0 | 1 | 2) as x) | ((3 | 4 | 5) as x):
+            assert x == 3
+
+def test_sequence_pattern():
+    match (1, 2):
+        case (3, 2):
+            assert False
+
+    match (1, (2, 2)):
+        case (3, (2, 2)):
+            assert False
+
+    match (1, 2):
+        case (3, q):
+            assert False
+
+
+def test_multiple_or_pattern_advanced():
+    match 4:
+        case (0 as z) | (1 as z) | (2 as z) | (4 as z) | (77 as z):
+            assert z == 4
+
+    match 42:
+        case (0 as z) | (1 as z):
+            assert z == 1
+        case x:
+            assert x == 42
+
+    match 2:
+        case (0 as z) | (1 as z) | (2 as z):
+            assert z == 2
+        case _:
+            assert False
+
+    match 1:
+        case (0 as z) | (1 as z) | (2 as z):
+            assert z == 1
+        case _:
+            assert False
+
+    match 0:
+        case (0 as z) | (1 as z) | (2 as z):
+            assert z == 0
+        case _:
+            assert False
+
+    match (1, 2):
+        case (w, 2) | (2, w):
+            assert w == 1
+
+
+def test_multiple_or_pattern_creates_locals():
+    match (1, 2):
+        case (a, 1) | (a, 2):
+            assert a == 1
+    assert a == 1
+
+    match [1, 2]:
+        case [a1, 1] | [a1, 2]:
+            assert a1 == 1
+    assert a1 == 1
+
+    match (1, 2, 2, 3, 2):
+        case (1, a, b, 4, c) | (1, a, b, 3, c) | (1, a, b, 2, c):
+            assert a == 2
+            assert b == 2
+            assert c == 2
+    assert a == 2
+    assert b == 2
+    assert c == 2
+
+    match (1, 3, 4, 9):
+        case ((d, e, f, 7) | (d, e, f, 8) | (d, e, f, 6) | (d, e, f, 9)):
+            assert d == 1
+            assert e == 3
+            assert f == 4
+    assert d == 1
+    assert e == 3
+    assert f == 4
+
+    match (1,2,3,4,5,6,7):
+        case (0,q,w,e,r,t,y) | (q,w,e,r,t,y,7):
+            assert q == 1
+            assert w == 2
+            assert e == 3
+            assert r == 4
+            assert t == 5
+            assert y == 6
+    assert q == 1
+    assert w == 2
+    assert e == 3
+    assert r == 4
+    assert t == 5
+    assert y == 6
+
+
+def test_multiline_pattern_bindings():
+    def sequence(value):
+        match value:
+            case (
+                x,
+                y,
+            ):
+                return x + y
+
+    def alternatives(value):
+        match value:
+            case (
+            [x]
+            | {"x": x}
+            ):
+                return x
+
+    assert sequence((20, 22)) == 42
+    assert alternatives([42]) == 42
+    assert alternatives({"x": 43}) == 43
+
+
+def test_ast_transformed_class_pattern_bindings():
+    source = """
+def match_int(value):
+    match value:
+        case int(real=x):
+            assert x == 42
+        case _:
+            return False
+    return True
+"""
+    tree = ast.parse(source)
+    case = tree.body[0].body[0].cases[0]
+    original_assert = case.body[0]
+
+    # Mimic assertion rewriting: replace one source statement with several AST statements that
+    # share its source range. This used to make the class-pattern capture's StackValue escape the
+    # source-section operation in which it was created.
+    case.body = [
+        ast.copy_location(
+            ast.Assign(targets=[ast.Name(id="assert_result", ctx=ast.Store())], value=original_assert.test),
+            original_assert,
+        ),
+        ast.copy_location(
+            ast.If(
+                test=ast.UnaryOp(op=ast.Not(), operand=ast.Name(id="assert_result", ctx=ast.Load())),
+                body=[
+                    ast.Raise(
+                        exc=ast.Call(func=ast.Name(id="AssertionError", ctx=ast.Load()), args=[], keywords=[])
+                    )
+                ],
+                orelse=[],
+            ),
+            original_assert,
+        ),
+    ]
+    ast.fix_missing_locations(tree)
+
+    namespace = {}
+    exec(compile(tree, "<rewritten-assert>", "exec"), namespace)
+    assert namespace["match_int"](42)
+
+
+class TestErrors(unittest.TestCase):
+    def assert_syntax_error(self, code: str):
+        with self.assertRaises(SyntaxError):
+            compile(inspect.cleandoc(code), "<test>", "exec")
+
+    def test_alternative_patterns_bind_different_names_0(self):
+        self.assert_syntax_error("""
+            match ...:
+                case "a" | a:
+                    pass
+            """)
+
+    def test_alternative_patterns_bind_different_names_1(self):
+        self.assert_syntax_error("""
+        match ...:
+            case [a, [b] | [c] | [d]]:
+                pass
+        """)
+
+    def test_multiple_or_same_name(self):
+        self.assert_syntax_error("""
+        match 0:
+            case x | x:
+                pass
+        """)
+
+    def test_multiple_or_wildcard(self):
+        self.assert_syntax_error("""
+        match 0:
+            case * | 1:
+                pass
+        """)
+
+    def test_unbound_local_variable(self):
+        with self.assertRaises(UnboundLocalError):
+            match (1, 3):
+                case (a, 1) | (a, 2):
+                    pass
+            assert a == 1
+
+    def test_missing_kwarg(self):
+        def f():
+            x = sum
+            match x:
+                case object(factor=x) if x is not None:
+                    pass
+
+        try:
+            f()
+        except AttributeError:
+            self.fail("Invalid keyword argument should not raise AttributeError")

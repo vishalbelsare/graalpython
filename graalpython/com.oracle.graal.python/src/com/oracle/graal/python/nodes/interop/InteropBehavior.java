@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,19 +41,24 @@
 package com.oracle.graal.python.nodes.interop;
 
 import java.util.ArrayList;
+import java.util.logging.Level;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
 import com.oracle.graal.python.builtins.objects.function.PFunction;
-import com.oracle.graal.python.builtins.objects.object.PythonObject;
-import com.oracle.truffle.api.CallTarget;
+import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
+import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public class InteropBehavior {
+    private static final String LOGGER_INTEROP_BEHAVIOR_NAME = "interopBehavior";
+    private static final TruffleLogger LOGGER = PythonLanguage.getLogger(LOGGER_INTEROP_BEHAVIOR_NAME);
+
     @ValueType
-    private record InteropBehaviorMethodRecord(CallTarget callTarget, PythonObject globals, boolean constant) {
+    private record InteropBehaviorMethodRecord(PFunction function, boolean constant) {
     }
 
     private final PythonAbstractObject receiver;
@@ -65,30 +70,31 @@ public class InteropBehavior {
     }
 
     public void defineBehavior(InteropBehaviorMethod method, PFunction function) {
-        records[method.ordinal()] = new InteropBehaviorMethodRecord(function.getCode().getRootCallTarget(), function.getGlobals(), false);
+        records[method.ordinal()] = new InteropBehaviorMethodRecord(function, false);
+        if (LOGGER.isLoggable(Level.FINE)) {
+            LOGGER.fine(PythonUtils.formatJString("register %s.%s interop extension as function", receiver, method.name));
+        }
     }
 
     public void defineBehavior(InteropBehaviorMethod method, boolean constant) {
-        records[method.ordinal()] = new InteropBehaviorMethodRecord(null, null, constant);
+        records[method.ordinal()] = new InteropBehaviorMethodRecord(null, constant);
+        if (LOGGER.isLoggable(Level.FINE)) {
+            LOGGER.fine(PythonUtils.formatJString("register %s.%s interop extension as constant (%s)", receiver, method.name, constant));
+        }
     }
 
     public boolean isDefined(InteropBehaviorMethod method) {
         return records[method.ordinal()] != null;
     }
 
-    public CallTarget getCallTarget(InteropBehaviorMethod method) {
+    public PFunction getFunction(InteropBehaviorMethod method) {
         assert isDefined(method) : "interop behavior method not defined";
-        return records[method.ordinal()].callTarget;
-    }
-
-    public PythonObject getGlobals(InteropBehaviorMethod method) {
-        assert isDefined(method) : "interop behavior method not defined";
-        return records[method.ordinal()].globals;
+        return records[method.ordinal()].function;
     }
 
     public boolean isConstant(InteropBehaviorMethod method) {
         assert isDefined(method) : "interop behavior method not defined";
-        return records[method.ordinal()].callTarget == null;
+        return records[method.ordinal()].function == null;
     }
 
     public boolean getConstantValue(InteropBehaviorMethod method) {
@@ -98,11 +104,10 @@ public class InteropBehavior {
 
     public Object[] createArguments(InteropBehaviorMethod method, PythonAbstractObject receiver, Object[] extraArguments) {
         assert method.checkArity(extraArguments);
-        Object[] pArguments = PArguments.create(1 + (method.takesVarArgs ? 0 : method.extraArguments));
-        PArguments.setGlobals(pArguments, getGlobals(method));
+        Object[] pArguments = PArguments.create(1 + (method.takesVarArgs ? 1 : method.extraArguments));
         PArguments.setArgument(pArguments, 0, receiver);
         if (method.takesVarArgs) {
-            PArguments.setVariableArguments(pArguments, extraArguments);
+            PArguments.setArgument(pArguments, 1, extraArguments);
         } else {
             for (int i = 0; i < extraArguments.length; i++) {
                 PArguments.setArgument(pArguments, i + 1, extraArguments[i]);

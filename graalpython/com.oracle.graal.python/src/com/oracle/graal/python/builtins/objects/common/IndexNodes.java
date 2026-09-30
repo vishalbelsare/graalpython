@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,13 +44,15 @@ import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.common.IndexNodesFactory.NormalizeIndexWithBoundsCheckNodeGen;
 import com.oracle.graal.python.builtins.objects.common.IndexNodesFactory.NormalizeIndexWithoutBoundsCheckNodeGen;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.runtime.sequence.PTupleListBase;
 import com.oracle.graal.python.util.OverflowException;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
@@ -96,10 +98,6 @@ public abstract class IndexNodes {
             return subNode.executeLong(index, length, errorMessage);
         }
 
-        protected final TruffleString getErrorMessage() {
-            return errorMessage;
-        }
-
         @NeverDefault
         public static NormalizeIndexNode create() {
             return new NormalizeIndexNode(ErrorMessages.INDEX_OUT_OF_RANGE, true);
@@ -108,16 +106,6 @@ public abstract class IndexNodes {
         @NeverDefault
         public static NormalizeIndexNode create(TruffleString errorMessage) {
             return new NormalizeIndexNode(errorMessage, true);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode create(boolean boundsCheck) {
-            return new NormalizeIndexNode(ErrorMessages.INDEX_OUT_OF_RANGE, boundsCheck);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode create(TruffleString errorMessage, boolean boundsCheck) {
-            return new NormalizeIndexNode(errorMessage, boundsCheck);
         }
 
         @NeverDefault
@@ -133,36 +121,6 @@ public abstract class IndexNodes {
         @NeverDefault
         public static NormalizeIndexNode forTuple() {
             return create(ErrorMessages.TUPLE_OUT_OF_BOUNDS);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode forTupleAssign() {
-            return create(ErrorMessages.TUPLE_ASSIGN_OUT_OF_BOUNDS);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode forArray() {
-            return create(ErrorMessages.ARRAY_OUT_OF_BOUNDS);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode forArrayAssign() {
-            return create(ErrorMessages.ARRAY_ASSIGN_OUT_OF_BOUNDS);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode forPop() {
-            return create(ErrorMessages.POP_INDEX_OUT_OF_RANGE);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode forRange() {
-            return create(ErrorMessages.RANGE_OUT_OF_BOUNDS);
-        }
-
-        @NeverDefault
-        public static NormalizeIndexNode forBytearray() {
-            return create(ErrorMessages.BYTEARRAY_OUT_OF_BOUNDS);
         }
     }
 
@@ -186,107 +144,131 @@ public abstract class IndexNodes {
         public static NormalizeIndexCustomMessageNode getUncached() {
             return NormalizeIndexWithBoundsCheckNodeGen.getUncached();
         }
-
-        @NeverDefault
-        public static NormalizeIndexCustomMessageNode getUncachedWithoutBoundsCheck() {
-            return NormalizeIndexWithoutBoundsCheckNodeGen.getUncached();
-        }
     }
 
     @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 28 -> 10
+    @GenerateInline(false)       // footprint reduction 28 -> 10
     // not inlined because it is always created dynamically by NormalizeIndexNode
-    abstract static class NormalizeIndexWithBoundsCheckNode extends NormalizeIndexCustomMessageNode {
+    public abstract static class NormalizeIndexWithBoundsCheckNode extends NormalizeIndexCustomMessageNode {
 
-        @Specialization
-        static int doInt(int index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode) {
+        @NeverDefault
+        public static NormalizeIndexWithBoundsCheckNode create() {
+            return NormalizeIndexWithBoundsCheckNodeGen.create();
+        }
+
+        @NeverDefault
+        public static NormalizeIndexWithBoundsCheckNode getUncached() {
+            return NormalizeIndexWithBoundsCheckNodeGen.getUncached();
+        }
+
+        public static int normalizeIntIndex(Node inliningTarget, int index, int length, PTupleListBase container,
+                        InlinedConditionProfile negativeIndexProfile, PRaiseNode raiseNode) {
             int normalizedIndex = index;
             if (negativeIndexProfile.profile(inliningTarget, normalizedIndex < 0)) {
                 normalizedIndex += length;
             }
-            boundsCheckNode.execute(inliningTarget, errorMessage, normalizedIndex, length);
+            checkBounds(inliningTarget, raiseNode, container, normalizedIndex, length);
+            return normalizedIndex;
+        }
+
+        @Specialization
+        static int doInt(int index, int length, TruffleString errorMessage,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Shared @Cached PRaiseNode raiseNode) {
+            int normalizedIndex = index;
+            if (negativeIndexProfile.profile(inliningTarget, normalizedIndex < 0)) {
+                normalizedIndex += length;
+            }
+            checkBounds(inliningTarget, raiseNode, errorMessage, normalizedIndex, length);
             return normalizedIndex;
         }
 
         @Specialization
         static int doBool(boolean bIndex, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode) {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached PRaiseNode raiseNode) {
             int index = PInt.intValue(bIndex);
-            boundsCheckNode.execute(inliningTarget, errorMessage, index, length);
+            checkBounds(inliningTarget, raiseNode, errorMessage, index, length);
             return index;
         }
 
         @Specialization(rewriteOn = OverflowException.class)
         static int doLong(long lIndex, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode) throws OverflowException {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Shared @Cached PRaiseNode raiseNode) throws OverflowException {
             int index = PInt.intValueExact(lIndex);
-            return doInt(index, length, errorMessage, inliningTarget, negativeIndexProfile, boundsCheckNode);
+            return doInt(index, length, errorMessage, inliningTarget, negativeIndexProfile, raiseNode);
         }
 
         @Specialization(replaces = "doLong")
         int doLongOvf(long index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Shared @Cached PRaiseNode raiseNode) {
             try {
-                return doLong(index, length, errorMessage, inliningTarget, negativeIndexProfile, boundsCheckNode);
+                return doLong(index, length, errorMessage, inliningTarget, negativeIndexProfile, raiseNode);
             } catch (OverflowException e) {
-                throw raiseNode.raiseNumberTooLarge(PythonBuiltinClassType.IndexError, index);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.IndexError, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, index);
             }
         }
 
         @Specialization(rewriteOn = OverflowException.class)
         static int doPInt(PInt index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode) throws OverflowException {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Shared @Cached PRaiseNode raiseNode) throws OverflowException {
             int idx = index.intValueExact();
-            return doInt(idx, length, errorMessage, inliningTarget, negativeIndexProfile, boundsCheckNode);
+            return doInt(idx, length, errorMessage, inliningTarget, negativeIndexProfile, raiseNode);
         }
 
         @Specialization(replaces = "doPInt")
         int doPIntOvf(PInt index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode,
-                        @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Shared @Cached PRaiseNode raiseNode) {
             try {
-                return doPInt(index, length, errorMessage, inliningTarget, negativeIndexProfile, boundsCheckNode);
+                return doPInt(index, length, errorMessage, inliningTarget, negativeIndexProfile, raiseNode);
             } catch (OverflowException e) {
-                throw raiseNode.raiseNumberTooLarge(PythonBuiltinClassType.IndexError, index);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.IndexError, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, index);
             }
         }
 
         @Specialization
         static long doLongLong(long lIndex, long length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
-                        @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
-                        @Shared("boundsCheckNode") @Cached BoundsCheckNode boundsCheckNode) {
+                        @Bind Node inliningTarget,
+                        @Shared @Cached InlinedConditionProfile negativeIndexProfile,
+                        @Shared @Cached PRaiseNode raiseNode) {
             long normalizedIndex = lIndex;
             if (negativeIndexProfile.profile(inliningTarget, normalizedIndex < 0)) {
                 normalizedIndex += length;
             }
-            boundsCheckNode.execute(inliningTarget, errorMessage, normalizedIndex, length);
+
+            checkBounds(inliningTarget, raiseNode, errorMessage, normalizedIndex, length);
             return normalizedIndex;
         }
 
     }
 
     @GenerateUncached
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 24 -> 6
+    @GenerateInline(false)       // footprint reduction 24 -> 6
     // not inlined because it is always created dynamically by NormalizeIndexNode
-    abstract static class NormalizeIndexWithoutBoundsCheckNode extends NormalizeIndexCustomMessageNode {
+    public abstract static class NormalizeIndexWithoutBoundsCheckNode extends NormalizeIndexCustomMessageNode {
+
+        @NeverDefault
+        public static NormalizeIndexWithoutBoundsCheckNode create() {
+            return NormalizeIndexWithoutBoundsCheckNodeGen.create();
+        }
+
+        @NeverDefault
+        public static NormalizeIndexWithoutBoundsCheckNode getUncached() {
+            return NormalizeIndexWithoutBoundsCheckNodeGen.getUncached();
+        }
 
         @Specialization
         static int doInt(int index, int length, @SuppressWarnings("unused") TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile) {
             int idx = index;
             if (negativeIndexProfile.profile(inliningTarget, idx < 0)) {
@@ -302,7 +284,7 @@ public abstract class IndexNodes {
 
         @Specialization(rewriteOn = OverflowException.class)
         static int doLong(long index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile) throws OverflowException {
             int idx = PInt.intValueExact(index);
             return doInt(idx, length, errorMessage, inliningTarget, negativeIndexProfile);
@@ -310,19 +292,19 @@ public abstract class IndexNodes {
 
         @Specialization(replaces = "doLong")
         static int doLongOvf(long index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
                         @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
             try {
                 return doLong(index, length, errorMessage, inliningTarget, negativeIndexProfile);
             } catch (OverflowException e) {
-                throw raiseNode.raiseNumberTooLarge(PythonBuiltinClassType.IndexError, index);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.IndexError, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, index);
             }
         }
 
         @Specialization(rewriteOn = OverflowException.class)
         static int doPInt(PInt index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile) throws OverflowException {
             int idx = index.intValueExact();
             return doInt(idx, length, errorMessage, inliningTarget, negativeIndexProfile);
@@ -330,19 +312,19 @@ public abstract class IndexNodes {
 
         @Specialization(replaces = "doPInt")
         static int doPIntOvf(PInt index, int length, TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile,
                         @Shared("raiseNode") @Cached PRaiseNode raiseNode) {
             try {
                 return doPInt(index, length, errorMessage, inliningTarget, negativeIndexProfile);
             } catch (OverflowException e) {
-                throw raiseNode.raiseNumberTooLarge(PythonBuiltinClassType.IndexError, index);
+                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.IndexError, ErrorMessages.CANNOT_FIT_P_INTO_INDEXSIZED_INT, index);
             }
         }
 
         @Specialization
         static long doLongLong(long index, long length, @SuppressWarnings("unused") TruffleString errorMessage,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Shared("negativeIndexProfile") @Cached InlinedConditionProfile negativeIndexProfile) {
             long idx = index;
             if (negativeIndexProfile.profile(inliningTarget, idx < 0)) {
@@ -352,32 +334,38 @@ public abstract class IndexNodes {
         }
     }
 
-    @GenerateUncached
-    @GenerateInline
-    @GenerateCached(false)
-    public abstract static class BoundsCheckNode extends Node {
-
-        public abstract void execute(Node inliningTarget, TruffleString errorMessage, int idx, int length);
-
-        public abstract void execute(Node inliningTarget, TruffleString errorMessage, long idx, long length);
-
-        @Specialization
-        static void doBoundsCheck(Node inliningTarget, TruffleString errorMessage, int idx, int length,
-                        @Shared @Cached InlinedConditionProfile outOfBoundsProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            if (outOfBoundsProfile.profile(inliningTarget, idx < 0 || idx >= length)) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.IndexError, errorMessage);
-            }
-        }
-
-        @Specialization
-        static void doBoundsCheck(Node inliningTarget, TruffleString errorMessage, long idx, long length,
-                        @Shared @Cached InlinedConditionProfile outOfBoundsProfile,
-                        @Shared @Cached PRaiseNode.Lazy raiseNode) {
-            if (outOfBoundsProfile.profile(inliningTarget, idx < 0 || idx >= length)) {
-                throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.IndexError, errorMessage);
-            }
+    public static void checkBounds(Node inliningTarget, PRaiseNode raiseNode, PTupleListBase container, int idx, int length) {
+        if (idx < 0 || idx >= length) {
+            raiseIndexError(inliningTarget, container, raiseNode);
         }
     }
 
+    public static void checkBounds(Node inliningTarget, PRaiseNode raiseNode, TruffleString errorMessage, int idx, int length) {
+        if (idx < 0 || idx >= length) {
+            raiseIndexError(inliningTarget, errorMessage, raiseNode);
+        }
+    }
+
+    public static void checkBounds(Node inliningTarget, PRaiseNode raiseNode, TruffleString errorMessage, long idx, long length) {
+        if (idx < 0 || idx >= length) {
+            raiseIndexError(inliningTarget, errorMessage, raiseNode);
+        }
+    }
+
+    public static void checkBounds(Node inliningTarget, PRaiseNode raiseNode, TruffleString errorMessage, int idx, long length) {
+        if (idx < 0 || idx >= length) {
+            raiseIndexError(inliningTarget, errorMessage, raiseNode);
+        }
+    }
+
+    @InliningCutoff
+    private static void raiseIndexError(Node inliningTarget, PTupleListBase container, PRaiseNode raiseNode) {
+        TruffleString errorMessage = container instanceof PList ? ErrorMessages.LIST_INDEX_OUT_OF_RANGE : ErrorMessages.TUPLE_OUT_OF_BOUNDS;
+        raiseIndexError(inliningTarget, errorMessage, raiseNode);
+    }
+
+    @InliningCutoff
+    private static void raiseIndexError(Node inliningTarget, TruffleString errorMessage, PRaiseNode raiseNode) {
+        throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.IndexError, errorMessage);
+    }
 }

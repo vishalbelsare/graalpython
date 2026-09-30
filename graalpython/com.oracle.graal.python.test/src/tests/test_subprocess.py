@@ -1,9 +1,20 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+import locale
+import os
+import shlex
+import tempfile
+import textwrap
 import unittest
+import sys
+from subprocess import CalledProcessError
+from tempfile import mkdtemp
 
+from tests.util import run_subprocess_with_graalpy_startup_retry
+
+POSIX_BACKEND_IS_JAVA = sys.implementation.name == "graalpy" and __graalpython__.posix_module_backend() == 'java'
 
 def test_os_pipe():
     import os
@@ -15,7 +26,8 @@ def test_os_pipe():
 
 
 class TestSubprocess(unittest.TestCase):
-    def setUpClass(self):
+    @classmethod
+    def setUpClass(cls):
         global subprocess, io, sys
         import subprocess, io, sys
 
@@ -66,6 +78,32 @@ class TestSubprocess(unittest.TestCase):
                 [sys.executable, "-c", "print('BDFL')"])
         self.assertIn(b'BDFL', output)
 
+    @unittest.skipUnless(sys.platform == 'win32', "Windows batch file specific")
+    def test_batch_file_text_output_encoding(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            batch_file = os.path.join(tmp_dir, "echo.bat")
+            with open(batch_file, "w", encoding="ascii", newline="") as f:
+                f.write("@echo off\r\n")
+                f.write("echo expected\r\n")
+
+            output = subprocess.check_output(
+                    batch_file,
+                    text=True,
+                    encoding=locale.getpreferredencoding(False))
+
+        self.assertEqual("expected\n", output)
+
+    @unittest.skipIf(sys.platform == 'win32', "POSIX argv bytes specific")
+    def test_surrogateescape_non_utf8_argv(self):
+        code = (
+            "import os, sys; "
+            "assert os.fsencode(sys.argv[-1]) == b'\\x8av'; "
+            "print(repr(sys.argv[-1]))"
+        )
+        cmd = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)} \"$(printf '\\212v')\""
+        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.PIPE, text=True)
+        self.assertEqual("'\\udc8av'\n", output)
+
     def test_check_output_nonzero(self):
         # check_call() function with non-zero return code
         with self.assertRaises(subprocess.CalledProcessError) as c:
@@ -82,12 +120,29 @@ class TestSubprocess(unittest.TestCase):
             self.fail("Expected ValueError when stdout arg supplied.")
         self.assertIn('stdout', c.exception.args[0])
 
+    @unittest.skipUnless(sys.platform == 'win32', "Windows handle-list specific")
+    def test_close_fds_with_handle_list(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            leak_path = os.path.join(tmp_dir, "leak")
+            out_path = os.path.join(tmp_dir, "out")
+            leak = open(leak_path, "w+")
+            os.set_inheritable(leak.fileno(), True)
+            with open(out_path, "w+") as out:
+                p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdout=out, stderr=out)
+                leak.close()
+                try:
+                    os.unlink(leak_path)
+                finally:
+                    p.terminate()
+                    p.wait()
+
     def test_kill(self):
         p = subprocess.Popen([sys.executable, "-c", "print('oh no')"])
         p.kill()
         assert True
         p.wait()
 
+    @unittest.skipIf(sys.platform == 'win32', "Posix-specific")
     def test_waitpid(self):
         import os
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2); 42"])
@@ -97,26 +152,85 @@ class TestSubprocess(unittest.TestCase):
             p.kill()
             p.wait()
 
-    def test_waitpid_group_child(self):
-        import os
-        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.1); 42"])
-        res = os.waitpid(0, 0)
-        assert res[1] == 0, res
+    @unittest.skipIf(sys.platform == 'win32' or POSIX_BACKEND_IS_JAVA or not hasattr(os, 'getpgid'), "Posix-specific")
+    def test_process_group_0(self):
+        p = subprocess.Popen([sys.executable, "-c", "import os; print(os.getpgid(0))"],
+                             stdout=subprocess.PIPE, process_group=0)
+        stdout, _ = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(int(stdout), p.pid)
 
-    def test_waitpid_any_child(self):
-        import os
-        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.1); 42"])
-        res = os.waitpid(-1, 0)
-        assert res[1] == 0, res
-
-    def test_waitpid_no_child(self):
-        import os
+    def _run_in_new_group(self, code):
+        def safe_decode(x):
+            return '' if not x else x.decode().strip()
+        filename = None
         try:
-            os.waitpid(-1, 0)
-        except ChildProcessError:
-            assert True
-        else:
-            assert False
+            with tempfile.NamedTemporaryFile(delete=False) as f:
+                f.write(textwrap.dedent(code.strip(' ').strip('\n')).encode('ascii'))
+                filename = f.name
+            subprocess.check_output([sys.executable, filename], start_new_session=True)
+        except CalledProcessError as e:
+            print(f"ERROR running {code}. Stdout:")
+            print(safe_decode(e.stdout))
+            print("===== stderr:")
+            print(safe_decode(e.stderr))
+            print("=============")
+            raise
+        finally:
+            if filename:
+               os.remove(filename)
+            pass
+
+    @unittest.skipIf(sys.platform == 'win32' or POSIX_BACKEND_IS_JAVA, "Posix-specific")
+    def test_waitpid_group_child(self):
+        code = '''
+            import os
+            import sys
+            import subprocess
+            p = subprocess.Popen([sys.executable, "-c", "import time; print('before'); time.sleep(0.1); print('after'); 42"],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+            ps_list = 'not available'
+            if sys.implementation.name == "graalpy" and sys.platform.startswith("linux"):
+                ps_list = subprocess.check_output("ps", shell=True, text=True)
+            res = os.waitpid(0, 0)
+            msg = f"Spawned {p.pid=}, os.waitpid result={res}, output of ps:\\n{ps_list}"
+            try:
+                stdout, stderr = p.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                stdout, stderr = p.communicate()
+            msg += f"\\n{stdout.decode().strip()=}, {stderr.decode().strip()=}"
+            assert res[1] == 0, msg
+        '''
+        self._run_in_new_group(code)
+
+    @unittest.skipIf(sys.platform == 'win32' or POSIX_BACKEND_IS_JAVA, "Posix-specific")
+    def test_waitpid_any_child(self):
+        code = '''
+            import os
+            import sys
+            import subprocess
+            p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.1); 42"])
+            res = os.waitpid(-1, 0)
+            assert res[1] == 0, res
+        '''
+        self._run_in_new_group(code)
+
+    # Skipped because of transient: GR-66709
+    @unittest.skipIf(sys.platform == 'win32', "Posix-specific")
+    def test_waitpid_no_child(self):
+        code = '''
+            import os
+            try:
+                os.waitpid(-1, 0)
+            except ChildProcessError:
+                assert True
+            else:
+                assert False
+        '''
+        self._run_in_new_group(code)
+
 
     def test_kill(self):
         import os
@@ -137,46 +251,71 @@ class TestSubprocess(unittest.TestCase):
                 result = subprocess.run([sys.executable, "-c", "import __graalpython__; not __graalpython__.java_assert()"])
             assert result.returncode == 0
 
+    def test_subprocess_inherits_environ(self):
+        import os
+        import subprocess
+        prev = os.environ.get("FOOBAR")
+        try:
+            expected_value = f"42{prev}".strip()
+            os.environ["FOOBAR"] = expected_value
+            out = subprocess.check_output([sys.executable, '-c', "import os; print(os.environ['FOOBAR'])"]).decode().strip()
+            assert out == expected_value, f"{out!r} != {expected_value!r}"
+        finally:
+            if prev:
+                os.environ["FOOBAR"] = prev
+            else:
+                del os.environ["FOOBAR"]
+
+    @unittest.skipUnless(sys.implementation.name == 'graalpy', "GraalPy-specific test")
+    @unittest.skipIf(sys.platform == 'win32', "TODO the cmd replacement breaks the test")
     def test_graal_python_args(self):
-        import sys
         if sys.implementation.name == "graalpy":
-            import subprocess
+            def env_with_graal_python_args(args):
+                env = os.environ.copy()
+                env["GRAAL_PYTHON_ARGS"] = args
+                return env
 
-            env = {"GRAAL_PYTHON_ARGS": "-c 12"}
-            result = subprocess.run([sys.executable], env=env)
-            assert result.returncode == 0
+            env = env_with_graal_python_args("-c 12")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
 
-            env = {"GRAAL_PYTHON_ARGS": "-c 'print(12)'"}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == '12\n'
+            env = env_with_graal_python_args("-c 'print(12)'")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('12\n', result)
 
-            env = {"GRAAL_PYTHON_ARGS": """-c 'print("Hello world")'"""}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == 'Hello world\n'
+            env = env_with_graal_python_args("""-c 'print("Hello world")'""")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('Hello world\n', result)
 
-            env = {"GRAAL_PYTHON_ARGS": """-c ""'print("Hello world")'"""""}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == 'Hello world\n'
+            env = env_with_graal_python_args("""-c ""'print("Hello world")'""""")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('Hello world\n', result)
 
-            env = {"GRAAL_PYTHON_ARGS": r"""-c 'print(\'"Hello world"\')'"""""}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == '"Hello world"\n'
+            env = env_with_graal_python_args(r"""-c 'print(\'"Hello world"\')'""")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('"Hello world"\n', result)
 
-            env = {"GRAAL_PYTHON_ARGS": """\v-c\vprint('"Hello world"')"""}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == '"Hello world"\n'
+            env = env_with_graal_python_args("""\v-c\vprint('"Hello world"')""")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('"Hello world"\n', result)
 
-            env = {"GRAAL_PYTHON_ARGS": """\v-c\vprint('Hello', "world")"""}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == 'Hello world\n'
+            env = env_with_graal_python_args("""\v-c\vprint('Hello', "world")""")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('Hello world\n', result)
 
             # check that the subprocess receives the args and thus it should fail because it recurses
             args = """\v-c\vimport os\nprint(os.environ.get("GRAAL_PYTHON_ARGS"))"""
-            env = {"GRAAL_PYTHON_ARGS": args}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == f"{args}\n"
+            env = env_with_graal_python_args(args)
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual(f"{args}\n", result)
 
             # check that the subprocess does not receive the args when we end with \v
-            env = {"GRAAL_PYTHON_ARGS": """\v-c\vimport os\nprint(os.environ.get("GRAAL_PYTHON_ARGS"))\v"""}
-            result = subprocess.check_output([sys.executable], env=env, text=True)
-            assert result == 'None\n'
+            env = env_with_graal_python_args("""\v-c\vimport os\nprint(os.environ.get("GRAAL_PYTHON_ARGS"))\v""")
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual('None\n', result)
+
+            # check that the subprocess receives an empty arg
+            args = """\v-c\vimport sys\nprint(repr(sys.argv))\va1\v\va3"""
+            env = env_with_graal_python_args(args)
+            result = run_subprocess_with_graalpy_startup_retry([sys.executable], env=env, text=True, check=True).stdout
+            self.assertEqual("['-c', 'a1', '', 'a3']\n", result)

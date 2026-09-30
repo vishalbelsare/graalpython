@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,17 +41,18 @@
 package com.oracle.graal.python.builtins.objects.dict;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_DEFAULTDICT;
 import static com.oracle.graal.python.nodes.ErrorMessages.FIRST_ARG_MUST_BE_CALLABLE_S;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___INIT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___MISSING__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___OR__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REPR__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ROR__;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.annotations.Builtin;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
@@ -61,7 +62,9 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.str.StringUtils.SimpleTruffleStringFormatNode;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
 import com.oracle.graal.python.lib.PyCallableCheckNode;
 import com.oracle.graal.python.lib.PyDictSetItem;
 import com.oracle.graal.python.lib.PyObjectGetIter;
@@ -69,12 +72,13 @@ import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
@@ -87,17 +91,32 @@ import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PDefaultDict)
 public final class DefaultDictBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = DefaultDictBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return DefaultDictBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___REPR__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = J_DEFAULTDICT, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class DefaultDictNode extends PythonVarargsBuiltinNode {
+        @Specialization
+        @SuppressWarnings("unused")
+        PDefaultDict doGeneric(Object cls, Object[] args, PKeyword[] kwargs,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createDefaultDict(cls, getInstanceShape.execute(cls));
+        }
+    }
+
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     abstract static class ReprNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object reprFunction(VirtualFrame frame, PDefaultDict self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached TypeNodes.GetNameNode getNameNode,
                         @Cached PyObjectReprAsTruffleStringNode reprNode,
@@ -116,14 +135,14 @@ public final class DefaultDictBuiltins extends PythonBuiltins {
     public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object reduce(VirtualFrame frame, PDefaultDict self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached PyObjectGetIter getIter,
-                        @Cached PythonObjectFactory factory) {
+                        @Bind PythonLanguage language) {
             final Object defaultFactory = self.getDefaultFactory();
-            PTuple args = (defaultFactory == PNone.NONE) ? factory.createEmptyTuple() : factory.createTuple(new Object[]{defaultFactory});
-            Object iter = getIter.execute(frame, inliningTarget, factory.createDictItemsView(self));
-            return factory.createTuple(new Object[]{getClassNode.execute(inliningTarget, self), args, PNone.NONE, PNone.NONE, iter});
+            PTuple args = (defaultFactory == PNone.NONE) ? PFactory.createEmptyTuple(language) : PFactory.createTuple(language, new Object[]{defaultFactory});
+            Object iter = getIter.execute(frame, inliningTarget, PFactory.createDictItemsView(language, self));
+            return PFactory.createTuple(language, new Object[]{getClassNode.execute(inliningTarget, self), args, PNone.NONE, PNone.NONE, iter});
         }
     }
 
@@ -131,12 +150,26 @@ public final class DefaultDictBuiltins extends PythonBuiltins {
     @Builtin(name = "copy", minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     public abstract static class CopyNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        static PDefaultDict copy(@SuppressWarnings("unused") VirtualFrame frame, PDefaultDict self,
-                        @Bind("this") Node inliningTarget,
+        @Specialization(guards = "isBuiltinDefaultDict(self)")
+        static PDefaultDict copyBuiltin(PDefaultDict self,
+                        @Bind Node inliningTarget,
                         @Cached HashingStorageCopy copyNode,
-                        @Cached PythonObjectFactory factory) {
-            return factory.createDefaultDict(self.getDefaultFactory(), copyNode.execute(inliningTarget, self.getDictStorage()));
+                        @Bind PythonLanguage language) {
+            return PFactory.createDefaultDict(language, self.getDefaultFactory(), copyNode.execute(inliningTarget, self.getDictStorage()));
+        }
+
+        @Fallback
+        @InliningCutoff
+        static Object copyGeneric(VirtualFrame frame, Object self,
+                        @Bind Node inliningTarget,
+                        @Cached GetClassNode getClassNode,
+                        @Cached CallNode callNode) {
+            PDefaultDict defaultDict = (PDefaultDict) self;
+            return callNode.execute(frame, getClassNode.execute(inliningTarget, defaultDict), defaultDict.getDefaultFactory(), defaultDict);
+        }
+
+        static boolean isBuiltinDefaultDict(PDefaultDict self) {
+            return self.getPythonClass() == PythonBuiltinClassType.PDefaultDict;
         }
     }
 
@@ -145,14 +178,13 @@ public final class DefaultDictBuiltins extends PythonBuiltins {
     public abstract static class MissingNode extends PythonBinaryBuiltinNode {
         @Specialization(guards = "isNone(self.getDefaultFactory())")
         static Object doNoFactory(@SuppressWarnings("unused") PDefaultDict self, Object key,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            throw raiseNode.get(inliningTarget).raise(PythonBuiltinClassType.KeyError, new Object[]{key});
+                        @Bind Node inliningTarget) {
+            throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.KeyError, new Object[]{key});
         }
 
         @Specialization(guards = "!isNone(self.getDefaultFactory())")
         static Object doMissing(VirtualFrame frame, PDefaultDict self, Object key,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached CallNode callNode,
                         @Cached PyDictSetItem setItem) {
             final Object value = callNode.execute(frame, self.getDefaultFactory());
@@ -161,21 +193,22 @@ public final class DefaultDictBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___INIT__, minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_init, isComplex = true)
+    @SlotSignature(name = "defaultdict", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
-    public abstract static class InitNode extends PythonBuiltinNode {
+    public abstract static class InitNode extends PythonVarargsBuiltinNode {
         @Specialization
         static Object doInit(VirtualFrame frame, PDefaultDict self, Object[] args, PKeyword[] kwargs,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached DictBuiltins.InitNode dictInitNode,
                         @Cached PyCallableCheckNode callableCheckNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             Object[] newArgs = args;
             Object newDefault = PNone.NONE;
             if (newArgs.length > 0) {
                 newDefault = newArgs[0];
                 if (newDefault != PNone.NONE && !callableCheckNode.execute(inliningTarget, newDefault)) {
-                    throw raiseNode.get(inliningTarget).raise(TypeError, FIRST_ARG_MUST_BE_CALLABLE_S, " or None");
+                    throw raiseNode.raise(inliningTarget, TypeError, FIRST_ARG_MUST_BE_CALLABLE_S, " or None");
                 }
                 newArgs = PythonUtils.arrayCopyOfRange(args, 1, args.length);
             }
@@ -201,17 +234,16 @@ public final class DefaultDictBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___OR__, minNumOfPositionalArgs = 2)
-    @Builtin(name = J___ROR__, minNumOfPositionalArgs = 2, reverseOperation = true)
+    @Slot(value = SlotKind.nb_or, isComplex = true)
     @GenerateNodeFactory
-    abstract static class OrNode extends PythonBinaryBuiltinNode {
+    abstract static class OrNode extends BinaryOpBuiltinNode {
         @Specialization
         static Object or(VirtualFrame frame, PDict self, PDict other,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached GetClassNode getClassNode,
                         @Cached CallNode callNode,
                         @Cached DictNodes.UpdateNode updateNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached PRaiseNode raiseNode) {
             PDefaultDict dd = (PDefaultDict) (self instanceof PDefaultDict ? self : other);
             Object type = getClassNode.execute(inliningTarget, dd);
             Object result = callNode.execute(frame, type, dd.getDefaultFactory(), self);
@@ -220,7 +252,7 @@ public final class DefaultDictBuiltins extends PythonBuiltins {
                 return result;
             } else {
                 /* Cpython doesn't check for this and ends up with SystemError */
-                throw raiseNode.get(inliningTarget).raise(TypeError);
+                throw raiseNode.raise(inliningTarget, TypeError);
             }
         }
 

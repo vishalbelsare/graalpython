@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,355 +42,429 @@ package com.oracle.graal.python.builtins.modules.cext;
 
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtr;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtrAsTruffleString;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Pointer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyBufferProcs;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectBorrowed;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyTypeObject;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyTypeObjectRawPointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
-import static com.oracle.graal.python.builtins.objects.cext.common.CExtContext.METH_CLASS;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTypeObject__tp_name;
+import static com.oracle.graal.python.nodes.HiddenAttr.AS_BUFFER;
+import static com.oracle.graal.python.nodes.HiddenAttr.METHOD_DEF_PTR;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DOC__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
+import static com.oracle.graal.python.runtime.PythonContext.NATIVE_NULL;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_OBJECT_ARRAY;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi7BuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi8BuiltinNode;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiTernaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.PyObjectSetAttrNode;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.cext.PythonNativeClass;
 import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
 import com.oracle.graal.python.builtins.objects.cext.capi.CApiMemberAccessNodes.ReadMemberNode;
 import com.oracle.graal.python.builtins.objects.cext.capi.CApiMemberAccessNodes.WriteMemberNode;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.CreateFunctionNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
 import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes;
 import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.GetterRoot;
 import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PExternalFunctionWrapper;
 import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.SetterRoot;
-import com.oracle.graal.python.builtins.objects.cext.common.CArrayWrappers.CArrayWrapper;
-import com.oracle.graal.python.builtins.objects.cext.common.CExtContext;
-import com.oracle.graal.python.builtins.objects.cext.common.CExtContext.Store;
-import com.oracle.graal.python.builtins.objects.cext.common.NativeCExtSymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.MethodDescriptorWrapper;
+import com.oracle.graal.python.builtins.objects.cext.capi.PyMethodFlags;
+import com.oracle.graal.python.builtins.objects.cext.capi.WrapperDescriptorRootNodesGen;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.CharPtrToPythonNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonClassInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodes;
+import com.oracle.graal.python.builtins.objects.cext.common.CExtCommonNodes.TransformExceptionToNativeNode;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.ReadObjectNode;
 import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.builtins.objects.getsetdescriptor.GetSetDescriptor;
-import com.oracle.graal.python.builtins.objects.ints.PInt;
-import com.oracle.graal.python.builtins.objects.object.PythonObject;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
 import com.oracle.graal.python.builtins.objects.type.PythonAbstractClass;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.PythonClass;
+import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetSubclassesAsArrayNode;
+import com.oracle.graal.python.lib.PyDictGetItem;
 import com.oracle.graal.python.lib.PyDictSetDefault;
+import com.oracle.graal.python.lib.PyDictSetItem;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.HiddenAttr;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.PRootNode;
 import com.oracle.graal.python.nodes.SpecialAttributeNames;
-import com.oracle.graal.python.nodes.attributes.LookupAttributeInMRONode;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToDynamicObjectNode;
-import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
-import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
+import com.oracle.graal.python.nodes.attributes.WriteAttributeToPythonObjectNode;
+import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
+import com.oracle.graal.python.nodes.object.SetDictNode;
+import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.PythonOptions;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.graal.python.runtime.nativeaccess.NativeFunctionPointer;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.runtime.sequence.storage.MroSequenceStorage;
-import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.Function;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.GenerateCached;
-import com.oracle.truffle.api.dsl.GenerateInline;
-import com.oracle.truffle.api.dsl.ImportStatic;
+import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.library.CachedLibrary;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
-import com.oracle.truffle.api.profiles.InlinedExactClassProfile;
+import com.oracle.truffle.api.object.DynamicObject;
+import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.utilities.CyclicAssumption;
 
 public final class PythonCextTypeBuiltins {
 
     @CApiBuiltin(ret = PyObjectBorrowed, args = {PyTypeObject, PyObject}, call = Direct)
+    @CApiBuiltin(name = "_PyType_LookupRef", ret = PyObjectTransfer, args = {PyTypeObject, PyObject}, call = Direct)
     abstract static class _PyType_Lookup extends CApiBinaryBuiltinNode {
         @Specialization
         Object doGeneric(Object type, Object name,
-                        @Cached LookupAttributeInMRONode.Dynamic lookupAttributeInMRONode) {
-            Object result = lookupAttributeInMRONode.execute(type, name);
-            if (result == PNone.NO_VALUE) {
-                return getNativeNull();
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached CastToTruffleStringNode castToTruffleStringNode,
+                        @Cached TypeNodes.GetMroStorageNode getMroStorageNode,
+                        @Cached EnsurePythonObjectNode ensureNode,
+                        @Cached CStructAccess.ReadObjectNode getNativeDict,
+                        @Cached GetDictIfExistsNode getDictIfExistsNode,
+                        @Cached DynamicObject.GetNode getNode,
+                        @Cached DynamicObject.PutNode putNode,
+                        @Cached PyDictGetItem getItem,
+                        @Cached PyDictSetItem setItem) {
+            TruffleString key = castToTruffleStringNode.castKnownString(inliningTarget, name);
+            MroSequenceStorage mro = getMroStorageNode.execute(inliningTarget, type);
+            for (int i = 0; i < mro.length(); i++) {
+                PythonAbstractClass cls = mro.getPythonClassItemNormalized(i);
+                PDict dict;
+                if (cls instanceof PythonAbstractNativeObject nativeCls) {
+                    Object dictObj = getNativeDict.readFromObj(nativeCls, CFields.PyTypeObject__tp_dict);
+                    if (dictObj instanceof PDict d) {
+                        dict = d;
+                    } else {
+                        continue;
+                    }
+                } else if (cls instanceof PythonManagedClass managedCls) {
+                    dict = getDictIfExistsNode.execute(managedCls);
+                } else {
+                    throw CompilerDirectives.shouldNotReachHere();
+                }
+                Object value;
+                if (dict == null) {
+                    value = getNode.execute((PythonManagedClass) cls, key, null);
+                } else {
+                    value = getItem.execute(null, inliningTarget, dict, key);
+                }
+                if (value != null && value != PNone.NO_VALUE) {
+                    Object promoted = ensureNode.execute(context, value, false);
+                    if (promoted != value) {
+                        if (dict == null) {
+                            putNode.execute((PythonManagedClass) cls, key, promoted);
+                        } else {
+                            setItem.execute(null, inliningTarget, dict, key, promoted);
+                        }
+                        return promoted;
+                    }
+                    return value;
+                }
             }
-            return result;
-        }
-    }
-
-    @CApiBuiltin(ret = Int, args = {PyTypeObject, PyTypeObject}, call = Direct, inlined = true)
-    @ImportStatic(PythonOptions.class)
-    abstract static class PyType_IsSubtype extends CApiBinaryBuiltinNode {
-
-        @Specialization
-        static int doGeneric(Object a, Object b,
-                        @Cached IsSubtypeNode isSubtypeNode) {
-            return PInt.intValue(isSubtypeNode.execute(a, b));
+            return NATIVE_NULL;
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyTypeObject, ConstCharPtrAsTruffleString}, call = Ignored)
-    abstract static class PyTruffle_Compute_Mro extends CApiBinaryBuiltinNode {
+    abstract static class GraalPyPrivate_Compute_Mro extends CApiBinaryBuiltinNode {
 
         @Specialization
         @TruffleBoundary
-        static Object doIt(PythonNativeClass self, TruffleString className) {
-            PythonAbstractClass[] doSlowPath = TypeNodes.ComputeMroNode.doSlowPath(self);
-            return PythonObjectFactory.getUncached().createTuple(new MroSequenceStorage(className, doSlowPath));
+        static Object doIt(PythonNativeClass self, TruffleString className,
+                        @Bind Node inliningTarget) {
+            PythonAbstractClass[] doSlowPath = TypeNodes.ComputeMroNode.doSlowPath(inliningTarget, self);
+            return PFactory.createTuple(PythonLanguage.get(null), new MroSequenceStorage(className, doSlowPath));
+        }
+    }
+
+    static final class NativeTypeDictStorage extends DynamicObject {
+        public NativeTypeDictStorage(Shape shape) {
+            super(shape);
         }
     }
 
     @CApiBuiltin(ret = PyObjectTransfer, args = {PyTypeObject}, call = Ignored)
-    abstract static class PyTruffle_NewTypeDict extends CApiUnaryBuiltinNode {
+    abstract static class GraalPyPrivate_NewTypeDict extends CApiUnaryBuiltinNode {
 
         @Specialization
         @TruffleBoundary
         static PDict doGeneric(PythonNativeClass nativeClass) {
             PythonLanguage language = PythonLanguage.get(null);
-            Store nativeTypeStore = new Store(language.getEmptyShape());
-            DynamicObjectLibrary.getUncached().put(nativeTypeStore, PythonNativeClass.INSTANCESHAPE, language.getShapeForClass(nativeClass));
-            return PythonObjectFactory.getUncached().createDict(new DynamicObjectStorage(nativeTypeStore));
+            NativeTypeDictStorage nativeTypeStore = new NativeTypeDictStorage(language.getEmptyShape());
+            PDict dict = PFactory.createDict(language, new DynamicObjectStorage(nativeTypeStore));
+            HiddenAttr.WriteNode.executeUncached(dict, HiddenAttr.INSTANCESHAPE, language.getShapeForClass(nativeClass));
+            return dict;
         }
     }
 
-    @CApiBuiltin(ret = Int, args = {PyTypeObject, ConstCharPtrAsTruffleString, PyObject}, call = Ignored)
-    abstract static class PyTruffle_Type_Modified extends CApiTernaryBuiltinNode {
-
-        @TruffleBoundary
-        @Specialization(guards = "isNoValue(mroTuple)")
-        int doIt(PythonNativeClass clazz, TruffleString name, @SuppressWarnings("unused") PNone mroTuple) {
-            CyclicAssumption nativeClassStableAssumption = getContext().getNativeClassStableAssumption(clazz, false);
-            if (nativeClassStableAssumption != null) {
-                nativeClassStableAssumption.invalidate("PyType_Modified(\"" + name.toJavaStringUncached() + "\") (without MRO) called");
-            }
-            SpecialMethodSlot.reinitializeSpecialMethodSlots(PythonNativeClass.cast(clazz), getLanguage());
-            return 0;
-        }
-
+    @CApiBuiltin(ret = ArgDescriptor.Void, args = {PyTypeObject}, call = Direct)
+    abstract static class PyType_Modified extends CApiUnaryBuiltinNode {
         @TruffleBoundary
         @Specialization
-        int doIt(PythonNativeClass clazz, TruffleString name, PTuple mroTuple,
-                        @Bind("this") Node inliningTarget,
-                        @Cached InlinedExactClassProfile profile) {
-            CyclicAssumption nativeClassStableAssumption = getContext().getNativeClassStableAssumption(clazz, false);
-            if (nativeClassStableAssumption != null) {
-                nativeClassStableAssumption.invalidate("PyType_Modified(\"" + name.toJavaStringUncached() + "\") called");
-            }
-            SequenceStorage sequenceStorage = profile.profile(inliningTarget, mroTuple.getSequenceStorage());
-            if (sequenceStorage instanceof MroSequenceStorage) {
-                ((MroSequenceStorage) sequenceStorage).lookupChanged();
-            } else {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                throw new IllegalStateException("invalid MRO object for native type \"" + name.toJavaStringUncached() + "\"");
-            }
-            SpecialMethodSlot.reinitializeSpecialMethodSlots(PythonNativeClass.cast(clazz), getLanguage());
-            return 0;
-        }
-    }
-
-    @CApiBuiltin(ret = Int, args = {Pointer, Pointer}, call = Ignored)
-    abstract static class PyTruffle_Trace_Type extends CApiBinaryBuiltinNode {
-        private static final TruffleLogger LOGGER = CApiContext.getLogger(PyTruffle_Trace_Type.class);
-
-        @Specialization(limit = "3")
-        int trace(Object ptr, Object classNameObj,
-                        @CachedLibrary("ptr") InteropLibrary ptrLib,
-                        @CachedLibrary("classNameObj") InteropLibrary nameLib,
-                        @Cached TruffleString.SwitchEncodingNode switchEncodingNode) {
-            final TruffleString className;
-            if (nameLib.isString(classNameObj)) {
-                try {
-                    className = switchEncodingNode.execute(nameLib.asTruffleString(classNameObj), TS_ENCODING);
-                } catch (UnsupportedMessageException e) {
-                    CompilerDirectives.transferToInterpreter();
-                    throw new IllegalStateException();
+        static Object doIt(PythonAbstractClass object,
+                        @Bind Node inliningTarget,
+                        @Cached ReadObjectNode readObjectNode,
+                        @Cached GetDictIfExistsNode getDictIfExists,
+                        @Cached SetDictNode setDict) {
+            if (object instanceof PythonAbstractNativeObject clazz) {
+                PythonContext context = PythonContext.get(inliningTarget);
+                CyclicAssumption nativeClassStableAssumption = context.getNativeClassStableAssumption(clazz, false);
+                if (nativeClassStableAssumption != null) {
+                    nativeClassStableAssumption.invalidate("PyType_Modified(\"" + TypeNodes.GetNameNode.executeUncached(clazz).toJavaStringUncached() + "\") called");
                 }
-            } else {
-                className = null;
+                // Reload slots from native, which also invalidates cached slot lookups
+                clazz.setTpSlots(TpSlots.fromNative(clazz, context));
+                invalidateMroLookup(clazz);
+            } else if (object instanceof PythonManagedClass clazz) {
+                Object field = readObjectNode.read(clazz.getNativePointer(), CFields.PyTypeObject__tp_dict);
+                if (field instanceof PDict dict && dict != getDictIfExists.execute(clazz)) {
+                    setDict.execute(inliningTarget, object, dict);
+                }
+                invalidateMroLookup(clazz);
             }
-            PythonContext context = getContext();
-            Object primitivePtr = CApiContext.asPointer(ptr, ptrLib);
-            context.getCApiContext().traceStaticMemory(primitivePtr, null, className);
-            LOGGER.fine(() -> PythonUtils.formatJString("Initializing native type %s (ptr = %s)", className, CApiContext.asHex(primitivePtr)));
-            return 0;
+            return PNone.NO_VALUE;
         }
+
+        public static void invalidateMroLookup(PythonAbstractClass klass) {
+            // Note: PyType_Modified should not recompute the slots, just invalidate lookup caches
+            PythonAbstractClass[] allSubclasses = GetSubclassesAsArrayNode.executeRecursiveUncached(klass);
+            PythonClass.invalidateTypeStableAssumption(klass);
+            TpSlots.updateSlotWrappersLookups(klass, allSubclasses);
+            MroSequenceStorage mroStorage = TypeNodes.GetMroStorageNode.executeUncached(klass);
+            mroStorage.lookupChanged();
+            for (PythonAbstractClass subclass : allSubclasses) {
+                PythonClass.invalidateTypeStableAssumption(subclass);
+                MroSequenceStorage subClassMroStorage = TypeNodes.GetMroStorageNode.executeUncached(subclass);
+                subClassMroStorage.lookupChanged();
+            }
+        }
+
     }
 
-    @GenerateInline
-    @GenerateCached(false)
-    @ImportStatic(CExtContext.class)
-    abstract static class NewClassMethodNode extends Node {
-
-        abstract Object execute(Node inliningTarget, Object methodDefPtr, TruffleString name, Object methObj, Object flags, Object wrapper, Object type, Object doc);
-
-        @Specialization(guards = "isClassOrStaticMethod(flags)")
-        static Object classOrStatic(Node inliningTarget, Object methodDefPtr, TruffleString name, Object methObj, int flags, int wrapper, Object type, Object doc,
-                        @Cached(inline = false) PythonObjectFactory factory,
-                        @CachedLibrary(limit = "1") DynamicObjectLibrary dylib,
-                        @Exclusive @Cached CreateFunctionNode createFunctionNode) {
-            Object func = createFunctionNode.execute(inliningTarget, name, methObj, wrapper, type, flags);
-            PythonObject function;
-            if ((flags & METH_CLASS) != 0) {
-                function = factory.createClassmethodFromCallableObj(func);
-            } else {
-                function = factory.createStaticmethodFromCallableObj(func);
-            }
-            dylib.put(function, T___NAME__, name);
-            dylib.put(function, T___DOC__, doc);
-            dylib.put(function, PythonCextMethodBuiltins.METHOD_DEF_PTR, methodDefPtr);
-            return function;
-        }
-
-        @Specialization(guards = "!isClassOrStaticMethod(flags)")
-        static Object doNativeCallable(Node inliningTarget, Object methodDefPtr, TruffleString name, Object methObj, int flags, int wrapper, Object type, Object doc,
-                        @Cached PyObjectSetAttrNode setattr,
-                        @Cached(inline = false) WriteAttributeToObjectNode write,
-                        @Exclusive @Cached CreateFunctionNode createFunctionNode) {
-            Object func = createFunctionNode.execute(inliningTarget, name, methObj, wrapper, type, flags);
-            setattr.execute(inliningTarget, func, T___NAME__, name);
-            setattr.execute(inliningTarget, func, T___DOC__, doc);
-            write.execute(func, PythonCextMethodBuiltins.METHOD_DEF_PTR, methodDefPtr);
-            return func;
-        }
-    }
-
-    @CApiBuiltin(ret = Int, args = {Pointer, PyTypeObject, PyObject, ConstCharPtrAsTruffleString, Pointer, Int, Int, ConstCharPtrAsTruffleString}, call = Ignored)
-    abstract static class PyTruffleType_AddFunctionToType extends CApi8BuiltinNode {
+    @CApiBuiltin(ret = Int, args = {Pointer}, call = Ignored)
+    abstract static class GraalPyPrivate_Trace_Type extends CApiUnaryBuiltinNode {
+        private static final TruffleLogger LOGGER = CApiContext.getLogger(GraalPyPrivate_Trace_Type.class);
 
         @Specialization
-        static int classMethod(Object methodDefPtr, Object type, Object dict, TruffleString name, Object cfunc, int flags, int wrapper, Object doc,
-                        @Bind("this") Node inliningTarget,
-                        @Cached NewClassMethodNode newClassMethodNode,
-                        @Cached PyDictSetDefault setDefault) {
-            Object func = newClassMethodNode.execute(inliningTarget, methodDefPtr, name, cfunc, flags, wrapper, type, doc);
-            setDefault.execute(null, inliningTarget, dict, name, func);
+        @TruffleBoundary
+        int trace(long ptr) {
+            LOGGER.fine(() -> PythonUtils.formatJString("Initializing native type %s (ptr = %s)",
+                            CStructAccess.ReadCharPtrNode.executeUncached(ptr, PyTypeObject__tp_name),
+                            CApiContext.asHex(ptr)));
             return 0;
         }
     }
 
     /**
-     * Signature: {@code (primary, tpDict, name", cfunc, flags, wrapper, doc)}
+     * Similar to {@code type_add_method}, this will either create a
+     * {@link PythonBuiltinClassType#PBuiltinClassMethod},
+     * {@link PythonBuiltinClassType#PStaticmethod}, or
+     * {@link PythonBuiltinClassType#PBuiltinFunction}.
+     *
+     * @param language The Python language instance.
+     * @param methodDefPtr The native
+     *            {@link com.oracle.graal.python.builtins.objects.cext.structs.CStructs#PyMethodDef}
+     *            struct.
+     * @param name The name of the attribute.
+     * @param methPtr The native function pointer ({@code PyCFunction}).
+     * @param flags The method flags (i.e. {@code methodDef->flags}).
+     * @param type The enclosing type.
+     * @param doc The doc string (usually a
+     * @return
      */
-    @CApiBuiltin(ret = Int, args = {PyTypeObject, PyObject, ConstCharPtrAsTruffleString, Pointer, Int, Int, ConstCharPtrAsTruffleString}, call = Ignored)
-    abstract static class PyTruffleType_AddSlot extends CApi7BuiltinNode {
+    private static PythonBuiltinObject typeAddMethod(PythonLanguage language, long methodDefPtr, TruffleString name, long methPtr, int flags, Object type, Object doc) {
+        assert doc == PNone.NO_VALUE || doc instanceof TruffleString;
+        PBuiltinFunction func = MethodDescriptorWrapper.createWrapperFunction(language, name, methPtr, type, flags);
+        if (func != null) {
+            WriteAttributeToPythonObjectNode.executeUncached(func, T___NAME__, name);
+            CFunctionDocUtils.writeDocAndTextSignature(func, name, doc, flags);
+        }
+        if (PyMethodFlags.isMethClass(flags)) {
+            if (PyMethodFlags.isMethStatic(flags)) {
+                assert func == null;
+                throw PRaiseNode.raiseStatic(EncapsulatingNodeReference.getCurrent().get(), PythonBuiltinClassType.ValueError, ErrorMessages.METHOD_CANNOT_BE_BOTH_CLASS_AND_STATIC);
+            }
+            assert func != null;
+            return PFactory.createBuiltinClassmethodFromCallableObj(language, func);
+        } else if (PyMethodFlags.isMethStatic(flags)) {
+            return PFactory.createStaticmethodFromCallableObj(language, func);
+        }
+        HiddenAttr.WriteLongNode.executeUncached(func, METHOD_DEF_PTR, methodDefPtr);
+        return func;
+    }
 
-        @Specialization
-        @TruffleBoundary
-        static int addSlot(Object clazz, PDict tpDict, TruffleString memberName, Object cfunc, int flags, int wrapper, Object memberDoc) {
-            // create wrapper descriptor
-            Object wrapperDescriptor = CreateFunctionNode.executeUncached(memberName, cfunc, wrapper, clazz, flags);
-            WriteAttributeToDynamicObjectNode.getUncached().execute(wrapperDescriptor, SpecialAttributeNames.T___DOC__, memberDoc);
-
-            // add wrapper descriptor to tp_dict
-            PyDictSetDefault.executeUncached(tpDict, memberName, wrapperDescriptor);
+    @CApiBuiltin(ret = Int, args = {Pointer, PyTypeObject, PyObject, ConstCharPtrAsTruffleString, Pointer, Int, ConstCharPtrAsTruffleString}, call = Ignored)
+    public static int GraalPyPrivate_Type_AddFunctionToType(long methodDefPtr, long typeRaw, long dictRaw, long nameRaw, long cfunc, int flags, long docRaw) {
+        CompilerAsserts.neverPartOfCompilation();
+        try {
+            Object type = NativeToPythonClassInternalNode.executeUncached(typeRaw);
+            Object dict = NativeToPythonInternalNode.executeUncached(dictRaw, false);
+            TruffleString name = (TruffleString) CharPtrToPythonNode.executeUncached(nameRaw);
+            Object doc = CharPtrToPythonNode.executeUncached(docRaw);
+            assert doc == PNone.NO_VALUE || doc instanceof TruffleString;
+            Object func = typeAddMethod(PythonLanguage.get(null), methodDefPtr, name, cfunc, flags, type, doc);
+            PyDictSetDefault.executeUncached(dict, name, func);
             return 0;
+        } catch (PException t) {
+            TransformExceptionToNativeNode.executeUncached(t);
+            return -1;
         }
     }
 
-    @CApiBuiltin(ret = Int, args = {PyTypeObject, PyObject, ConstCharPtrAsTruffleString, Int, Py_ssize_t, Int, ConstCharPtrAsTruffleString}, call = CApiCallPath.Ignored)
-    public abstract static class PyTruffleType_AddMember extends CApi7BuiltinNode {
-
-        @Specialization
-        @TruffleBoundary
-        public static int addMember(Object clazz, PDict tpDict, TruffleString memberName, int memberType, long offset, int canSet, Object memberDoc) {
-            // note: 'doc' may be NULL; in this case, we would store 'None'
-            PythonLanguage language = PythonLanguage.get(null);
-            PBuiltinFunction getterObject = ReadMemberNode.createBuiltinFunction(language, clazz, memberName, memberType, (int) offset);
-
-            Object setterObject = null;
-            if (canSet != 0) {
-                setterObject = WriteMemberNode.createBuiltinFunction(language, clazz, memberName, memberType, (int) offset);
+    @CApiBuiltin(ret = Int, args = {PyTypeObject}, call = Ignored)
+    public static int GraalPyPrivate_Type_AddOperators(long type) {
+        CompilerAsserts.neverPartOfCompilation();
+        try {
+            Object clazz = NativeToPythonClassInternalNode.executeUncached(type);
+            if (clazz instanceof PythonAbstractNativeObject nativeClass) {
+                TpSlots.addOperatorsToNative(nativeClass);
+                return 0;
             }
-
-            // create member descriptor
-            GetSetDescriptor memberDescriptor = PythonObjectFactory.getUncached().createMemberDescriptor(getterObject, setterObject, memberName, clazz);
-            WriteAttributeToDynamicObjectNode.getUncached().execute(memberDescriptor, SpecialAttributeNames.T___DOC__, memberDoc);
-
-            // add member descriptor to tp_dict
-            PyDictSetDefault.executeUncached(tpDict, memberName, memberDescriptor);
-            return 0;
+        } catch (PException t) {
+            TransformExceptionToNativeNode.executeUncached(t);
         }
+        return -1;
     }
 
-    @GenerateInline
-    @GenerateCached(false)
-    abstract static class CreateGetSetNode extends Node {
-
-        abstract GetSetDescriptor execute(Node inliningTarget, TruffleString name, Object cls, Object getter, Object setter, Object doc, Object closure);
-
-        @Specialization
-        @TruffleBoundary
-        static GetSetDescriptor createGetSet(Node inliningTarget, TruffleString name, Object cls, Object getter, Object setter, Object doc, Object closure,
-                        @Cached(inline = false) PythonObjectFactory factory,
-                        @CachedLibrary(limit = "1") DynamicObjectLibrary dylib,
-                        @CachedLibrary(limit = "2") InteropLibrary interopLibrary) {
-            assert !(doc instanceof CArrayWrapper);
-            // note: 'doc' may be NULL; in this case, we would store 'None'
-            PBuiltinFunction get = null;
-            if (!interopLibrary.isNull(getter)) {
-                RootCallTarget getterCT = getterCallTarget(name, PythonLanguage.get(inliningTarget));
-                getter = NativeCExtSymbol.ensureExecutable(getter, PExternalFunctionWrapper.GETTER);
-                get = factory.createBuiltinFunction(name, cls, EMPTY_OBJECT_ARRAY, ExternalFunctionNodes.createKwDefaults(getter, closure), 0, getterCT);
-            }
-
-            PBuiltinFunction set = null;
-            boolean hasSetter = !interopLibrary.isNull(setter);
-            if (hasSetter) {
-                RootCallTarget setterCT = setterCallTarget(name, PythonLanguage.get(inliningTarget));
-                setter = NativeCExtSymbol.ensureExecutable(setter, PExternalFunctionWrapper.SETTER);
-                set = factory.createBuiltinFunction(name, cls, EMPTY_OBJECT_ARRAY, ExternalFunctionNodes.createKwDefaults(setter, closure), 0, setterCT);
-            }
-
-            // create get-set descriptor
-            GetSetDescriptor descriptor = factory.createGetSetDescriptor(get, set, name, cls, hasSetter);
-            dylib.put(descriptor.getStorage(), T___DOC__, doc);
-            return descriptor;
-        }
-
-        @TruffleBoundary
-        private static RootCallTarget getterCallTarget(TruffleString name, PythonLanguage lang) {
-            Function<PythonLanguage, RootNode> rootNodeFunction = l -> new GetterRoot(l, name, PExternalFunctionWrapper.GETTER);
-            return lang.createCachedCallTarget(rootNodeFunction, GetterRoot.class, PExternalFunctionWrapper.GETTER, name, true);
-        }
-
-        @TruffleBoundary
-        private static RootCallTarget setterCallTarget(TruffleString name, PythonLanguage lang) {
-            Function<PythonLanguage, RootNode> rootNodeFunction = l -> new SetterRoot(l, name, PExternalFunctionWrapper.SETTER);
-            return lang.createCachedCallTarget(rootNodeFunction, SetterRoot.class, PExternalFunctionWrapper.SETTER, name, true);
-        }
+    @CApiBuiltin(ret = Int, args = {PyTypeObjectRawPointer, PyObjectRawPointer, ConstCharPtr, Int, Py_ssize_t, Int, ConstCharPtr}, call = CApiCallPath.Ignored)
+    @TruffleBoundary
+    public static int GraalPyPrivate_Type_AddMember(long clazzPtr, long tpDictPtr, long memberNamePtr, int memberType, long offset, int canSet, long memberDocPtr) {
+        Object clazz = NativeToPythonClassInternalNode.executeUncached(clazzPtr);
+        PDict tpDict = (PDict) NativeToPythonInternalNode.executeUncached(tpDictPtr, false);
+        TruffleString memberName = (TruffleString) CharPtrToPythonNode.executeUncached(memberNamePtr);
+        Object memberDoc = memberDocPtr == NULLPTR ? PNone.NO_VALUE : CharPtrToPythonNode.executeUncached(memberDocPtr);
+        return addMember(clazz, tpDict, memberName, memberType, offset, canSet, memberDoc);
     }
 
-    @CApiBuiltin(ret = Int, args = {PyTypeObject, PyObject, ConstCharPtrAsTruffleString, Pointer, Pointer, ConstCharPtrAsTruffleString, Pointer}, call = Ignored)
-    abstract static class PyTruffleType_AddGetSet extends CApi7BuiltinNode {
+    @TruffleBoundary
+    public static int addMember(Object clazz, PDict tpDict, TruffleString memberName, int memberType, long offset, int canSet, Object memberDoc) {
+        // note: 'doc' may be NULL; in this case, we would store 'None'
+        PythonLanguage language = PythonLanguage.get(null);
+        PBuiltinFunction getterObject = ReadMemberNode.createBuiltinFunction(language, clazz, memberName, memberType, (int) offset);
+
+        Object setterObject = null;
+        if (canSet != 0) {
+            setterObject = WriteMemberNode.createBuiltinFunction(language, clazz, memberName, memberType, (int) offset);
+        }
+
+        // create member descriptor
+        GetSetDescriptor memberDescriptor = PFactory.createMemberDescriptor(language, getterObject, setterObject, memberName, clazz);
+        WriteAttributeToPythonObjectNode.getUncached().execute(memberDescriptor, SpecialAttributeNames.T___DOC__, memberDoc);
+
+        // add member descriptor to tp_dict
+        PyDictSetDefault.executeUncached(tpDict, memberName, memberDescriptor);
+        return 0;
+    }
+
+    @CApiBuiltin(ret = Int, args = {PyTypeObjectRawPointer, PyObjectRawPointer, ConstCharPtr, Pointer, Pointer, ConstCharPtr, Pointer}, call = Ignored)
+    static int GraalPyPrivate_Type_AddGetSet(long clsPtr, long dictPtr, long namePtr, long getter, long setter, long docPtr, long closure) {
+        Object cls = NativeToPythonClassInternalNode.executeUncached(clsPtr);
+        PDict dict = (PDict) NativeToPythonInternalNode.executeUncached(dictPtr, false);
+        TruffleString name = (TruffleString) CharPtrToPythonNode.executeUncached(namePtr);
+        Object doc = docPtr == NULLPTR ? PNone.NO_VALUE : CharPtrToPythonNode.executeUncached(docPtr);
+        return addGetSet(cls, dict, name, getter, setter, doc, closure);
+    }
+
+    public static int addGetSet(Object cls, PDict dict, TruffleString name, long getter, long setter, Object doc, long closure) {
+        GetSetDescriptor descr = createGetSet(name, cls, getter, setter, doc, closure);
+        PyDictSetDefault.executeUncached(dict, name, descr);
+        return 0;
+    }
+
+    @TruffleBoundary
+    public static GetSetDescriptor createGetSet(TruffleString name, Object cls, long getter, long setter, Object doc, long closure) {
+        // note: 'doc' may be NULL; in this case, we would store 'None'
+        PBuiltinFunction get = null;
+        PythonLanguage language = PythonLanguage.get(null);
+        if (getter != NULLPTR) {
+            PRootNode getterRoot = getterRootNode(name, language);
+            NativeFunctionPointer getterFun = CExtCommonNodes.bindFunctionPointer(getter, PExternalFunctionWrapper.GETTER);
+            get = PFactory.createBuiltinFunction(language, name, cls, EMPTY_OBJECT_ARRAY, ExternalFunctionNodes.createKwDefaults(getterFun, closure), 0, getterRoot);
+        }
+
+        PBuiltinFunction set = null;
+        boolean hasSetter = setter != NULLPTR;
+        if (hasSetter) {
+            PRootNode setterRoot = setterRootNode(name, language);
+            NativeFunctionPointer setterFun = CExtCommonNodes.bindFunctionPointer(setter, PExternalFunctionWrapper.SETTER);
+            set = PFactory.createBuiltinFunction(language, name, cls, EMPTY_OBJECT_ARRAY, ExternalFunctionNodes.createKwDefaults(setterFun, closure), 0, setterRoot);
+        }
+
+        GetSetDescriptor descriptor = PFactory.createGetSetDescriptor(language, get, set, name, cls, hasSetter);
+        WriteAttributeToPythonObjectNode.executeUncached(descriptor, T___DOC__, doc);
+        return descriptor;
+    }
+
+    @TruffleBoundary
+    private static PRootNode getterRootNode(TruffleString name, PythonLanguage lang) {
+        Function<PythonLanguage, PRootNode> rootNodeFunction = l -> WrapperDescriptorRootNodesGen.create(l, name, PExternalFunctionWrapper.GETTER);
+        return lang.createCachedExternalFunWrapperRootNode(rootNodeFunction, GetterRoot.class, PExternalFunctionWrapper.GETTER, name, true, false);
+    }
+
+    @TruffleBoundary
+    private static PRootNode setterRootNode(TruffleString name, PythonLanguage lang) {
+        Function<PythonLanguage, PRootNode> rootNodeFunction = l -> WrapperDescriptorRootNodesGen.create(l, name, PExternalFunctionWrapper.SETTER);
+        return lang.createCachedExternalFunWrapperRootNode(rootNodeFunction, SetterRoot.class, PExternalFunctionWrapper.SETTER, name, true, false);
+    }
+
+    @CApiBuiltin(ret = ArgDescriptor.Void, args = {PyTypeObject, PyBufferProcs}, call = Ignored)
+    abstract static class GraalPyPrivate_Type_SetBufferProcs extends CApiBinaryBuiltinNode {
 
         @Specialization
-        static int doGeneric(Object cls, PDict dict, TruffleString name, Object getter, Object setter, Object doc, Object closure,
-                        @Bind("this") Node inliningTarget,
-                        @Cached CreateGetSetNode createGetSetNode,
-                        @Cached PyDictSetDefault setDefault) {
-            GetSetDescriptor descr = createGetSetNode.execute(inliningTarget, name, cls, getter, setter, doc, closure);
-            setDefault.execute(null, inliningTarget, dict, name, descr);
-            return 0;
+        static Object setBuiltinClassType(PythonBuiltinClassType clazz, long bufferProcs,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached HiddenAttr.WriteLongNode writeAttrNode) {
+            writeAttrNode.execute(inliningTarget, PythonContext.get(inliningTarget).lookupType(clazz), AS_BUFFER, bufferProcs);
+            return PNone.NO_VALUE;
+        }
+
+        @Specialization(guards = "isPythonClass(object)")
+        static Object set(PythonAbstractObject object, long bufferProcs,
+                        @Bind Node inliningTarget,
+                        @Shared @Cached HiddenAttr.WriteLongNode writeAttrNode) {
+            writeAttrNode.execute(inliningTarget, object, AS_BUFFER, bufferProcs);
+            return PNone.NO_VALUE;
+        }
+
+    }
+
+    @CApiBuiltin(ret = ArgDescriptor.Void, args = {Pointer, Int}, call = Ignored)
+    public static void GraalPyPrivate_Type_NotifyDealloc(long ptr, int typeLookupIdx) {
+        assert CStructAccess.readIntField(ptr, CFields.PyTypeObject__tp_version_tag) == typeLookupIdx;
+        if (typeLookupIdx != 0) {
+            CApiTransitions.nativeTypeLookupRemove(PythonContext.get(null).handleContext, ptr, typeLookupIdx);
         }
     }
 }

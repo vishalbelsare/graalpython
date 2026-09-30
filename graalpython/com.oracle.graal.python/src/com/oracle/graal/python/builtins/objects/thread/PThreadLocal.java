@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,7 +46,6 @@ import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetItem;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetIterator;
@@ -56,16 +55,13 @@ import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.Hashi
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.object.PythonBuiltinObject;
-import com.oracle.graal.python.builtins.objects.type.SpecialMethodSlot;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
 import com.oracle.graal.python.nodes.PGuards;
-import com.oracle.graal.python.nodes.attributes.LookupCallableSlotInMRONode;
-import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
@@ -75,7 +71,6 @@ import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
 
 @ExportLibrary(InteropLibrary.class)
-@ImportStatic(SpecialMethodSlot.class)
 public final class PThreadLocal extends PythonBuiltinObject {
     private final ThreadLocal<PDict> threadLocalDict;
     private final Object[] args;
@@ -138,7 +133,7 @@ public final class PThreadLocal extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean isMemberReadable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         return readMember(inliningTarget, member, getItem, fromJavaStringNode) != null;
@@ -146,7 +141,7 @@ public final class PThreadLocal extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean isMemberModifiable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         return readMember(inliningTarget, member, getItem, fromJavaStringNode) != null;
@@ -154,7 +149,7 @@ public final class PThreadLocal extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean isMemberInsertable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         return !isMemberReadable(member, inliningTarget, getItem, fromJavaStringNode);
@@ -162,7 +157,7 @@ public final class PThreadLocal extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean isMemberInvocable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         PDict localDict = getThreadLocalDict();
@@ -171,7 +166,7 @@ public final class PThreadLocal extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean isMemberRemovable(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
         return isMemberReadable(member, inliningTarget, getItem, fromJavaStringNode);
@@ -179,23 +174,21 @@ public final class PThreadLocal extends PythonBuiltinObject {
 
     @ExportMessage
     public boolean hasMemberReadSideEffects(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
-                    @Shared("getClassGeneric") @Cached(inline = false) GetClassNode getClassNode,
-                    @Cached(parameters = "Get") LookupCallableSlotInMRONode lookupGet) {
+                    @Shared @Cached GetObjectSlotsNode getSlotsNode) {
         Object attr = readMember(inliningTarget, member, getItem, fromJavaStringNode);
-        return attr != null && lookupGet.execute(getClassNode.executeCached(attr)) != PNone.NO_VALUE;
+        return attr != null && getSlotsNode.execute(inliningTarget, attr).tp_descr_get() != null;
     }
 
     @ExportMessage
     public boolean hasMemberWriteSideEffects(String member,
-                    @Bind("$node") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Shared("getItem") @Cached HashingStorageGetItem getItem,
                     @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
-                    @Shared("getClassGeneric") @Cached(inline = false) GetClassNode getClassNode,
-                    @Cached(parameters = "Set") LookupCallableSlotInMRONode lookupSet) {
+                    @Shared @Cached GetObjectSlotsNode getSlotsNode) {
         Object attr = readMember(inliningTarget, member, getItem, fromJavaStringNode);
-        return attr != null && lookupSet.execute(getClassNode.executeCached(attr)) != PNone.NO_VALUE;
+        return attr != null && getSlotsNode.execute(inliningTarget, attr).tp_descr_set() != null;
     }
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -192,6 +192,61 @@ def test_function_changes_kwdefaults():
     assert_raises(TypeError, foo)
 
 
+def test_function_kwdefaults_dict_is_live():
+    def foo(*, x=1):
+        return x
+
+    kwdefaults = foo.__kwdefaults__
+    assert kwdefaults is foo.__kwdefaults__
+    kwdefaults["x"] = 2
+    assert foo() == 2
+
+    assigned = {"x": 3}
+    foo.__kwdefaults__ = assigned
+    assert foo.__kwdefaults__ is assigned
+    assigned["x"] = 4
+    assert foo() == 4
+
+    assigned[1] = "not a keyword"
+    assert foo.__kwdefaults__ == {"x": 4, 1: "not a keyword"}
+    assert foo() == 4
+
+    non_string_kwdefaults = {1: "not a keyword"}
+    foo.__kwdefaults__ = non_string_kwdefaults
+    assert foo.__kwdefaults__ is non_string_kwdefaults
+    assert_raises(TypeError, foo)
+    non_string_kwdefaults["x"] = 5
+    assert foo() == 5
+
+
+def test_mangled_kwonly_kwdefaults_dict_is_live():
+    class argmap:
+        def make_wrapper(self):
+            def func(*args, __wrapper=None, **kwargs):
+                return __wrapper
+
+            assert "_argmap__wrapper" in func.__kwdefaults__
+            func.__kwdefaults__["_argmap__wrapper"] = func
+            return func
+
+    func = argmap().make_wrapper()
+    assert "_argmap__wrapper" in func.__code__.co_varnames
+    assert "__wrapper" not in func.__code__.co_varnames
+    assert func() is func
+
+
+def test_method_kwdefaults_dict_is_live():
+    class C:
+        def method(self, *, x=1):
+            return x
+
+    obj = C()
+    kwdefaults = obj.method.__kwdefaults__
+    assert kwdefaults is C.method.__kwdefaults__
+    kwdefaults["x"] = 2
+    assert obj.method() == 2
+
+
 def test_code_change():
     def foo():
         return "foo"
@@ -236,7 +291,7 @@ def test_code_marshal_with_freevars():
     assert_raises(ValueError, assign_code, foo, foobar_code)
     bazbar.__code__ = foobar_code
     assert bazbar() == (2,3)
-    
+
 
 def test_function_dict_writeable():
     def foo(): pass
@@ -278,4 +333,47 @@ def test_functools_lru_cache():
 
     type_entity = getattr(sys.modules['functools'], '_lru_cache_wrapper')
     assert isinstance(cached_func, type_entity), "lru_cache should not be using the python-based version"
-    
+
+
+def test_no_docstring():
+    def no_doc():
+        pass
+
+    assert no_doc.__doc__ is None
+
+
+def test_docstring_via_type_contructor():
+    def foo():
+        """my doc"""
+        return 1
+
+    assert foo.__doc__ == 'my doc'
+    foo2 = type(foo)(foo.__code__, foo.__globals__, foo.__name__, foo.__defaults__, foo.__closure__)
+    assert foo2.__doc__ == 'my doc'
+
+def test_args_kwargs_eval_order():
+    l = []
+    def a1():
+        nonlocal l
+        l.append(101)
+        return 1
+    def a2():
+        nonlocal l
+        l.append(102)
+        return 1
+    def k1():
+        nonlocal l
+        l.append(201)
+        return 1
+    def k2():
+        nonlocal l
+        l.append(202)
+        return 1
+    def k3():
+        nonlocal l
+        l.append(203)
+        return 1
+    def f(*args, **kwargs):
+        pass
+    f(a1(), a2(), k1=k1(), k2=k2(), k3=k3())
+    assert l == [101, 102, 201, 202, 203]

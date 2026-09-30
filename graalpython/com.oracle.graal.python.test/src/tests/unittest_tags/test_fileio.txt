@@ -1,94 +1,91 @@
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testAttributes
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testBlksize
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClose
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedFileno
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedIsatty
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedRead
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedReadable
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedReadall
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedReadinto
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedSeek
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedSeekable
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedTell
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedTruncate
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedWritable
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrnoOnClosedWrite
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testErrors
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testMethods
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testOpenDirFD
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testOpendir
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testReadintoByteArray
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testRecursiveRepr
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testRepr
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testReprNoCloseFD
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testSeekTell
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testWeakRefs
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testWritelinesError
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testWritelinesList
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.testWritelinesUserList
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.test_none_args
-*graalpython.lib-python.3.test.test_fileio.CAutoFileTests.test_reject
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testAbles
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testAppend
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testBadModeArgument
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testBytesOpen
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testConstructorHandlesNULChars
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testInvalidFd
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testInvalidFd_overflow
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testInvalidInit
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testInvalidModeStrings
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testModeStrings
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testTruncate
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testTruncateOnWindows
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testUnclosedFDOnException
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testUnicodeOpen
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testUtf8BytesOpen
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.testWarnings
-*graalpython.lib-python.3.test.test_fileio.COtherFileTests.test_open_code
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testAttributes
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testBlksize
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClose
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedFileno
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedIsatty
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedRead
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedReadable
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedReadall
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedReadinto
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedSeek
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedSeekable
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedTell
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedTruncate
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedWritable
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrnoOnClosedWrite
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testErrors
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testMethods
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testOpenDirFD
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testOpendir
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testReadintoByteArray
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testRecursiveRepr
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testRepr
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testReprNoCloseFD
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testSeekTell
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testWeakRefs
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testWritelinesError
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testWritelinesList
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.testWritelinesUserList
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.test_none_args
-*graalpython.lib-python.3.test.test_fileio.PyAutoFileTests.test_reject
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testAbles
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testAppend
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testBadModeArgument
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testBytesOpen
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testConstructorHandlesNULChars
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testInvalidFd
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testInvalidInit
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testInvalidModeStrings
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testModeStrings
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testTruncate
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testTruncateOnWindows
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testUnclosedFDOnException
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testUnicodeOpen
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testUtf8BytesOpen
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.testWarnings
-*graalpython.lib-python.3.test.test_fileio.PyOtherFileTests.test_open_code
-*graalpython.lib-python.3.test.test_fileio.TestMain.test_main
+test.test_fileio.CAutoFileTests.testAttributes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testBlksize @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClose @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedFileno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedIsatty @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedRead @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedReadable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedReadall @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedReadinto @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedSeek @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedSeekable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedTell @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedTruncate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedWritable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrnoOnClosedWrite @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testErrors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testMethods @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testOpenDirFD @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_fileio.CAutoFileTests.testOpendir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testReadintoByteArray @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testRepr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testReprNoCloseFD @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testSeekTell @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testWritelinesError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testWritelinesList @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.testWritelinesUserList @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.test_none_args @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.CAutoFileTests.test_reject @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testAbles @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testAppend @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testBadModeArgument @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testBooleanFd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testBytesOpen @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testConstructorHandlesNULChars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testInvalidFd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testInvalidInit @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testInvalidModeStrings @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testModeStrings @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testTruncate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testTruncateOnWindows @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testUnclosedFDOnException @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testUnicodeOpen @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testUtf8BytesOpen @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.testWarnings @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.COtherFileTests.test_open_code @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testAttributes @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testBlksize @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClose @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedFileno @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedIsatty @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedRead @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedReadable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedReadall @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedReadinto @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedSeek @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedSeekable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedTell @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedTruncate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedWritable @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrnoOnClosedWrite @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testErrors @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testMethods @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testOpenDirFD @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github
+test.test_fileio.PyAutoFileTests.testOpendir @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testReadintoByteArray @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testRepr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testReprNoCloseFD @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testSeekTell @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testWritelinesError @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testWritelinesList @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.testWritelinesUserList @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.test_none_args @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.test_reject @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyAutoFileTests.test_subclass_repr @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testAbles @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testAppend @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testBadModeArgument @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testBooleanFd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testBytesOpen @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testConstructorHandlesNULChars @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testInvalidFd @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testInvalidInit @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testInvalidModeStrings @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testModeStrings @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testTruncate @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testTruncateOnWindows @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testUnclosedFDOnException @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testUnicodeOpen @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testUtf8BytesOpen @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.testWarnings @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_fileio.PyOtherFileTests.test_open_code @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

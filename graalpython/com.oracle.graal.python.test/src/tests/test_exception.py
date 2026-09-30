@@ -1,11 +1,15 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
-
+import os
 import unittest
 import sys
 import errno
+
+from tests.util import skip_if_sandboxed
+
+GRAALPYTHON = sys.implementation.name == "graalpy"
 
 def fun0(test_obj, expected_error):
     typ, val, tb = sys.exc_info()
@@ -29,6 +33,9 @@ def fun4(test_obj):
         fun3(test_obj, ValueError)
 
 class ExceptionTests(unittest.TestCase):
+
+    def test_errno_enotsup(self):
+        self.assertEqual(errno.errorcode[errno.ENOTSUP], "ENOTSUP")
 
     def test_exc_info(self):
         typ, val, tb = (None,) * 3
@@ -673,3 +680,22 @@ class ExceptionTests(unittest.TestCase):
         assert list(Iter2()) == []
         sentinel = object()
         assert getattr(Obj1(), 'does_not_exist', sentinel) is sentinel
+
+
+@unittest.skipUnless(GRAALPYTHON, "There is no simple way to restrict memory for CPython process")
+@skip_if_sandboxed("Sandboxed runs use a restricted runtime configuration for subprocess memory tests")
+def test_memory_error():
+    import subprocess
+    compiler_options = []
+    if subprocess.run([sys.executable, '--engine.Compilation=true', '-c', '1'], stderr=subprocess.DEVNULL).returncode == 0:
+        compiler_options = [
+            '--experimental-options',
+            '--engine.MultiTier=false',
+            '--engine.BackgroundCompilation=false',
+            '--engine.CompileImmediately',
+            '--engine.CompileOnly=alloc',
+        ]
+    file = os.path.join(os.path.dirname(__file__), 'memoryerror.py')
+    result = subprocess.check_output([sys.executable, '-S', *compiler_options, '--vm.Xmx400m', file], text=True)
+    assert 'ERROR' not in result, result
+    assert 'DONE' in result, result

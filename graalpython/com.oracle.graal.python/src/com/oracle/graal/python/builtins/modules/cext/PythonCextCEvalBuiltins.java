@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,198 +40,186 @@
  */
 package com.oracle.graal.python.builtins.modules.cext;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.RecursionError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtr;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyFrameObjectTransfer;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyFrameObjectBorrowed;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectBorrowed;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectConstPtr;
-import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectTransfer;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectRawPointer;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyThreadState;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Void;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApi11BuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiNullaryBuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.cell.PCell;
 import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodesFactory.FromCharPointerNodeGen;
-import com.oracle.graal.python.builtins.objects.cext.capi.PThreadState;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.ToNativeBorrowedNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
 import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.code.CodeNodes;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
+import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.function.Signature;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
+import com.oracle.graal.python.lib.PyEvalGetGlobals;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.argument.CreateArgumentsNode;
-import com.oracle.graal.python.nodes.call.GenericInvokeNode;
-import com.oracle.graal.python.nodes.frame.GetCurrentFrameRef;
-import com.oracle.graal.python.nodes.frame.ReadCallerFrameNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.frame.ReadFrameNode;
+import com.oracle.graal.python.nodes.frame.GetFrameLocalsNode;
 import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.GilNode;
+import com.oracle.graal.python.runtime.CallerFlags;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
-import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLogger;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PythonCextCEvalBuiltins {
+    private static final TruffleLogger LOGGER = CApiContext.getLogger(PythonCextCEvalBuiltins.class);
 
-    @CApiBuiltin(ret = PyThreadState, args = {}, acquiresGIL = false, call = Direct)
-    abstract static class PyEval_SaveThread extends CApiNullaryBuiltinNode {
-        private static final TruffleLogger LOGGER = CApiContext.getLogger(PyEval_SaveThread.class);
-
-        @Specialization
-        static PThreadState save(@Cached GilNode gil) {
-            PythonContext context = PythonContext.get(gil);
-            PThreadState threadState = PThreadState.getThreadState(PythonLanguage.get(gil), context);
-            LOGGER.fine("C extension releases GIL");
-            gil.release(context, true);
-            return threadState;
-        }
+    @CApiBuiltin(ret = PyThreadState, args = {}, acquireGil = false, call = Direct)
+    static long PyEval_SaveThread() {
+        PythonContext context = PythonContext.get(null);
+        long threadState = context.getThreadState(context.getLanguage()).getNativePointer();
+        assert threadState != PythonAbstractObject.UNINITIALIZED;
+        LOGGER.fine("C extension releases GIL");
+        GilNode.getUncached().release(context, true);
+        return threadState;
     }
 
-    @CApiBuiltin(ret = Void, args = {PyThreadState}, acquiresGIL = false, call = Direct)
-    abstract static class PyEval_RestoreThread extends CApiUnaryBuiltinNode {
-        private static final TruffleLogger LOGGER = CApiContext.getLogger(PyEval_RestoreThread.class);
-
-        @Specialization
-        static PThreadState restore(@SuppressWarnings("unused") Object ptr,
-                        @Cached GilNode gil) {
-            PythonContext context = PythonContext.get(gil);
-            PThreadState threadState = PThreadState.getThreadState(PythonLanguage.get(gil), context);
-            LOGGER.fine("C extension acquires GIL");
-            gil.acquire(context);
-            return threadState;
-        }
+    @CApiBuiltin(ret = Void, args = {PyThreadState}, acquireGil = false, call = Direct)
+    static void PyEval_RestoreThread(@SuppressWarnings("unused") long ptr) {
+        PythonContext context = PythonContext.get(null);
+        /*
+         * The thread state is not really used but fetching it checks if we are shutting down and
+         * will handle that properly.
+         */
+        context.getThreadState(PythonLanguage.get(null));
+        LOGGER.fine("C extension acquires GIL");
+        GilNode.getUncached().acquire(context, null);
     }
 
     @CApiBuiltin(ret = PyObjectBorrowed, args = {}, call = Direct)
-    abstract static class PyEval_GetBuiltins extends CApiNullaryBuiltinNode {
-        @Specialization
-        Object release(
-                        @Cached GetDictIfExistsNode getDictNode) {
-            PythonModule cext = getCore().getBuiltins();
-            return getDictNode.execute(cext);
-        }
+    static long PyEval_GetBuiltins() {
+        PythonModule cext = PythonContext.get(null).getBuiltins();
+        return ToNativeBorrowedNode.executeUncached(GetDictIfExistsNode.getUncached().execute(cext));
     }
 
-    @CApiBuiltin(ret = PyFrameObjectTransfer, args = {}, call = Direct)
-    abstract static class PyEval_GetFrame extends CApiNullaryBuiltinNode {
-        @Specialization
-        Object getFrame(
-                        @Bind("this") Node inliningTarget,
-                        @Cached GetCurrentFrameRef getCurrentFrameRef,
-                        @Cached ReadCallerFrameNode readCallerFrameNode) {
-            PFrame.Reference reference = getCurrentFrameRef.execute(null, inliningTarget);
-            return readCallerFrameNode.executeWith(reference, 0);
-        }
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {}, call = Direct)
+    static long PyEval_GetFrameBuiltins() {
+        PythonModule builtins = PythonContext.get(null).getBuiltins();
+        Object dict = GetDictIfExistsNode.getUncached().execute(builtins);
+        return PythonToNativeInternalNode.executeNewRefUncached(dict);
     }
 
-    @CApiBuiltin(ret = PyObjectTransfer, args = {PyObject, PyObject, PyObject, PyObjectConstPtr, Int, PyObjectConstPtr, Int, PyObjectConstPtr, Int, PyObject, PyObject}, call = Ignored)
-    abstract static class _PyTruffleEval_EvalCodeEx extends CApi11BuiltinNode {
-        @Specialization
-        static Object doGeneric(PCode code, Object globals, Object locals,
-                        Object argumentArrayPtr, int argumentCount, Object kwsPtr, int kwsCount, Object defaultValueArrayPtr, int defaultValueCount,
-                        Object kwdefaultsWrapper, Object closureObj,
-                        @Bind("this") Node inliningTarget,
-                        @Cached CStructAccess.ReadObjectNode readNode,
-                        @Cached PythonCextBuiltins.CastKwargsNode castKwargsNode,
-                        @Cached CastToTruffleStringNode castToStringNode,
-                        @Cached SequenceNodes.GetObjectArrayNode getObjectArrayNode,
-                        @Cached CodeNodes.GetCodeSignatureNode getSignatureNode,
-                        @Cached CodeNodes.GetCodeCallTargetNode getCallTargetNode,
-                        @Cached CreateArgumentsNode.CreateAndCheckArgumentsNode createAndCheckArgumentsNode,
-                        @Cached GenericInvokeNode invokeNode) {
-            Object[] defaults = readNode.readPyObjectArray(defaultValueArrayPtr, defaultValueCount);
-            PKeyword[] kwdefaults = castKwargsNode.execute(inliningTarget, kwdefaultsWrapper);
-            PCell[] closure = null;
-            if (closureObj != PNone.NO_VALUE) {
-                // CPython also just accesses the object as tuple without further checks.
-                closure = PCell.toCellArray(getObjectArrayNode.execute(inliningTarget, closureObj));
-            }
-            Object[] kws = readNode.readPyObjectArray(kwsPtr, kwsCount * 2);
-
-            PKeyword[] keywords = PKeyword.create(kws.length / 2);
-            for (int i = 0; i < kws.length / 2; i += 2) {
-                TruffleString keywordName = castToStringNode.execute(inliningTarget, kws[i]);
-                keywords[i] = new PKeyword(keywordName, kws[i + 1]);
-            }
-
-            // prepare Python frame arguments
-            Object[] userArguments = readNode.readPyObjectArray(argumentArrayPtr, argumentCount);
-            Signature signature = getSignatureNode.execute(inliningTarget, code);
-            Object[] pArguments = createAndCheckArgumentsNode.execute(inliningTarget, code, userArguments, keywords, signature, null, null, defaults, kwdefaults, false);
-
-            // set custom locals
-            if (!(locals instanceof PNone)) {
-                PArguments.setSpecialArgument(pArguments, locals);
-            }
-            PArguments.setClosure(pArguments, closure);
-            // TODO(fa): set builtins in globals
-            // PythonModule builtins = getContext().getBuiltins();
-            // setBuiltinsInGlobals(globals, setBuiltins, builtins, lib);
-            if (globals instanceof PythonObject) {
-                PArguments.setGlobals(pArguments, (PythonObject) globals);
-            } else {
-                // TODO(fa): raise appropriate exception
-            }
-
-            RootCallTarget rootCallTarget = getCallTargetNode.execute(inliningTarget, code);
-            return invokeNode.execute(rootCallTarget, pArguments);
-        }
+    @CApiBuiltin(ret = PyFrameObjectBorrowed, args = {}, call = Direct)
+    static long PyEval_GetFrame() {
+        PFrame pFrame = ReadFrameNode.getUncached().getCurrentPythonFrame(null);
+        return pFrame != null ? ToNativeBorrowedNode.executeUncached(pFrame) : NULLPTR;
     }
 
-    @CApiBuiltin(ret = Int, args = {ConstCharPtr}, call = Direct)
-    abstract static class Py_EnterRecursiveCall extends CApiUnaryBuiltinNode {
-        @Specialization
-        int doGeneric(Object where) {
-            PythonLanguage language = PythonLanguage.get(this);
-            PythonContext context = PythonContext.get(this);
-            PythonThreadState threadState = context.getThreadState(language);
-            if (++threadState.recursionDepth > CApiContext.DEFAULT_RECURSION_LIMIT) {
-                throw raiseRecursionError(this, where);
-            }
-            return 0;
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {PyObjectRawPointer, PyObjectRawPointer, PyObjectRawPointer, PyObjectConstPtr, Int, PyObjectConstPtr, Int, PyObjectConstPtr, Int,
+                    PyObjectRawPointer, PyObjectRawPointer}, call = Ignored)
+    static long GraalPyPrivate_Eval_EvalCodeEx(long codePtr, long globalsPtr, long localsPtr,
+                    long argumentArrayPtr, int argumentCount, long kwsPtr, int kwsCount, long defaultValueArrayPtr, int defaultValueCount,
+                    long kwdefaultsWrapperPtr, long closureObjPtr) {
+        PCode code = (PCode) NativeToPythonInternalNode.executeUncached(codePtr, false);
+        PythonObject globals = (PythonObject) NativeToPythonInternalNode.executeUncached(globalsPtr, false);
+        Object locals = NativeToPythonInternalNode.executeUncached(localsPtr, false);
+        Object kwdefaultsWrapper = NativeToPythonInternalNode.executeUncached(kwdefaultsWrapperPtr, false);
+        Object closureObj = NativeToPythonInternalNode.executeUncached(closureObjPtr, false);
+        Object[] defaults = CStructAccess.ReadObjectNode.getUncached().readPyObjectArray(defaultValueArrayPtr, defaultValueCount);
+        if (!PGuards.isPNone(kwdefaultsWrapper) && !PGuards.isDict(kwdefaultsWrapper)) {
+            throw PRaiseNode.raiseStatic(null, SystemError, ErrorMessages.BAD_ARG_TO_INTERNAL_FUNC);
+        }
+        PKeyword[] kwdefaults = PythonCextBuiltins.CastKwargsNode.executeUncached(kwdefaultsWrapper);
+        PCell[] closure = null;
+        if (closureObj != PNone.NO_VALUE) {
+            // CPython also just accesses the object as tuple without further checks.
+            closure = PCell.toCellArray(SequenceNodes.GetObjectArrayNode.executeUncached(closureObj));
+        }
+        Object[] kws = CStructAccess.ReadObjectNode.getUncached().readPyObjectArray(kwsPtr, kwsCount * 2);
+        PKeyword[] keywords = PKeyword.create(kws.length / 2);
+        for (int i = 0, j = 0; i < kws.length; i += 2, j++) {
+            TruffleString keywordName = CastToTruffleStringNode.castKnownStringUncached(kws[i]);
+            keywords[j] = new PKeyword(keywordName, kws[i + 1]);
         }
 
-        @TruffleBoundary
-        private static PException raiseRecursionError(Node node, Object where) {
-            TruffleString msg = CastToTruffleStringNode.executeUncached(FromCharPointerNodeGen.getUncached().execute(where));
-            TruffleString.ConcatNode.getUncached().execute(ErrorMessages.MAXIMUM_RECURSION_DEPTH_EXCEEDED, msg, TS_ENCODING, false);
-            throw PRaiseNode.raiseUncached(node, RecursionError, msg);
+        Object[] userArguments = CStructAccess.ReadObjectNode.getUncached().readPyObjectArray(argumentArrayPtr, argumentCount);
+        Signature signature = CodeNodes.GetCodeSignatureNode.executeUncached(code);
+        PFunction function = PFactory.createFunction(PythonLanguage.get(null), code.getName(), code, globals, closure);
+        Object[] pArguments = CreateArgumentsNode.executeUncached(code, userArguments, keywords, signature, null, null, defaults, kwdefaults, false);
+        if (!(locals instanceof PNone)) {
+            PArguments.setSpecialArgument(pArguments, locals);
         }
+        PArguments.setFunctionObject(pArguments, function);
+        // TODO(fa): set builtins in globals
+        // PythonModule builtins = getContext().getBuiltins();
+        // setBuiltinsInGlobals(globals, setBuiltins, builtins, lib);
+        PArguments.setGlobals(pArguments, globals);
+
+        RootCallTarget rootCallTarget = CodeNodes.GetCodeCallTargetNode.executeUncached(code);
+        Object result = CallDispatchers.SimpleIndirectInvokeNode.executeUncached(rootCallTarget, pArguments);
+        return PythonToNativeInternalNode.executeNewRefUncached(result);
     }
 
-    @CApiBuiltin(ret = Void, args = {}, call = Direct)
-    abstract static class Py_LeaveRecursiveCall extends CApiNullaryBuiltinNode {
-        @Specialization
-        Object doGeneric() {
-            PythonLanguage language = PythonLanguage.get(this);
-            PythonContext context = PythonContext.get(this);
-            PythonThreadState threadState = context.getThreadState(language);
-            --threadState.recursionDepth;
-            return PNone.NO_VALUE;
+    @CApiBuiltin(ret = PyObjectBorrowed, args = {}, call = Direct)
+    static long PyEval_GetGlobals() {
+        PythonObject globals = PyEvalGetGlobals.executeUncached(null);
+        return globals != null ? ToNativeBorrowedNode.executeUncached(globals) : NULLPTR;
+    }
+
+    @CApiBuiltin(ret = PyObjectBorrowed, args = {}, call = Direct)
+    static long PyEval_GetLocals() {
+        PFrame frame = ReadFrameNode.getUncached().getCurrentPythonFrame(null, CallerFlags.NEEDS_LOCALS);
+        if (frame == null) {
+            throw PRaiseNode.raiseStatic(null, SystemError, ErrorMessages.FRAME_DOES_NOT_EXIST);
         }
+        Object locals = GetFrameLocalsNode.executeUncached(frame, true);
+        if (frame.getCustomLocals() != null) {
+            return ToNativeBorrowedNode.executeUncached(locals);
+        }
+        PDict localsSnapshot = (PDict) locals;
+        PDict localsCache = frame.getEvalLocalsCache();
+        if (localsCache == null) {
+            localsCache = localsSnapshot;
+            frame.setEvalLocalsCache(localsCache);
+        } else {
+            localsCache.update(localsSnapshot);
+        }
+        return ToNativeBorrowedNode.executeUncached(localsCache);
+    }
+
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {}, call = Direct)
+    static long PyEval_GetFrameGlobals() {
+        PythonObject globals = PyEvalGetGlobals.executeUncached(null);
+        return globals != null ? PythonToNativeInternalNode.executeNewRefUncached(globals) : NULLPTR;
+    }
+
+    @CApiBuiltin(ret = PyObjectRawPointer, args = {}, call = Direct)
+    static long PyEval_GetFrameLocals() {
+        PFrame frame = ReadFrameNode.getUncached().getCurrentPythonFrame(null, CallerFlags.NEEDS_LOCALS);
+        if (frame == null) {
+            throw PRaiseNode.raiseStatic(null, SystemError, ErrorMessages.FRAME_DOES_NOT_EXIST);
+        }
+        Object locals = GetFrameLocalsNode.executeUncached(frame, true);
+        return PythonToNativeInternalNode.executeNewRefUncached(locals);
     }
 }

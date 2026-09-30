@@ -1,0 +1,336 @@
+/*
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * The Universal Permissive License (UPL), Version 1.0
+ *
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
+ *
+ * (a) the Software, and
+ *
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+package com.oracle.graal.python.builtins.objects.type.slots;
+
+import static com.oracle.graal.python.builtins.objects.type.slots.BuiltinSlotWrapperSignature.J_DOLLAR_SELF;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GET__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GET__;
+
+import java.lang.ref.Reference;
+
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.Python3Core;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PExternalFunctionWrapper;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PyObjectCheckFunctionResultNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
+import com.oracle.graal.python.builtins.objects.type.slots.NodeFactoryUtils.WrapperNodeFactory;
+import com.oracle.graal.python.builtins.objects.type.slots.PythonDispatchers.PythonSlotDispatcherNodeBase;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotBuiltin;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotNative;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotPythonSingle;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGetFactory.CallSlotDescrGetNodeGen;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.call.CallNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.PythonContext.GetThreadStateNode;
+import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
+import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.ImportStatic;
+import com.oracle.truffle.api.dsl.NeverDefault;
+import com.oracle.truffle.api.dsl.NodeFactory;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.BranchProfile;
+import com.oracle.truffle.api.profiles.ConditionProfile;
+import com.oracle.truffle.api.profiles.InlinedConditionProfile;
+import com.oracle.truffle.api.strings.TruffleString;
+
+public abstract class TpSlotDescrGet {
+    private TpSlotDescrGet() {
+    }
+
+    public abstract static sealed class TpSlotDescrGetBuiltin<T extends DescrGetBuiltinNode> extends TpSlotBuiltin<T>//
+    permits TpSlotDescrGetBuiltinComplex, TpSlotDescrGetBuiltinSimple {
+        static final BuiltinSlotWrapperSignature SIGNATURE = BuiltinSlotWrapperSignature.of(2, J_DOLLAR_SELF, "obj", "type");
+        static final PExternalFunctionWrapper WRAPPER = PExternalFunctionWrapper.DESCR_GET;
+
+        protected TpSlotDescrGetBuiltin(NodeFactory<T> nodeFactory) {
+            super(nodeFactory);
+        }
+
+        final DescrGetBuiltinNode createSlotNode() {
+            return createNode();
+        }
+
+        @Override
+        public PBuiltinFunction createBuiltin(Python3Core core, Object type, TruffleString tsName, PExternalFunctionWrapper wrapper) {
+            if (wrapper != WRAPPER) {
+                return null;
+            }
+            // The __get__ wrapper normalizes None to NO_VALUE (NULL in CPython), so we cannot use
+            // the "raw" slot node, but a wrapper that implements this logic and delegates to it
+            var factory = WrapperNodeFactory.wrap(getNodeFactory(), DescrGetWrapperNode.class, DescrGetWrapperNode::new);
+            return createBuiltin(core, type, tsName, SIGNATURE, wrapper, factory);
+        }
+    }
+
+    public abstract static non-sealed class TpSlotDescrGetBuiltinSimple<T extends DescrGetBuiltinNode> extends TpSlotDescrGetBuiltin<T> {
+        protected TpSlotDescrGetBuiltinSimple(NodeFactory<T> nodeFactory) {
+            super(nodeFactory);
+        }
+
+        protected abstract Object executeUncached(Object self, Object obj, Object type);
+
+        @Override
+        public void initialize(PythonLanguage language) {
+            // nop
+        }
+    }
+
+    public abstract static non-sealed class TpSlotDescrGetBuiltinComplex<T extends DescrGetBuiltinNode> extends TpSlotDescrGetBuiltin<T> {
+        private final int callTargetIndex = TpSlotBuiltinCallTargetRegistry.getNextCallTargetIndex();
+
+        protected TpSlotDescrGetBuiltinComplex(NodeFactory<T> nodeFactory) {
+            super(nodeFactory);
+        }
+
+        @Override
+        public void initialize(PythonLanguage language) {
+            // We need a different call-target for the "raw" slot. It must not normalize None to
+            // NO_VALUE (NULL in CPython) like the __get__ wrapper.
+            language.setBuiltinSlotRootNode(callTargetIndex, createSlotRootNode(language, SIGNATURE, getNodeFactory(), J___GET__));
+        }
+    }
+
+    static final class DescrGetWrapperNode extends PythonTernaryBuiltinNode {
+        private final ConditionProfile objIsNoneProfile = ConditionProfile.create();
+        private final ConditionProfile typeIsNoneProfile = ConditionProfile.create();
+        private final BranchProfile errorProfile = BranchProfile.create();
+        @Child private DescrGetBuiltinNode wrapped;
+
+        DescrGetWrapperNode(DescrGetBuiltinNode wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame, Object self, Object objIn, Object typeIn) {
+            Object obj = PythonUtils.normalizeNone(objIsNoneProfile, objIn);
+            Object type = PythonUtils.normalizeNone(typeIsNoneProfile, typeIn);
+            if (obj == PNone.NO_VALUE && type == PNone.NO_VALUE) {
+                errorProfile.enter();
+                throw PRaiseNode.raiseStatic(this, PythonBuiltinClassType.TypeError, ErrorMessages.GET_NONE_NONE_IS_INVALID);
+            }
+            return wrapped.execute(frame, self, obj, type);
+        }
+    }
+
+    public abstract static class DescrGetBuiltinNode extends PythonTernaryBuiltinNode {
+    }
+
+    @GenerateCached
+    @GenerateUncached
+    @GenerateInline(inlineByDefault = true)
+    @SuppressWarnings("rawtypes")
+    public abstract static class CallSlotDescrGet extends Node {
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, "tp_descr_get");
+
+        /**
+         * Note: for GraalPy value {@link PNone#NO_VALUE} has the same semantics as {@code NULL} in
+         * CPython. It is forwarded to builtins and native slots and translated to
+         * {@link PNone#NONE} for Python slots like CPython does in {@code slot_tp_descr_get}.
+         */
+        public abstract Object execute(VirtualFrame frame, Node inliningTarget, TpSlot slot, Object self, Object obj, Object type);
+
+        public final Object executeCached(VirtualFrame frame, TpSlot slot, Object self, Object obj, Object type) {
+            return execute(frame, this, slot, self, obj, type);
+        }
+
+        @TruffleBoundary
+        public static Object executeUncached(TpSlot slot, Object self, Object obj, Object type) {
+            return CallSlotDescrGetNodeGen.getUncached().execute(null, null, slot, self, obj, type);
+        }
+
+        @NeverDefault
+        public static CallSlotDescrGet create() {
+            return CallSlotDescrGetNodeGen.create();
+        }
+
+        @Specialization(guards = "cachedSlot == slot", limit = "3")
+        static Object callCachedBuiltin(VirtualFrame frame, @SuppressWarnings("unused") TpSlotDescrGetBuiltin slot, Object self, Object obj, Object type,
+                        @SuppressWarnings("unused") @Cached("slot") TpSlotDescrGetBuiltin cachedSlot,
+                        @Cached("cachedSlot.createSlotNode()") DescrGetBuiltinNode slotNode) {
+            return slotNode.execute(frame, self, obj, type);
+        }
+
+        @Specialization
+        static Object callPython(VirtualFrame frame, Node inliningTarget, TpSlotPythonSingle slot, Object self, Object obj, Object type,
+                        @Cached DescrGetPythonSlotDispatcherNode dispatcherNode) {
+            Object callable = slot.getCallable();
+            if (callable == null) {
+                // CPython here overrides the slot with NULL with comment "Avoid further slowdowns"...
+                return self;
+            }
+            return dispatcherNode.execute(frame, inliningTarget, callable, slot.getType(), self, obj, type);
+        }
+
+        @InliningCutoff
+        @Specialization
+        static Object callNative(VirtualFrame frame, Node inliningTarget, TpSlotNative slot, Object self, Object obj, Object value,
+                        @Cached GetThreadStateNode getThreadStateNode,
+                        @Cached EnsurePythonObjectNode ensurePythonObjectNode,
+                        @Cached PythonToNativeInternalNode selfToNativeNode,
+                        @Cached PythonToNativeInternalNode objToNativeNode,
+                        @Cached PythonToNativeInternalNode valueToNativeNode,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached NativeToPythonInternalNode toPythonNode,
+                        @Cached(inline = false) PyObjectCheckFunctionResultNode checkResultNode) {
+            PythonContext ctx = PythonContext.get(inliningTarget);
+            PythonThreadState threadState = getThreadStateNode.execute(inliningTarget, ctx);
+            Object promotedSelf = ensurePythonObjectNode.execute(ctx, self, false);
+            Object promotedObj = ensurePythonObjectNode.execute(ctx, obj, false);
+            Object promotedValue = ensurePythonObjectNode.execute(ctx, value, false);
+            try {
+                long lresult = ExternalFunctionInvoker.invokeDESCRGETFUNC(frame, C_API_TIMING, ctx.ensureNativeContext(), boundaryCallData, threadState, slot.callable,
+                                selfToNativeNode.execute(inliningTarget, promotedSelf), //
+                                objToNativeNode.execute(inliningTarget, promotedObj), //
+                                valueToNativeNode.execute(inliningTarget, promotedValue));
+                return checkResultNode.execute(threadState, T___GET__, toPythonNode.executeTransfer(inliningTarget, lresult));
+            } finally {
+                Reference.reachabilityFence(promotedSelf);
+                Reference.reachabilityFence(promotedObj);
+                Reference.reachabilityFence(promotedValue);
+            }
+        }
+
+        @TruffleBoundary
+        @Specialization(replaces = "callCachedBuiltin")
+        static Object callGenericSimpleBuiltin(TpSlotDescrGetBuiltinSimple slot, Object self, Object obj, Object type) {
+            // Simple builtins should not need a frame
+            return slot.executeUncached(self, obj, type);
+        }
+
+        @Specialization(replaces = "callCachedBuiltin")
+        @InliningCutoff
+        static Object callGenericBuiltin(VirtualFrame frame, Node inliningTarget, TpSlotDescrGetBuiltinComplex slot, Object self, Object obj, Object type,
+                        @Cached CallDispatchers.SimpleIndirectInvokeNode invoke) {
+            Object[] arguments = PArguments.create(3);
+            PArguments.setArgument(arguments, 0, self);
+            PArguments.setArgument(arguments, 1, obj);
+            PArguments.setArgument(arguments, 2, type);
+            RootCallTarget callTarget = PythonLanguage.get(inliningTarget).getBuiltinSlotCallTarget(slot.callTargetIndex);
+            return invoke.execute(frame, inliningTarget, callTarget, arguments);
+        }
+
+        @GenerateInline
+        @GenerateCached(false)
+        public abstract static class Lazy extends Node {
+
+            public final CallSlotDescrGet get(Node inliningTarget) {
+                return execute(inliningTarget);
+            }
+
+            abstract CallSlotDescrGet execute(Node inliningTarget);
+
+            @Specialization
+            static CallSlotDescrGet doIt(@Cached(inline = false) CallSlotDescrGet node) {
+                return node;
+            }
+        }
+    }
+
+    /**
+     * The wrapper {@code slot_tp_descr_get} in CPython does not use {@code vectorcall_method} or
+     * {@code lookup_maybe_method}, but {@code _PyType_LookupId}, i.e., it does not bind
+     * descriptors.
+     */
+    @GenerateUncached
+    @GenerateInline
+    @GenerateCached(false)
+    @ImportStatic(CallDispatchers.class)
+    abstract static class DescrGetPythonSlotDispatcherNode extends PythonSlotDispatcherNodeBase {
+        abstract Object execute(VirtualFrame frame, Node inliningTarget, Object callable, Object type, Object self, Object arg1, Object arg2);
+
+        // @Exclusive for truffle-interpreted-performance
+        @Specialization(guards = {"isSingleContext()", "callee == cachedCallee", "isSimpleSignature(cachedCallee, 3)"}, //
+                        limit = "getCallSiteInlineCacheMaxDepth()", assumptions = "cachedCallee.getCodeStableAssumption()")
+        protected static Object doCachedPFunction(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") PFunction callee, @SuppressWarnings("unused") Object type, Object self,
+                        Object arg1, Object arg2,
+                        @Cached("callee") PFunction cachedCallee,
+                        @Exclusive @Cached InlinedConditionProfile arg1Profile,
+                        @Exclusive @Cached InlinedConditionProfile arg2Profile,
+                        @Cached("createDirectCallNodeFor(callee)") DirectCallNode callNode,
+                        @Cached CallDispatchers.FunctionDirectInvokeNode invoke) {
+            Object[] arguments = PArguments.create(3);
+            PArguments.setArgument(arguments, 0, self);
+            PArguments.setArgument(arguments, 1, normalizeNoValue(arg1Profile, inliningTarget, arg1));
+            PArguments.setArgument(arguments, 2, normalizeNoValue(arg2Profile, inliningTarget, arg2));
+            return invoke.execute(frame, inliningTarget, callNode, cachedCallee, arguments);
+        }
+
+        private static Object normalizeNoValue(InlinedConditionProfile profile, Node inliningTarget, Object o) {
+            return profile.profile(inliningTarget, o == PNone.NO_VALUE) ? PNone.NONE : o;
+        }
+
+        @Specialization(replaces = "doCachedPFunction")
+        @InliningCutoff
+        static Object doGeneric(VirtualFrame frame, Node inliningTarget, Object callable, @SuppressWarnings("unused") Object type, Object self, Object arg1, Object arg2,
+                        @Cached @Exclusive InlinedConditionProfile arg1Profile,
+                        @Cached @Exclusive InlinedConditionProfile arg2Profile,
+                        @Cached(inline = false) CallNode callNode) {
+            return callNode.execute(frame, callable, self, //
+                            normalizeNoValue(arg1Profile, inliningTarget, arg1), //
+                            normalizeNoValue(arg2Profile, inliningTarget, arg2));
+        }
+    }
+}

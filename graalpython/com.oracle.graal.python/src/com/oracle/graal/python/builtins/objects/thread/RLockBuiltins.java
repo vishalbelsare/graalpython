@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,22 +42,30 @@ package com.oracle.graal.python.builtins.objects.thread;
 
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.builtins.TupleNodes.GetTupleStorage;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.util.CastToJavaUnsignedLongNode;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
@@ -68,9 +76,23 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PRLock)
 public final class RLockBuiltins extends PythonBuiltins {
+
+    public static final TpSlots SLOTS = RLockBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return RLockBuiltinsFactory.getFactories();
+    }
+
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "RLock", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    public abstract static class ConstructRLockNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        PRLock construct(Object cls,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+            return PFactory.createRLock(cls, getInstanceShape.execute(cls));
+        }
     }
 
     @Builtin(name = "_is_owned", minNumOfPositionalArgs = 1)
@@ -86,11 +108,16 @@ public final class RLockBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     abstract static class AcquireRestoreRLockNode extends PythonBinaryBuiltinNode {
         @Specialization
-        Object acquireRestore(PRLock self, PTuple state,
-                        @Bind("this") Node inliningTarget,
+        Object acquireRestore(PRLock self, Object state,
+                        @Bind Node inliningTarget,
+                        @Cached GetTupleStorage getTupleStorage,
                         @Cached GilNode gil,
                         @Cached CastToJavaUnsignedLongNode castLong,
+                        @Cached PyTupleCheckNode tupleCheckNode,
                         @Cached SequenceStorageNodes.GetItemDynamicNode getItemNode) {
+            if (!tupleCheckNode.execute(inliningTarget, state)) {
+                throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.STATE_ARGUMENT_MUST_BE_A_TUPLE);
+            }
             if (!self.acquireNonBlocking()) {
                 gil.release(true);
                 try {
@@ -100,7 +127,7 @@ public final class RLockBuiltins extends PythonBuiltins {
                 }
             }
             // ignore owner, we use the Java lock and cannot set it
-            long count = castLong.execute(inliningTarget, getItemNode.execute(inliningTarget, state.getSequenceStorage(), 0));
+            long count = castLong.execute(inliningTarget, getItemNode.execute(inliningTarget, getTupleStorage.execute(inliningTarget, state), 0));
             long actualCount = self.getCount();
             while (count > actualCount) {
                 self.acquireBlocking(this); // we already own it at this point
@@ -119,17 +146,30 @@ public final class RLockBuiltins extends PythonBuiltins {
     abstract static class ReleaseSaveRLockNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object releaseSave(PRLock self,
-                        @Bind("this") Node inliningTarget,
+                        @Bind Node inliningTarget,
                         @Cached InlinedConditionProfile countProfile,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Bind PythonLanguage language,
+                        @Cached PRaiseNode raiseNode) {
             int count = self.getCount();
             if (countProfile.profile(inliningTarget, count == 0)) {
-                throw raiseNode.get(inliningTarget).raise(PythonErrorType.RuntimeError, ErrorMessages.CANNOT_RELEASE_UNAQUIRED_LOCK);
+                throw raiseNode.raise(inliningTarget, PythonErrorType.RuntimeError, ErrorMessages.CANNOT_RELEASE_UNAQUIRED_LOCK);
             }
-            PTuple retVal = factory.createTuple(new Object[]{count, self.getOwnerId()});
+            PTuple retVal = PFactory.createTuple(language, new Object[]{count, self.getOwnerId()});
             self.releaseAll();
             return retVal;
+        }
+    }
+
+    @Builtin(name = "_recursion_count", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class RecursionCountNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static int recursionCount(PRLock self) {
+            if (self.isOwned()) {
+                return self.getCount();
+            } else {
+                return 0;
+            }
         }
     }
 }

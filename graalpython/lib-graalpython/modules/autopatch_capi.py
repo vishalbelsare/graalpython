@@ -1,4 +1,4 @@
-# Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -44,15 +44,15 @@ import sys
 
 
 def simple_replace(contents, match, replacement, assignment):
-    "replaces the indexes in 'contents' described by the tuple 'group' with replacement"
-    
+    "replaces the indexes in 'contents' described by the tuple 'group' with replacement, which may have backrefs"
+
     start, end = match.span(1)
-    return contents[:start] + replacement + contents[end:]
+    return contents[:start] + match.expand(replacement) + contents[end:]
 
 
 def replace_pre(contents, match, replacement, assignment):
     "replaces a pre-increment/decrement"
-    
+
     start, end = match.span(1)
     replacement = replacement.replace('%receiver', contents[start: end])
     start, end = match.span()
@@ -61,68 +61,94 @@ def replace_pre(contents, match, replacement, assignment):
 
 def replace_field_access(contents, match, replacement, assignment):
     "replaces a field access, scanning backwards to determine the receiver"
-    
+
     start, end = match.span(1)
     level = 0
-    
-    def consume_whitespace_backwards(idx):
-        while idx > 0 and contents[idx].isspace():
+
+    def consume_whitespace_backwards(idx, newlines=True):
+        while idx >= 0 and contents[idx].isspace() and (not newlines or contents[idx] != '\n'):
             idx -= 1
         return idx
-    
+
+    def consume_line_backwards(idx):
+        while idx >= 0 and contents[idx] != '\n':
+            idx -= 1
+        return idx
+
     def consume_whitespace_forward(idx):
         while idx < len(contents) and contents[idx].isspace():
             idx += 1
         return idx
-    
+
     start = consume_whitespace_backwards(start - 1)
     if start < 1 or contents[start - 1: start + 1] != '->':
         return contents
-    
+
     # scan backwards to capture the whole receiver
     idx = consume_whitespace_backwards(start - 2)
-    empty = True
-    while idx > 1:
-        c = contents[idx]
-        c2 = contents[idx - 1: idx + 1]
-        if c == ')' or c == ']' or (c == '>' and c2 != '->'):
-            if level == 0 and c == ')' and not empty:
-                idx += 1
-                break  # don't include casts
-            empty = False
-            level += 1
+
+    def consume_pairwise_backwards(idx, l, r):
+        level = 1
+        idx -= 1
+        while level and idx >= 0:
+            c = contents[idx]
+            if c == l:
+                level -= 1
+            elif c == r:
+                level += 1
             idx -= 1
-        elif level > 0 and (c == '(' or c == '[' or c == '<'):
-            level -= 1
-            idx = consume_whitespace_backwards(idx - 1)
-        else:
-            if level > 0:
-                idx -= 1
-            elif c.isidentifier() or c.isdigit():
-                empty = False
-                idx -= 1
-            elif c == '.':
-                empty = True
-                idx = consume_whitespace_backwards(idx - 1)
-            elif c2 == '->':
-                empty = True
-                idx = consume_whitespace_backwards(idx - 2)
-            else:
+        return idx
+
+    def consume_identifier_backwards(idx):
+        while idx >= 0 and (contents[idx].isidentifier() or contents[idx].isdigit()):
+            idx -= 1
+        return idx
+
+    allowed_tokens = {'()', '[]', '.', 'id'}
+    while idx >= 0:
+        c = contents[idx]
+        if '()' in allowed_tokens and c == ')':
+            idx = consume_pairwise_backwards(idx, '(', ')')
+            allowed_tokens = {'[]', 'id'}
+        elif '[]' in allowed_tokens and c == ']':
+            idx = consume_pairwise_backwards(idx, '[', ']')
+            allowed_tokens = {'[]', 'id'}
+        elif 'id' in allowed_tokens and c.isidentifier() or c.isdigit():
+            id_start = consume_identifier_backwards(idx)
+            if contents[id_start + 1: idx + 1] == 'return':
                 idx += 1
                 break
-    
+            idx = id_start
+            allowed_tokens = {'.'}
+        elif '.' in allowed_tokens and c == '.':
+            idx -= 1
+            allowed_tokens = {'[]', 'id'}
+        elif '.' in allowed_tokens and c == '>' and idx > 1 and contents[idx - 1] == '-':
+            idx -= 2
+            allowed_tokens = {'[]', 'id'}
+        else:
+            idx += 1
+            break
+        idx = consume_whitespace_backwards(idx, newlines=False)
+        if contents[idx + 1] == '\n':
+            # Get previous line. If it's a comment or a preprocessor directive, stop
+            line_start = consume_whitespace_forward(consume_line_backwards(idx))
+            if contents[line_start: line_start + 2].startswith(('#', '//')):
+                idx += 1
+                break
+        idx = consume_whitespace_backwards(idx)
+
     receiver_start = consume_whitespace_forward(idx)
     receiver_string = contents[receiver_start: start - 1]
-        
+
     if assignment is not None:
-        
+
         # scan forwards to see if there's an assignment
         idx = consume_whitespace_forward(end)
         if contents[idx] == '=' and contents[idx+1] != '=':
             # this looks like an assignment, determine the value
             idx = consume_whitespace_forward(idx + 1)
             value_start = idx
-            empty = True
             while idx < len(contents) - 2:
                 c = contents[idx]
                 c2 = contents[idx: idx + 2]
@@ -134,36 +160,41 @@ def replace_field_access(contents, match, replacement, assignment):
                     idx += 1
                 else:
                     if level == 0 and (c == ')' or c == ';' or c == ','):
-                        break;
+                        break
                     if c2 == '<=' or c2 == '<<' or c2 == '>='or c2 == '>>' or c2 == '->':
                         idx += 2
                     else:
                         idx += 1
-            
+
             value_string = contents[value_start:idx]
-            
+
             return contents[:receiver_start] + assignment.replace('%receiver', receiver_string).replace("%value", value_string) + contents[idx:]
-    
+
     return contents[:receiver_start] + replacement.replace('%receiver', receiver_string) + contents[end:]
 
 
 auto_replacements = {
                     # avoid direct access - predecrement/preincrement:
-                    r'--([\d\w_]+)->ob_refcnt': (replace_pre, 'Py_SET_REFCNT(%receiver, Py_REFCNT(%receiver) - 1)'),
-                    r'\+\+([\d\w_]+)->ob_refcnt': (replace_pre, 'Py_SET_REFCNT(%receiver, Py_REFCNT(%receiver) + 1)'),
+                    r'--([\d\w_]+)->ob_refcnt': (replace_pre, '(Py_SET_REFCNT(%receiver, Py_REFCNT(%receiver) - 1), Py_REFCNT(%receiver))'),
+                    r'\+\+([\d\w_]+)->ob_refcnt': (replace_pre, '(Py_SET_REFCNT(%receiver, Py_REFCNT(%receiver) + 1), Py_REFCNT(%receiver))'),
                     # avoid direct access:
                     r'\W(ob_type)\W': (replace_field_access, 'Py_TYPE(%receiver)'),
                     r'\W(ob_refcnt)\W': (replace_field_access, 'Py_REFCNT(%receiver)'),
                     r'\W(ob_item)\W': (replace_field_access, 'PySequence_Fast_ITEMS((PyObject*)%receiver)'),
                     r'^\s*()(std::)?free\((const_cast<char \*>)?\(?\w+->m_ml->ml_doc\)?\);': (simple_replace, '//'),
-                    r'\W(m_ml\s*->\s*ml_doc)\W': (replace_field_access, 'PyObject_GetDoc((PyObject*)(%receiver))', 'PyObject_SetDoc((PyObject*)(%receiver), %value)'),
+                    r'\W(m_ml\s*->\s*ml_doc)\W': (replace_field_access, 'GraalPyCFunction_GetDoc((PyObject*)(%receiver))', 'GraalPyCFunction_SetDoc((PyObject*)(%receiver), %value)'),
+                    # Py_CLEAR/Py_VISIT on a function's module is skipped for us, Java GC takes care of it
+                    r'(Py_(?:CLEAR|VISIT)\((?:(?:\(?\([a-zA-Z0-9_]|[a-zA-Z0-9_])(?:[a-zA-Z0-9_]|\)|\*\)|->)*)->m_module\);)': (simple_replace, ''),
+                    r'\W(m_ml)\W': (replace_field_access, 'GraalPyCFunction_GetMethodDef((PyObject*)(%receiver))', 'GraalPyCFunction_SetMethodDef((PyObject*)(%receiver), %value)'),
+                    r'\W(m_module)\W': (replace_field_access, 'GraalPyCFunction_GetModule((PyObject*)(%receiver))', 'GraalPyCFunction_SetModule((PyObject*)(%receiver), %value)'),
+                    r'(&PyTuple_GET_ITEM\(([\(\w](?:\w|->|\.|\(|\))*), 0\))': (simple_replace, r'PySequence_Fast_ITEMS(\2)'),
                     # already defined by GraalPy:
                     r'^\s*()#\s*define\s+Py_SET_TYPE\W': (simple_replace, '//'),
                     r'^\s*()#\s*define\s+Py_SET_SIZE\W': (simple_replace, '//'),
                     r'^\s*()#\s*define\s+Py_SET_REFCNT\W': (simple_replace, '//'),
 }
 
-   
+
 def auto_patch(path, dryrun):
     "reads the given file, applies all replacements, and writes back the result if there were changes"
 
@@ -172,7 +203,7 @@ def auto_patch(path, dryrun):
             contents = f.read()
         except UnicodeDecodeError:
              return  # may happen for binary files
-         
+
     original = contents
     import re
     for pattern, (*ops,) in auto_replacements.items():

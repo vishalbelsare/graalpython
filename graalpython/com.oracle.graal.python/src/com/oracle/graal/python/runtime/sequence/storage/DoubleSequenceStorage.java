@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -28,13 +28,15 @@ package com.oracle.graal.python.runtime.sequence.storage;
 import java.util.Arrays;
 
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives;
 
-public final class DoubleSequenceStorage extends TypedSequenceStorage {
+public final class DoubleSequenceStorage extends ArrayBasedSequenceStorage {
 
     private double[] values;
 
     public DoubleSequenceStorage() {
-        values = new double[]{};
+        this.values = new double[DEFAULT_CAPACITY];
+        this.capacity = values.length;
     }
 
     public DoubleSequenceStorage(double[] elements) {
@@ -55,121 +57,22 @@ public final class DoubleSequenceStorage extends TypedSequenceStorage {
         this.length = 0;
     }
 
-    @Override
-    protected void increaseCapacityExactWithCopy(int newCapacity) {
-        values = Arrays.copyOf(values, newCapacity);
+    private void increaseCapacityExactWithCopy(int newCapacity) {
+        values = PythonUtils.arrayCopyOf(values, newCapacity);
         capacity = values.length;
     }
 
-    @Override
-    protected void increaseCapacityExact(int newCapacity) {
-        values = new double[newCapacity];
-        capacity = values.length;
+    public void ensureCapacity(int newCapacity) throws ArithmeticException {
+        if (CompilerDirectives.injectBranchProbability(CompilerDirectives.UNLIKELY_PROBABILITY, newCapacity > capacity)) {
+            increaseCapacityExactWithCopy(capacityFor(newCapacity));
+        }
     }
 
     @Override
-    public SequenceStorage copy() {
-        return new DoubleSequenceStorage(PythonUtils.arrayCopyOf(values, length));
-    }
-
-    @Override
-    public SequenceStorage createEmpty(int newCapacity) {
+    public ArrayBasedSequenceStorage createEmpty(int newCapacity) {
         return new DoubleSequenceStorage(newCapacity);
     }
 
-    @Override
-    public Object[] getInternalArray() {
-        /**
-         * Have to box and copy.
-         */
-        Object[] boxed = new Object[length];
-
-        for (int i = 0; i < length; i++) {
-            boxed[i] = values[i];
-        }
-
-        return boxed;
-    }
-
-    public double[] getInternalDoubleArray() {
-        return values;
-    }
-
-    @Override
-    public Object getItemNormalized(int idx) {
-        return getDoubleItemNormalized(idx);
-    }
-
-    public double getDoubleItemNormalized(int idx) {
-        return values[idx];
-    }
-
-    @Override
-    public void setItemNormalized(int idx, Object value) throws SequenceStoreException {
-        if (value instanceof Double) {
-            setDoubleItemNormalized(idx, (double) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    public void setDoubleItemNormalized(int idx, double value) {
-        values[idx] = value;
-    }
-
-    @Override
-    public void insertItem(int idx, Object value) throws SequenceStoreException {
-        if (value instanceof Double) {
-            insertDoubleItem(idx, (double) value);
-        } else {
-            throw new SequenceStoreException(value);
-        }
-    }
-
-    public void insertDoubleItem(int idx, double value) {
-        ensureCapacity(length + 1);
-
-        // shifting tail to the right by one slot
-        for (int i = values.length - 1; i > idx; i--) {
-            values[i] = values[i - 1];
-        }
-
-        values[idx] = value;
-        length++;
-    }
-
-    @Override
-    public void copyItem(int idxTo, int idxFrom) {
-        values[idxTo] = values[idxFrom];
-    }
-
-    @Override
-    public DoubleSequenceStorage getSliceInBound(int start, int stop, int step, int sliceLength) {
-        double[] newArray = new double[sliceLength];
-
-        if (step == 1) {
-            PythonUtils.arraycopy(values, start, newArray, 0, sliceLength);
-            return new DoubleSequenceStorage(newArray);
-        }
-
-        for (int i = start, j = 0; j < sliceLength; i += step, j++) {
-            newArray[j] = values[i];
-        }
-
-        return new DoubleSequenceStorage(newArray);
-    }
-
-    public int indexOfDouble(double value) {
-        for (int i = 0; i < length; i++) {
-            if (Double.compare(values[i], value) == 0) {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    @Override
     public void reverse() {
         if (length > 0) {
             int head = 0;
@@ -184,25 +87,43 @@ public final class DoubleSequenceStorage extends TypedSequenceStorage {
         }
     }
 
-    @Override
-    public Object getIndicativeValue() {
-        return .0;
+    public double[] getInternalDoubleArray() {
+        return values;
     }
 
-    @Override
-    public boolean equals(SequenceStorage other) {
-        if (other.length() != length()) {
-            return false;
+    public double getDoubleItemNormalized(int idx) {
+        return values[idx];
+    }
+
+    public void setDoubleItemNormalized(int idx, double value) {
+        values[idx] = value;
+    }
+
+    public void insertDoubleItem(int idx, double value) {
+        ensureCapacity(length + 1);
+
+        // shifting tail to the right by one slot
+        if (idx < length) {
+            PythonUtils.arraycopy(values, idx, values, idx + 1, length - idx);
         }
 
-        double[] otherArray = ((DoubleSequenceStorage) other).getInternalDoubleArray();
-        for (int i = 0; i < length(); i++) {
-            if (values[i] != otherArray[i]) {
-                return false;
+        values[idx] = value;
+        length++;
+    }
+
+    public int indexOfDouble(double value) {
+        for (int i = 0; i < length; i++) {
+            if (Double.compare(values[i], value) == 0) {
+                return i;
             }
         }
 
-        return true;
+        return -1;
+    }
+
+    @Override
+    public Object getIndicativeValue() {
+        return .0;
     }
 
     @Override
@@ -215,9 +136,17 @@ public final class DoubleSequenceStorage extends TypedSequenceStorage {
         return Arrays.copyOf(values, length);
     }
 
-    @Override
     public Object[] getCopyOfInternalArray() {
-        return getInternalArray();
+        /*
+         * Have to box and copy.
+         */
+        Object[] boxed = new Object[length];
+
+        for (int i = 0; i < length; i++) {
+            boxed[i] = values[i];
+        }
+
+        return boxed;
     }
 
     @Override
@@ -226,7 +155,7 @@ public final class DoubleSequenceStorage extends TypedSequenceStorage {
     }
 
     @Override
-    public ListStorageType getElementType() {
-        return ListStorageType.Double;
+    public StorageType getElementType() {
+        return StorageType.Double;
     }
 }

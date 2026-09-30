@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,8 +43,6 @@ package com.oracle.graal.python.builtins.objects.itertools;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
 import static com.oracle.graal.python.nodes.ErrorMessages.IS_NOT_A;
 import static com.oracle.graal.python.nodes.ErrorMessages.STATE_ARGUMENT_D_MUST_BE_A_S;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___ITER__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___NEXT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___SETSTATE__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___SETSTATE__;
@@ -53,35 +51,44 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import com.oracle.graal.python.builtins.Builtin;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinFunctions;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedReduceBuiltin;
+import com.oracle.graal.python.builtins.modules.ItertoolsModuleBuiltins.DeprecatedSetStateBuiltin;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.ToArrayNode;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.list.PList;
-import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins.GetItemNode;
-import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins.LenNode;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.TpIterNextBuiltin;
+import com.oracle.graal.python.lib.IteratorExhausted;
+import com.oracle.graal.python.lib.PyIterNextNode;
 import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
+import com.oracle.graal.python.lib.PyTupleCheckNode;
+import com.oracle.graal.python.lib.PyTupleGetItem;
+import com.oracle.graal.python.lib.PyTupleSizeNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
+import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -92,12 +99,46 @@ import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PCycle})
 public final class CycleBuiltins extends PythonBuiltins {
 
+    public static final TpSlots SLOTS = CycleBuiltinsSlotsGen.SLOTS;
+
     @Override
     protected List<? extends NodeFactory<? extends PythonBuiltinBaseNode>> getNodeFactories() {
         return CycleBuiltinsFactory.getFactories();
     }
 
-    @Builtin(name = J___ITER__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "cycle", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @GenerateNodeFactory
+    public abstract static class CycleNode extends PythonVarargsBuiltinNode {
+
+        @Specialization
+        static PCycle construct(VirtualFrame frame, Object cls, Object[] args, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
+                        @Cached(inline = false /* uncommon path */) TypeNodes.HasObjectInitNode hasObjectInitNode,
+                        @Cached PyObjectGetIter getIter,
+                        @Cached TypeNodes.IsTypeNode isTypeNode,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached PRaiseNode raiseNode) {
+            if (!isTypeNode.execute(inliningTarget, cls)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
+            }
+            if (keywords.length > 0 && hasObjectInitNode.executeCached(cls)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_TAKES_NO_KEYWORD_ARGS, "cycle()");
+            }
+            if (args.length != 1) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_EXPECTED_D_ARGS, "cycle", 1);
+            }
+            Object iterable = args[0];
+            PCycle self = PFactory.createCycle(cls, getInstanceShape.execute(cls));
+            self.setSaved(new ArrayList<>());
+            self.setIterable(getIter.execute(frame, inliningTarget, iterable));
+            self.setIndex(0);
+            self.setFirstpass(false);
+            return self;
+        }
+    }
+
+    @Slot(value = SlotKind.tp_iter, isComplex = true)
     @GenerateNodeFactory
     public abstract static class IterNode extends PythonUnaryBuiltinNode {
         @Specialization
@@ -106,33 +147,30 @@ public final class CycleBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = J___NEXT__, minNumOfPositionalArgs = 1)
+    @Slot(value = SlotKind.tp_iternext, isComplex = true)
     @GenerateNodeFactory
-    public abstract static class NextNode extends PythonUnaryBuiltinNode {
+    public abstract static class NextNode extends TpIterNextBuiltin {
         @Specialization
         static Object next(VirtualFrame frame, PCycle self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached BuiltinFunctions.NextNode nextNode,
-                        @Cached IsBuiltinObjectProfile isStopIterationProfile,
+                        @Bind Node inliningTarget,
+                        @Cached PyIterNextNode nextNode,
                         @Cached InlinedBranchProfile iterableProfile,
-                        @Cached InlinedBranchProfile firstPassProfile,
-                        @Cached PRaiseNode.Lazy raiseNode) {
+                        @Cached InlinedBranchProfile firstPassProfile) {
             if (self.getIterable() != null) {
                 iterableProfile.enter(inliningTarget);
                 try {
-                    Object item = nextNode.execute(frame, self.getIterable(), PNone.NO_VALUE);
+                    Object item = nextNode.execute(frame, inliningTarget, self.getIterable());
                     if (!self.isFirstpass()) {
                         firstPassProfile.enter(inliningTarget);
                         add(self.getSaved(), item);
                     }
                     return item;
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, isStopIterationProfile);
+                } catch (IteratorExhausted e) {
                     self.setIterable(null);
                 }
             }
             if (isEmpty(self.getSaved())) {
-                throw raiseNode.get(inliningTarget).raiseStopIteration();
+                throw iteratorExhausted();
             }
             Object item = get(self.getSaved(), self.getIndex());
             self.setIndex(self.getIndex() + 1);
@@ -165,47 +203,34 @@ public final class CycleBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___REDUCE__, minNumOfPositionalArgs = 1)
     @GenerateNodeFactory
-    public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
+    public abstract static class ReduceNode extends DeprecatedReduceBuiltin {
         @Specialization(guards = "hasIterable(self)")
-        static Object reduce(PCycle self,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached GetClassNode getClass,
-                        @Shared @Cached PythonObjectFactory factory) {
-            Object type = getClass.execute(inliningTarget, self);
-            PTuple iterableTuple = factory.createTuple(new Object[]{self.getIterable()});
-            PTuple tuple = factory.createTuple(new Object[]{getSavedList(self, factory), self.isFirstpass()});
-            return factory.createTuple(new Object[]{type, iterableTuple, tuple});
+        static Object reduce(PCycle self) {
+            PythonLanguage language = PythonLanguage.get(null);
+            Object type = GetClassNode.executeUncached(self);
+            PTuple iterableTuple = PFactory.createTuple(language, new Object[]{self.getIterable()});
+            PTuple tuple = PFactory.createTuple(language, new Object[]{getSavedList(self, language), self.isFirstpass()});
+            return PFactory.createTuple(language, new Object[]{type, iterableTuple, tuple});
         }
 
         @Specialization(guards = "!hasIterable(self)")
-        static Object reduceNoIterable(VirtualFrame frame, PCycle self,
-                        @Bind("this") Node inliningTarget,
-                        @Exclusive @Cached GetClassNode getClass,
-                        @Cached PyObjectLookupAttr lookupAttrNode,
-                        @Cached CallUnaryMethodNode callNode,
-                        @Cached PyObjectGetIter getIterNode,
-                        @Cached InlinedBranchProfile indexProfile,
-                        @Shared @Cached PythonObjectFactory factory) {
-            Object type = getClass.execute(inliningTarget, self);
-            PList savedList = getSavedList(self, factory);
-            Object it = getIterNode.execute(frame, inliningTarget, savedList);
+        static Object reduceNoIterable(PCycle self) {
+            PythonLanguage language = PythonLanguage.get(null);
+            Object type = GetClassNode.executeUncached(self);
+            PList savedList = getSavedList(self, language);
+            Object it = PyObjectGetIter.executeUncached(savedList);
             if (self.getIndex() > 0) {
-                indexProfile.enter(inliningTarget);
-                Object setStateCallable = lookupAttrNode.execute(frame, inliningTarget, it, T___SETSTATE__);
-                callNode.executeObject(frame, setStateCallable, self.getIndex());
+                Object setStateCallable = PyObjectLookupAttr.executeUncached(it, T___SETSTATE__);
+                CallUnaryMethodNode.getUncached().executeObject(setStateCallable, self.getIndex());
             }
-            PTuple iteratorTuple = factory.createTuple(new Object[]{it});
-            PTuple tuple = factory.createTuple(new Object[]{savedList, true});
-            return factory.createTuple(new Object[]{type, iteratorTuple, tuple});
+            PTuple iteratorTuple = PFactory.createTuple(language, new Object[]{it});
+            PTuple tuple = PFactory.createTuple(language, new Object[]{savedList, true});
+            return PFactory.createTuple(language, new Object[]{type, iteratorTuple, tuple});
         }
 
-        static PList getSavedList(PCycle self, PythonObjectFactory factory) {
-            return factory.createList(toArray(self.getSaved()));
-        }
-
-        @TruffleBoundary
-        private static Object[] toArray(List<Object> l) {
-            return l.toArray(new Object[l.size()]);
+        static PList getSavedList(PCycle self, PythonLanguage language) {
+            List<Object> l = self.getSaved();
+            return PFactory.createList(language, l.toArray(new Object[l.size()]));
         }
 
         protected boolean hasIterable(PCycle self) {
@@ -215,46 +240,32 @@ public final class CycleBuiltins extends PythonBuiltins {
 
     @Builtin(name = J___SETSTATE__, minNumOfPositionalArgs = 2)
     @GenerateNodeFactory
-    public abstract static class SetStateNode extends PythonBinaryBuiltinNode {
-        abstract Object execute(VirtualFrame frame, PythonObject self, Object state);
-
+    public abstract static class SetStateNode extends DeprecatedSetStateBuiltin {
         @Specialization
-        static Object setState(VirtualFrame frame, PCycle self, Object state,
-                        @Bind("this") Node inliningTarget,
-                        @Cached LenNode lenNode,
-                        @Cached GetItemNode getItemNode,
-                        @Cached IsBuiltinObjectProfile isTypeErrorProfile,
-                        @Cached ToArrayNode toArrayNode,
-                        @Cached PyNumberAsSizeNode asSizeNode,
-                        @Cached PRaiseNode.Lazy raiseNode) {
-            if (!((state instanceof PTuple) && ((int) lenNode.execute(frame, state) == 2))) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, IS_NOT_A, "state", "2-tuple");
+        @TruffleBoundary
+        static Object setState(PCycle self, Object state,
+                        @Bind Node inliningTarget) {
+            if (!(PyTupleCheckNode.executeUncached(state) && PyTupleSizeNode.executeUncached(state) == 2)) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, IS_NOT_A, "state", "2-tuple");
             }
-            Object obj = getItemNode.execute(frame, state, 0);
+            Object obj = PyTupleGetItem.executeUncached(state, 0);
             if (!(obj instanceof PList)) {
-                throw raiseNode.get(inliningTarget).raise(TypeError, STATE_ARGUMENT_D_MUST_BE_A_S, 1, "Plist");
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, STATE_ARGUMENT_D_MUST_BE_A_S, 1, "Plist");
             }
             PList saved = (PList) obj;
 
             boolean firstPass;
             try {
-                firstPass = asSizeNode.executeLossy(frame, inliningTarget, getItemNode.execute(frame, state, 1)) != 0;
+                firstPass = PyNumberAsSizeNode.getUncached().executeLossy(null, null, PyTupleGetItem.executeUncached(state, 1)) != 0;
             } catch (PException e) {
-                e.expectTypeError(inliningTarget, isTypeErrorProfile);
-                throw raiseNode.get(inliningTarget).raise(TypeError, STATE_ARGUMENT_D_MUST_BE_A_S, 2, "int");
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, STATE_ARGUMENT_D_MUST_BE_A_S, 2, "int");
             }
 
-            Object[] savedArray = toArrayNode.execute(inliningTarget, saved.getSequenceStorage());
-            self.setSaved(toList(savedArray));
+            Object[] savedArray = ToArrayNode.executeUncached(saved.getSequenceStorage());
+            self.setSaved(new ArrayList<>(Arrays.asList(savedArray)));
             self.setFirstpass(firstPass);
             self.setIndex(0);
             return PNone.NONE;
         }
-
-        @TruffleBoundary
-        private static ArrayList<Object> toList(Object[] savedArray) {
-            return new ArrayList<>(Arrays.asList(savedArray));
-        }
     }
-
 }

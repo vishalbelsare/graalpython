@@ -1,9 +1,8 @@
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_bigcomp
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_boundaries
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_halfway_cases
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_large_exponents
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_oversized_digit_strings
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_parsing
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_particular
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_short_halfway_cases
-*graalpython.lib-python.3.test.test_strtod.StrtodTests.test_underflow_boundary
+test.test_strtod.StrtodTests.test_bigcomp @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_boundaries @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_halfway_cases @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_large_exponents @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_parsing @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_particular @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_short_halfway_cases @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github
+test.test_strtod.StrtodTests.test_underflow_boundary @ darwin-arm64,linux-aarch64,linux-aarch64-github,linux-x86_64,linux-x86_64-github,win32-AMD64,win32-AMD64-github

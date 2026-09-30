@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,18 +41,33 @@
 package com.oracle.graal.python.builtins.modules.cext;
 
 import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Direct;
+import static com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiCallPath.Ignored;
+import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITE;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtr;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.ConstCharPtrAsTruffleString;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Int;
+import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObject;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyObjectBorrowed;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_STDERR;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_STDOUT;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_SYS;
+import static com.oracle.graal.python.runtime.PythonContext.NATIVE_NULL;
 
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiUnaryBuiltinNode;
-import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.PromoteBorrowedValue;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.FromCharPointerNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
+import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
 import com.oracle.graal.python.lib.PyObjectSetAttr;
+import com.oracle.graal.python.nodes.call.CallNode;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -66,18 +81,19 @@ public final class PythonCextSysBuiltins {
 
         @Specialization
         Object getObject(TruffleString name,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PromoteBorrowedValue promoteNode,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached EnsurePythonObjectNode ensureNode,
                         @Cached PyObjectLookupAttr lookupNode,
                         @Cached PyObjectSetAttr setAttrNode) {
             try {
                 PythonModule sys = getCore().lookupBuiltinModule(T_SYS);
                 Object value = lookupNode.execute(null, inliningTarget, sys, name);
                 if (value == PNone.NO_VALUE) {
-                    return getNativeNull();
+                    return NATIVE_NULL;
                 }
-                Object promotedValue = promoteNode.execute(inliningTarget, value);
-                if (promotedValue != null) {
+                Object promotedValue = ensureNode.execute(context, value, false);
+                if (promotedValue != value) {
                     setAttrNode.execute(inliningTarget, sys, name, promotedValue);
                     return promotedValue;
                 }
@@ -85,8 +101,49 @@ public final class PythonCextSysBuiltins {
             } catch (PException e) {
                 // PySys_GetObject delegates to PyDict_GetItem
                 // which suppresses all exceptions for historical reasons
-                return getNativeNull();
+                return NATIVE_NULL;
             }
         }
+    }
+
+    private static Object selectOut(int fd) {
+        CompilerAsserts.neverPartOfCompilation();
+        Object file;
+        PythonModule sys = PythonContext.get(null).lookupBuiltinModule(T_SYS);
+        if (fd == 0) {
+            file = sys.getAttribute(T_STDOUT);
+        } else {
+            file = sys.getAttribute(T_STDERR);
+        }
+        return file;
+    }
+
+    /** similar to {@code sys_pyfile_write} */
+    @CApiBuiltin(ret = Int, args = {Int, ConstCharPtr}, call = Ignored, acquireGil = false)
+    @TruffleBoundary
+    public static int GraalPyPrivate_Sys_WriteStd(int fd, long msgPtr) {
+        TruffleString msg = FromCharPointerNode.executeUncached(msgPtr);
+        PyObjectCallMethodObjArgs.executeUncached(selectOut(fd), T_WRITE, msg);
+        return 0;
+    }
+
+    /** similar to {@code sys_pyfile_write_unicode} */
+    @CApiBuiltin(ret = Int, args = {Int, PyObject}, call = Ignored, acquireGil = false)
+    @TruffleBoundary
+    public static int GraalPyPrivate_Sys_PyFileWriteUnicode(int fd, long unicodePtr) {
+        Object msg = NativeToPythonInternalNode.executeUncached(unicodePtr, false);
+        PyObjectCallMethodObjArgs.executeUncached(selectOut(fd), T_WRITE, msg);
+        return 0;
+    }
+
+    @CApiBuiltin(ret = Int, args = {ConstCharPtr, PyObject}, call = Ignored, acquireGil = false)
+    @TruffleBoundary
+    public static int GraalPyPrivate_Sys_Audit(long eventPtr, long argsPtr) {
+        TruffleString event = FromCharPointerNode.executeUncached(eventPtr);
+        Object args = NativeToPythonInternalNode.executeUncached(argsPtr, false);
+        for (Object hook : PythonContext.get(null).getAuditHooks()) {
+            CallNode.executeUncached(hook, event, args);
+        }
+        return 0;
     }
 }

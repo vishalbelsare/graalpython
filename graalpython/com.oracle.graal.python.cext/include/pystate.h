@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -15,16 +15,6 @@ extern "C" {
 /* This limitation is for performance and simplicity. If needed it can be
 removed (with effort). */
 #define MAX_CO_EXTRA_USERS 255
-
-/* Forward declarations for PyFrameObject, PyThreadState
-   and PyInterpreterState */
-struct _ts;
-struct _is;
-
-/* struct _ts is defined in cpython/pystate.h */
-typedef struct _ts PyThreadState;
-/* struct _is is defined in internal/pycore_interp.h */
-typedef struct _is PyInterpreterState;
 
 PyAPI_FUNC(PyInterpreterState *) PyInterpreterState_New(void);
 PyAPI_FUNC(void) PyInterpreterState_Clear(PyInterpreterState *);
@@ -49,17 +39,20 @@ PyAPI_FUNC(PyObject *) PyInterpreterState_GetDict(PyInterpreterState *);
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03070000
 /* New in 3.7 */
 PyAPI_FUNC(int64_t) PyInterpreterState_GetID(PyInterpreterState *);
-PyAPI_FUNC(int64_t) PyInterpreterState_GetIDFromThreadState(PyThreadState *);
+// GraalPy public API
+PyAPI_FUNC(int64_t) GraalPyInterpreterState_GetIDFromThreadState(PyThreadState *);
+// Deprecated alias used by current Cython, remove in 27.0
+#define PyInterpreterState_GetIDFromThreadState GraalPyInterpreterState_GetIDFromThreadState
 #endif
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03030000
 
 /* State unique per thread */
 
 /* New in 3.3 */
-PyAPI_FUNC(int) PyState_AddModule(PyObject*, struct PyModuleDef*);
-PyAPI_FUNC(int) PyState_RemoveModule(struct PyModuleDef*);
+PyAPI_FUNC(int) PyState_AddModule(PyObject*, PyModuleDef*);
+PyAPI_FUNC(int) PyState_RemoveModule(PyModuleDef*);
 #endif
-PyAPI_FUNC(PyObject*) PyState_FindModule(struct PyModuleDef*);
+PyAPI_FUNC(PyObject*) PyState_FindModule(PyModuleDef*);
 
 PyAPI_FUNC(PyThreadState *) PyThreadState_New(PyInterpreterState *);
 PyAPI_FUNC(void) PyThreadState_Clear(PyThreadState *);
@@ -72,18 +65,10 @@ PyAPI_FUNC(void) PyThreadState_Delete(PyThreadState *);
 
    The caller must hold the GIL.
 
-   See also PyThreadState_GET() and _PyThreadState_GET(). */
+   See also PyThreadState_GetUnchecked() and _PyThreadState_GET(). */
 PyAPI_FUNC(PyThreadState *) PyThreadState_Get(void);
 
-/* Get the current Python thread state.
-
-   Macro using PyThreadState_Get() or _PyThreadState_GET() depending if
-   pycore_pystate.h is included or not (this header redefines the macro).
-
-   If PyThreadState_Get() is used, issue a fatal error if the current thread
-   state is NULL.
-
-   See also PyThreadState_Get() and _PyThreadState_GET(). */
+// Alias to PyThreadState_Get()
 #define PyThreadState_GET() PyThreadState_Get()
 
 PyAPI_FUNC(PyThreadState *) PyThreadState_Swap(PyThreadState *);
@@ -97,8 +82,9 @@ PyAPI_FUNC(PyFrameObject*) PyThreadState_GetFrame(PyThreadState *tstate);
 PyAPI_FUNC(uint64_t) PyThreadState_GetID(PyThreadState *tstate);
 #endif
 
-/* GraalVM change: we need more state bits */
-typedef int PyGILState_STATE;
+typedef
+    enum {PyGILState_LOCKED, PyGILState_UNLOCKED}
+        PyGILState_STATE;
 
 
 /* Ensure that the current thread is ready to call the Python
@@ -145,7 +131,7 @@ PyAPI_FUNC(PyThreadState *) PyGILState_GetThisThreadState(void);
 
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_PYSTATE_H
-#  include  "cpython/pystate.h"
+#  include "cpython/pystate.h"
 #  undef Py_CPYTHON_PYSTATE_H
 #endif
 

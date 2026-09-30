@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -68,14 +68,14 @@ patch_wheel() {
     mkdir "$tmpdir"
     git show "python-import:$wheel" > tmp.whl || missing_python_import
     cd "$tmpdir"
-    unzip ../tmp.whl
+    unzip -q ../tmp.whl
     rm ../tmp.whl
-    patch -p1 < "../$patch"
-    echo 'Marker file for GraalPy' > "$name/.graalpy_bundled"
+    patch --quiet -p1 < "../$patch"
+    touch "$(echo $name-*.dist-info)/GRAALPY_MARKER"
     rm "../$wheel"
-    zip -r "../$wheel" .
+    zip -qr "../$wheel" .
+    cd ..
     rm -rf "$tmpdir"
 }
 
-patch_wheel setuptools graalpython/lib-graalpython/patches/setuptools/setuptools-65.patch
-patch_wheel pip graalpython/lib-graalpython/patches/pip/pip-23.0.1.patch
+patch_wheel pip graalpython/lib-graalpython/patches/pip-26.1.2.patch

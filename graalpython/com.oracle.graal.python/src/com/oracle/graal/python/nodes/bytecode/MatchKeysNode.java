@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,19 +43,21 @@ package com.oracle.graal.python.nodes.bytecode;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T_GET;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueError;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectRichCompareBool;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
@@ -64,24 +66,24 @@ import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
 
 @GenerateInline(false) // Used in BCI
+@GenerateUncached
 public abstract class MatchKeysNode extends PNodeWithContext {
     public abstract Object execute(Frame frame, Object map, Object[] keys);
 
     @Specialization(guards = {"keys.length == keysLen", "keysLen > 0", "keysLen <= 32"}, limit = "1")
     static Object matchCached(VirtualFrame frame, Object map, @NeverDefault Object[] keys,
-                    @Bind("this") Node inliningTarget,
+                    @Bind Node inliningTarget,
                     @Cached("keys.length") int keysLen,
-                    @Shared @Cached PyObjectRichCompareBool.EqNode compareNode,
+                    @Shared @Cached PyObjectRichCompareBool compareNode,
                     @Shared @Cached PyObjectCallMethodObjArgs callMethod,
-                    @Shared @Cached PythonObjectFactory factory,
-                    @Shared @Cached PRaiseNode.Lazy raise) {
+                    @Shared @Cached PRaiseNode raise) {
         Object[] values = getValues(frame, inliningTarget, map, keys, keysLen, compareNode, callMethod, raise);
-        return values != null ? factory.createTuple(values) : PNone.NONE;
+        return values != null ? PFactory.createTuple(PythonLanguage.get(inliningTarget), values) : PNone.NONE;
     }
 
     @ExplodeLoop
-    private static Object[] getValues(VirtualFrame frame, Node inliningTarget, Object map, Object[] keys, int keysLen, PyObjectRichCompareBool.EqNode compareNode, PyObjectCallMethodObjArgs callMethod,
-                    PRaiseNode.Lazy raise) {
+    private static Object[] getValues(VirtualFrame frame, Node inliningTarget, Object map, Object[] keys, int keysLen, PyObjectRichCompareBool compareNode, PyObjectCallMethodObjArgs callMethod,
+                    PRaiseNode raise) {
         CompilerAsserts.partialEvaluationConstant(keysLen);
         Object[] values = new Object[keysLen];
         Object dummy = new Object();
@@ -100,30 +102,29 @@ public abstract class MatchKeysNode extends PNodeWithContext {
     }
 
     @ExplodeLoop
-    private static void checkSeen(VirtualFrame frame, Node inliningTarget, PRaiseNode.Lazy raise, Object[] seen, Object key, PyObjectRichCompareBool.EqNode compareNode) {
+    private static void checkSeen(VirtualFrame frame, Node inliningTarget, PRaiseNode raise, Object[] seen, Object key, PyObjectRichCompareBool compareNode) {
         for (int i = 0; i < seen.length; i++) {
-            if (seen[i] != null && compareNode.compare(frame, inliningTarget, seen[i], key)) {
-                raise.get(inliningTarget).raise(ValueError, ErrorMessages.MAPPING_PATTERN_CHECKS_DUPE_KEY_S, key);
+            if (seen[i] != null && compareNode.executeEq(frame, inliningTarget, seen[i], key)) {
+                raise.raise(inliningTarget, ValueError, ErrorMessages.MAPPING_PATTERN_CHECKS_DUPE_KEY_S, key);
             }
         }
     }
 
     @Specialization(guards = "keys.length > 0", replaces = "matchCached")
     static Object match(VirtualFrame frame, Object map, Object[] keys,
-                    @Bind("this") Node inliningTarget,
-                    @Shared @Cached PyObjectRichCompareBool.EqNode compareNode,
+                    @Bind Node inliningTarget,
+                    @Shared @Cached PyObjectRichCompareBool compareNode,
                     @Shared @Cached PyObjectCallMethodObjArgs callMethod,
-                    @Shared @Cached PythonObjectFactory factory,
-                    @Shared @Cached PRaiseNode.Lazy raise) {
+                    @Shared @Cached PRaiseNode raise) {
         if (keys.length == 0) {
-            return factory.createTuple(PythonUtils.EMPTY_OBJECT_ARRAY);
+            return PFactory.createTuple(PythonLanguage.get(inliningTarget), PythonUtils.EMPTY_OBJECT_ARRAY);
         }
         Object[] values = getValuesLongArray(frame, inliningTarget, map, keys, compareNode, callMethod, raise);
-        return values != null ? factory.createTuple(values) : PNone.NONE;
+        return values != null ? PFactory.createTuple(PythonLanguage.get(inliningTarget), values) : PNone.NONE;
     }
 
-    private static Object[] getValuesLongArray(VirtualFrame frame, Node inliningTarget, Object map, Object[] keys, PyObjectRichCompareBool.EqNode compareNode, PyObjectCallMethodObjArgs callMethod,
-                    PRaiseNode.Lazy raise) {
+    private static Object[] getValuesLongArray(VirtualFrame frame, Node inliningTarget, Object map, Object[] keys, PyObjectRichCompareBool compareNode, PyObjectCallMethodObjArgs callMethod,
+                    PRaiseNode raise) {
         Object[] values = new Object[keys.length];
         Object dummy = new Object();
         Object[] seen = new Object[keys.length];
@@ -140,20 +141,21 @@ public abstract class MatchKeysNode extends PNodeWithContext {
         return values;
     }
 
-    private static void checkSeenLongArray(VirtualFrame frame, Node inliningTarget, PRaiseNode.Lazy raise, Object[] seen, Object key, PyObjectRichCompareBool.EqNode compareNode) {
+    private static void checkSeenLongArray(VirtualFrame frame, Node inliningTarget, PRaiseNode raise, Object[] seen, Object key, PyObjectRichCompareBool compareNode) {
         for (int i = 0; i < seen.length; i++) {
-            if (seen[i] != null && compareNode.compare(frame, inliningTarget, seen[i], key)) {
-                raise.get(inliningTarget).raise(ValueError, ErrorMessages.MAPPING_PATTERN_CHECKS_DUPE_KEY_S, key);
+            if (seen[i] != null && compareNode.executeEq(frame, inliningTarget, seen[i], key)) {
+                raise.raise(inliningTarget, ValueError, ErrorMessages.MAPPING_PATTERN_CHECKS_DUPE_KEY_S, key);
             }
         }
     }
 
     @Specialization(guards = "keys.length == 0")
     static Object matchNoKeys(@SuppressWarnings("unused") Object map, @SuppressWarnings("unused") Object[] keys,
-                    @Shared @Cached PythonObjectFactory factory) {
-        return factory.createTuple(PythonUtils.EMPTY_OBJECT_ARRAY);
+                    @Bind PythonLanguage language) {
+        return PFactory.createTuple(language, PythonUtils.EMPTY_OBJECT_ARRAY);
     }
 
+    @NeverDefault
     public static MatchKeysNode create() {
         return MatchKeysNodeGen.create();
     }

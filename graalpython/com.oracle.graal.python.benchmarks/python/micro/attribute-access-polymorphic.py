@@ -1,4 +1,4 @@
-# Copyright (c) 2017, 2021, Oracle and/or its affiliates.
+# Copyright (c) 2017, 2025, Oracle and/or its affiliates.
 # Copyright (c) 2013, Regents of the University of California
 #
 # All rights reserved.
@@ -73,11 +73,28 @@ def do_stuff():
 
 
 def measure(num):
+    result = 0
     for i in range(num):  # 50000
-        result = do_stuff()
+        result |= do_stuff()
 
-    print(result)
+    return result
 
 
 def __benchmark__(num=1000):
-    measure(num)
+    return measure(num)
+
+
+def run():
+    __benchmark__(num=10)
+
+
+def warmupIterations():
+    return 10
+
+
+def summary():
+    return {
+        "name": "OutlierRemovalAverageSummary",
+        "lower-threshold": 0.1,
+        "upper-threshold": 0.7,
+    }

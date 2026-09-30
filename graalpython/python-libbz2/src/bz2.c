@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -55,6 +55,14 @@
 #include <bzlib.h>
 
 typedef char  Byte;  /* 8 bits */
+
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#define API_FUNC __declspec(dllexport)
+#else
+#define API_FUNC
+#endif
 
 // Integer.MAX_INT
 #define GRAALPYTHON_MAX_SIZE (INT_MAX)
@@ -214,9 +222,7 @@ static void bz_release_buffer(off_heap_buffer *o) {
     free(o->buf);
     free(o);
 }
-
-// nfi_function: name('createStream') map('bzst_stream*', 'POINTER')
-bzst_stream *bz_create_bzst_stream() {
+API_FUNC bzst_stream *bz_create_bzst_stream() {
     bzst_stream *bzst = (bzst_stream *) malloc(sizeof(bzst_stream));
     bzst->bzs.opaque = NULL;
     bzst->bzs.bzalloc = BZ2_Malloc;
@@ -234,9 +240,7 @@ bzst_stream *bz_create_bzst_stream() {
     LOG_INFO("bzst_stream(%p)\n", bzst);
     return bzst;
 }
-
-// nfi_function: name('getTimeElapsed') map('bzst_stream*', 'POINTER')  static(true)
-double bz_get_timeElapsed(bzst_stream* zst) {
+API_FUNC double bz_get_timeElapsed(bzst_stream* zst) {
 #ifdef BENCHMARK
     double t = bzst->timeElapsed;
     LOG_FINEST("time Elapsed: %.2f\n", t);
@@ -246,9 +250,7 @@ double bz_get_timeElapsed(bzst_stream* zst) {
     return -1.0;
 #endif
 }
-
-// nfi_function: name('deallocateStream') map('bzst_stream*', 'POINTER')
-void bz_free_stream(bzst_stream* bzst) {
+API_FUNC void bz_free_stream(bzst_stream* bzst) {
     if (!bzst) {
         return;
     }
@@ -263,29 +265,19 @@ void bz_free_stream(bzst_stream* bzst) {
     LOG_INFO("free bzst_stream(%p)\n", bzst);
     free(bzst);
 }
-
-// nfi_function: name('gcReleaseHelper') map('bzst_stream*', 'POINTER') release(true)
-void bz_gc_helper(bzst_stream* bzst) {
+API_FUNC void bz_gc_helper(bzst_stream* bzst) {
     bz_free_stream(bzst);
 }
-
-// nfi_function: name('getNextInIndex') map('bzst_stream*', 'POINTER')
-ssize_t bz_get_next_in_index(bzst_stream *bzst) {
+API_FUNC ssize_t bz_get_next_in_index(bzst_stream *bzst) {
     return bzst->next_in_index;
 }
-
-// nfi_function: name('getBzsAvailInReal') map('bzst_stream*', 'POINTER')
-ssize_t bz_get_bzs_avail_in_real(bzst_stream *bzst) {
+API_FUNC ssize_t bz_get_bzs_avail_in_real(bzst_stream *bzst) {
     return bzst->bzs_avail_in_real;
 }
-
-// nfi_function: name('setBzsAvailInReal') map('bzst_stream*', 'POINTER')
-void bz_set_bzs_avail_in_real(bzst_stream *bzst, ssize_t v) {
+API_FUNC void bz_set_bzs_avail_in_real(bzst_stream *bzst, ssize_t v) {
     bzst->bzs_avail_in_real = v;
 }
-
-// nfi_function: name('getOutputBufferSize') map('bzst_stream*', 'POINTER')
-size_t bz_get_output_buffer_size(bzst_stream *bzst) {
+API_FUNC size_t bz_get_output_buffer_size(bzst_stream *bzst) {
     LOG_INFO("bz_get_output_buffer_size(%p)\n", bzst);
     size_t size = bzst->output_size;
     if (size > GRAALPYTHON_MAX_SIZE) {
@@ -301,9 +293,7 @@ static void clear_output(bzst_stream *bzst) {
     bzst->output->size = 0;
     bzst->output_size = 0;
 }
-
-// nfi_function: name('getOutputBuffer') map('bzst_stream*', 'POINTER')
-void bz_get_output_buffer(bzst_stream *bzst, Byte *dest) {
+API_FUNC void bz_get_output_buffer(bzst_stream *bzst, Byte *dest) {
     LOG_INFO("bz_get_off_heap_buffer(%p)\n", bzst);
     off_heap_buffer *buffer = bzst->output;
     size_t size = bzst->output_size;
@@ -373,10 +363,7 @@ grow_buffer(bzst_stream *bzst, ssize_t max_length) {
 /************************************************
  *               Compress Object                *
  ************************************************/
-
-
-// nfi_function: name('compressInit') map('bzst_stream*', 'POINTER')
-int bz_compressor_init(bzst_stream *bzst, int compresslevel) {
+API_FUNC int bz_compressor_init(bzst_stream *bzst, int compresslevel) {
     LOG_INFO("bz_compressor_init(%p, %d)\n", bzst, compresslevel);
     int bzerror = BZ2_bzCompressInit(&bzst->bzs, compresslevel, 0, 0);
     if (!isOK(bzerror)) {
@@ -385,9 +372,7 @@ int bz_compressor_init(bzst_stream *bzst, int compresslevel) {
     bzst->bzs_type = COMPRESS_TYPE;
     return BZ_OK;
 }
-
-// nfi_function: name('compress') map('bzst_stream*', 'POINTER')
-int bz_compress(bzst_stream *bzst, Byte *data, ssize_t len, int action, ssize_t bufsize) {
+API_FUNC int bz_compress(bzst_stream *bzst, Byte *data, ssize_t len, int action, ssize_t bufsize) {
     LOG_INFO("bz_compress(%p, %zd, %d, %zd)\n", bzst, len, action, bufsize);
     size_t data_size = 0;
 
@@ -460,9 +445,7 @@ int bz_compress(bzst_stream *bzst, Byte *data, ssize_t len, int action, ssize_t 
 /************************************************
  *              Decompress Object               *
  ************************************************/
-
-// nfi_function: name('decompressInit') map('bzst_stream*', 'POINTER')
-int bz_decompress_init(bzst_stream *bzst) {
+API_FUNC int bz_decompress_init(bzst_stream *bzst) {
     LOG_INFO("bz_decompress_init(%p)\n", bzst);
     int bzerror = BZ2_bzDecompressInit(&bzst->bzs, 0, 0);
     if (!isOK(bzerror)) {
@@ -478,8 +461,7 @@ int bz_decompress_init(bzst_stream *bzst) {
    buffer is allocated dynamically and returned.  At most max_length bytes are
    returned, so some of the input may not be consumed. d->bzs.next_in and
    d->bzs_avail_in_real are updated to reflect the consumed input. */
-// nfi_function: name('decompress') map('bzst_stream*', 'POINTER')
-int bz_decompress(bzst_stream *bzst, 
+API_FUNC int bz_decompress(bzst_stream *bzst,
                 Byte *input_buffer, ssize_t offset, 
                 ssize_t max_length,
                 ssize_t bufsize, ssize_t bzs_avail_in_real) {

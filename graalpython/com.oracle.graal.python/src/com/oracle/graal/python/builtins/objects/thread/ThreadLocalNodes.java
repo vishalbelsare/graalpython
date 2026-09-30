@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,36 +40,43 @@
  */
 package com.oracle.graal.python.builtins.objects.thread;
 
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
-import com.oracle.graal.python.lib.PyObjectLookupAttr;
+import com.oracle.graal.python.builtins.objects.object.ObjectBuiltins;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotVarargs.CallSlotTpInitNode;
 import com.oracle.graal.python.nodes.PNodeWithContext;
-import com.oracle.graal.python.nodes.SpecialMethodNames;
-import com.oracle.graal.python.nodes.call.CallNode;
-import com.oracle.graal.python.runtime.object.PythonObjectFactory;
+import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
 public abstract class ThreadLocalNodes {
 
-    @SuppressWarnings("truffle-inlining")       // footprint reduction 68 -> 49
+    @GenerateInline(false)       // footprint reduction 68 -> 49
     public abstract static class GetThreadLocalDict extends PNodeWithContext {
         public abstract PDict execute(VirtualFrame frame, PThreadLocal self);
 
         @Specialization
-        PDict get(VirtualFrame frame, PThreadLocal self,
-                        @Bind("this") Node inliningTarget,
-                        @Cached PythonObjectFactory factory,
-                        @Cached PyObjectLookupAttr lookup,
-                        @Cached CallNode callNode) {
+        static PDict get(VirtualFrame frame, PThreadLocal self,
+                        @Bind Node inliningTarget,
+                        @Cached InlinedBranchProfile create,
+                        @Cached GetObjectSlotsNode getSlots,
+                        @Cached CallSlotTpInitNode callInit) {
             PDict dict = self.getThreadLocalDict();
             if (dict == null) {
-                dict = factory.createDict();
+                create.enter(inliningTarget);
+                dict = PFactory.createDict(PythonLanguage.get(inliningTarget));
                 self.setThreadLocalDict(dict);
-                Object initMethod = lookup.execute(frame, inliningTarget, self, SpecialMethodNames.T___INIT__);
-                callNode.execute(frame, initMethod, self.getArgs(), self.getKeywords());
+                TpSlots slots = getSlots.execute(inliningTarget, self);
+                if (slots.tp_init() != ObjectBuiltins.SLOTS.tp_init()) {
+                    callInit.execute(frame, inliningTarget, slots.tp_init(), self, self.getArgs(), self.getKeywords());
+                }
             }
             return dict;
         }

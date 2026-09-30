@@ -1,0 +1,292 @@
+/*
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * The Universal Permissive License (UPL), Version 1.0
+ *
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
+ *
+ * (a) the Software, and
+ *
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+package com.oracle.graal.python.builtins.objects.type.slots;
+
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GETITEM__;
+
+import java.lang.ref.Reference;
+import java.util.Objects;
+
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.builtins.Python3Core;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PExternalFunctionWrapper;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PyObjectCheckFunctionResultNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonInternalNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeInternalNode;
+import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.NodeFactoryUtils.WrapperNodeFactory;
+import com.oracle.graal.python.builtins.objects.type.slots.PythonDispatchers.BinaryPythonSlotDispatcherNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotBuiltin;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotCExtNative;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot.TpSlotPythonSingle;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotLen.CallSlotLenNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSizeArgFunFactory.CallSlotSizeArgFunNodeGen;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSizeArgFunFactory.FixNegativeIndexNodeGen;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSizeArgFunFactory.WrapIndexArgFuncBuiltinNodeGen;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSizeArgFunFactory.WrapSqItemBuiltinNodeGen;
+import com.oracle.graal.python.lib.PyNumberAsSizeNode;
+import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.PythonContext.GetThreadStateNode;
+import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.dsl.Bind;
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.GenerateCached;
+import com.oracle.truffle.api.dsl.GenerateInline;
+import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.NeverDefault;
+import com.oracle.truffle.api.dsl.NodeFactory;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.strings.TruffleString;
+
+public class TpSlotSizeArgFun {
+    private TpSlotSizeArgFun() {
+    }
+
+    public abstract static class TpSlotSizeArgFunBuiltin<T extends SizeArgFunBuiltinNode> extends TpSlotBuiltin<T> {
+        private final int callTargetIndex = TpSlotBuiltinCallTargetRegistry.getNextCallTargetIndex();
+        private final String name;
+
+        protected TpSlotSizeArgFunBuiltin(NodeFactory<T> nodeFactory, String name) {
+            super(nodeFactory);
+            this.name = name;
+        }
+
+        final SizeArgFunBuiltinNode createSlotNode() {
+            return createNode();
+        }
+
+        @Override
+        public void initialize(PythonLanguage language) {
+            language.setBuiltinSlotRootNode(callTargetIndex, createSlotRootNode(language, BuiltinSlotWrapperSignature.BINARY, getNodeFactory(), name));
+        }
+
+        @Override
+        public PBuiltinFunction createBuiltin(Python3Core core, Object type, TruffleString tsName, PExternalFunctionWrapper wrapper) {
+            return switch (wrapper) {
+                case SQ_ITEM -> createBuiltin(core, type, tsName, BuiltinSlotWrapperSignature.BINARY, wrapper,
+                                WrapperNodeFactory.wrap(getNodeFactory(), WrapSqItemBuiltinNode.class, WrapSqItemBuiltinNodeGen::create));
+                case INDEXARGFUNC -> createBuiltin(core, type, tsName, BuiltinSlotWrapperSignature.BINARY, wrapper,
+                                WrapperNodeFactory.wrap(getNodeFactory(), WrapIndexArgFuncBuiltinNode.class,
+                                                WrapIndexArgFuncBuiltinNodeGen::create));
+                default ->
+                    throw new IllegalStateException(Objects.toString(wrapper));
+            };
+        }
+    }
+
+    @GenerateInline(value = false, inherit = true)
+    public abstract static class SizeArgFunBuiltinNode extends PythonBinaryBuiltinNode {
+        @Override
+        public final Object execute(VirtualFrame frame, Object arg, Object arg2) {
+            // Since this is just the slot node and the __getitem__ method is wrapped by
+            // WrapSqItemBuiltinNode,
+            // this "execute" method can be only called from the builtin root node called from the
+            // CallSlotSizeArgFun node, which always passes integer
+            return execute(frame, arg, (int) arg2);
+        }
+
+        public abstract Object execute(VirtualFrame frame, Object self, int index);
+    }
+
+    public abstract static class SqItemBuiltinNode extends SizeArgFunBuiltinNode {
+    }
+
+    /**
+     * Implements semantics of {@code typeobject.c: wrap_sq_item}.
+     */
+    public abstract static class WrapSqItemBuiltinNode extends PythonBinaryBuiltinNode {
+        private @Child SqItemBuiltinNode slotNode;
+        private @Child FixNegativeIndex fixNegativeIndex;
+
+        protected WrapSqItemBuiltinNode(SizeArgFunBuiltinNode slotNode) {
+            // We take SizeArgFunBuiltinNode just so that we can reuse WrapperNodeFactory machinery
+            this.slotNode = (SqItemBuiltinNode) slotNode;
+        }
+
+        @Specialization(guards = "index >= 0")
+        Object doIntIndex(VirtualFrame frame, Object self, int index) {
+            return slotNode.execute(frame, self, index);
+        }
+
+        @Specialization(replaces = "doIntIndex")
+        @SuppressWarnings("truffle-static-method")
+        Object doGeneric(VirtualFrame frame, Object self, Object index,
+                        @Bind Node inliningTarget,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            int size = asSizeNode.executeExact(frame, inliningTarget, index, PythonBuiltinClassType.OverflowError);
+            if (size < 0) {
+                if (fixNegativeIndex == null) {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    fixNegativeIndex = insert(FixNegativeIndex.create());
+                }
+                size = fixNegativeIndex.execute(frame, size, self);
+            }
+            return slotNode.execute(frame, self, size);
+        }
+    }
+
+    public abstract static class SqRepeatBuiltinNode extends SizeArgFunBuiltinNode {
+    }
+
+    /**
+     * Implements semantics of {@code typeobject.c: wrap_indexargfunc}.
+     */
+    public abstract static class WrapIndexArgFuncBuiltinNode extends PythonBinaryBuiltinNode {
+        private @Child SizeArgFunBuiltinNode slotNode;
+
+        protected WrapIndexArgFuncBuiltinNode(SizeArgFunBuiltinNode slotNode) {
+            this.slotNode = slotNode;
+        }
+
+        @Specialization(guards = "index >= 0")
+        Object doIntIndex(VirtualFrame frame, Object self, int index) {
+            return slotNode.execute(frame, self, index);
+        }
+
+        @Specialization(replaces = "doIntIndex")
+        @SuppressWarnings("truffle-static-method")
+        Object doGeneric(VirtualFrame frame, Object self, Object index,
+                        @Bind Node inliningTarget,
+                        @Cached PyNumberAsSizeNode asSizeNode) {
+            int size = asSizeNode.executeExact(frame, inliningTarget, index, PythonBuiltinClassType.OverflowError);
+            return slotNode.execute(frame, self, size);
+        }
+    }
+
+    @GenerateInline(false) // lazy
+    public abstract static class FixNegativeIndex extends Node {
+        public abstract int execute(VirtualFrame frame, int indexAsSize, Object self);
+
+        @Specialization
+        static int doIt(VirtualFrame frame, int indexAsSize, Object self,
+                        @Bind Node inliningTarget,
+                        @Cached GetObjectSlotsNode getSelfSlots,
+                        @Cached CallSlotLenNode callSlotLen) {
+            assert indexAsSize < 0;
+            TpSlots selfSlots = getSelfSlots.execute(inliningTarget, self);
+            if (selfSlots.sq_length() != null) {
+                int len = callSlotLen.execute(frame, inliningTarget, selfSlots.sq_length(), self);
+                return indexAsSize + len;
+            }
+            return indexAsSize;
+        }
+
+        @NeverDefault
+        public static FixNegativeIndex create() {
+            return FixNegativeIndexNodeGen.create();
+        }
+    }
+
+    @GenerateInline
+    @GenerateCached(false)
+    @GenerateUncached
+    public abstract static class CallSlotSizeArgFun extends Node {
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, "ssizeargfun");
+
+        public abstract Object execute(VirtualFrame frame, Node inliningTarget, TpSlot slot, Object self, int index);
+
+        @TruffleBoundary
+        public static Object executeUncached(TpSlot slot, Object self, int index) {
+            return CallSlotSizeArgFunNodeGen.getUncached().execute(null, null, slot, self, index);
+        }
+
+        @Specialization(guards = "cachedSlot == slot", limit = "3")
+        static Object callCachedBuiltin(VirtualFrame frame, @SuppressWarnings("unused") TpSlotSizeArgFunBuiltin<?> slot, Object self, int index,
+                        @SuppressWarnings("unused") @Cached("slot") TpSlotSizeArgFunBuiltin<?> cachedSlot,
+                        @Cached("cachedSlot.createSlotNode()") SizeArgFunBuiltinNode slotNode) {
+            return slotNode.execute(frame, self, index);
+        }
+
+        @Specialization
+        static Object callPython(VirtualFrame frame, Node inliningTarget, TpSlotPythonSingle slot, Object self, int index,
+                        @Cached BinaryPythonSlotDispatcherNode dispatcherNode) {
+            return dispatcherNode.execute(frame, inliningTarget, slot.getCallableOrRaise(inliningTarget), slot.getType(), self, index);
+        }
+
+        @Specialization
+        static Object callNative(VirtualFrame frame, Node inliningTarget, TpSlotCExtNative slot, Object self, int index,
+                        @Exclusive @Cached GetThreadStateNode getThreadStateNode,
+                        @Cached EnsurePythonObjectNode ensurePythonObjectNode,
+                        @Cached PythonToNativeInternalNode toNativeNode,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData,
+                        @Cached NativeToPythonInternalNode toPythonNode,
+                        @Exclusive @Cached(inline = false) PyObjectCheckFunctionResultNode checkResultNode) {
+            PythonContext ctx = PythonContext.get(inliningTarget);
+            PythonThreadState threadState = getThreadStateNode.execute(inliningTarget, ctx);
+            Object promotedSelf = ensurePythonObjectNode.execute(ctx, self, false);
+            try {
+                long lresult = ExternalFunctionInvoker.invokeSSIZEARGFUNC(frame, C_API_TIMING, ctx.ensureNativeContext(), boundaryCallData, threadState, slot.callable,
+                                toNativeNode.execute(inliningTarget, promotedSelf), index);
+                return checkResultNode.execute(threadState, T___GETITEM__, toPythonNode.executeTransfer(inliningTarget, lresult));
+            } finally {
+                Reference.reachabilityFence(promotedSelf);
+            }
+        }
+
+        @Specialization(replaces = "callCachedBuiltin")
+        @InliningCutoff
+        static Object callGenericBuiltin(VirtualFrame frame, Node inliningTarget, TpSlotSizeArgFunBuiltin<?> slot, Object self, int index,
+                        @Cached CallDispatchers.SimpleIndirectInvokeNode invoke) {
+            Object[] arguments = PArguments.create(2);
+            PArguments.setArgument(arguments, 0, self);
+            PArguments.setArgument(arguments, 1, index);
+            RootCallTarget callTarget = PythonLanguage.get(inliningTarget).getBuiltinSlotCallTarget(slot.callTargetIndex);
+            return invoke.execute(frame, inliningTarget, callTarget, arguments);
+        }
+    }
+}
